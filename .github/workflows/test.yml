@@ -1,0 +1,93 @@
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+# Keep the release:check script of package.json running the same checks.
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.7
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Lint package
+        run: bun run lint:check
+
+      - name: Typecheck package
+        run: bun run types
+
+      - name: Build docs
+        run: bun run docs:build
+
+  test:
+    name: Test (PostgreSQL ${{ matrix.postgres }}${{ matrix.node && format(', Node.js {0}', matrix.node) || '' }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum and the newest supported major versions of PostgreSQL: the minimum one runs on the minimum major version of Node.js of engines in package.json, the newest one on the Node.js of mise.toml.
+        include:
+          - postgres: 15
+            node: 24
+          - postgres: 18
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        # Wait until postgres is ready before test steps run.
+        # See https://docs.github.com/en/actions/using-containerized-services/creating-postgresql-service-containers
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost
+      # mise.node<N>.toml and its lock file mise.node<N>.lock override the Node.js of mise.toml; mise takes mise.toml alone when it is empty.
+      MISE_ENV: ${{ matrix.node && format('node{0}', matrix.node) || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup mise
+        uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.7
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Build and test packed package
+        run: bun run test:package
+
+      # The restart scenario starts a temporary cluster from the PostgreSQL binaries of the runner.
+      - name: Locate PostgreSQL binaries
+        run: echo "PG_BIN=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Test package
+        run: bun run test

@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "kern-jobs": ["../src"],
+      "kern-jobs/db/*": ["../src/db/*"],
+      "kern-jobs/migrations": ["../src/migrations.ts"],
+      "kern-jobs/worker": ["../src/worker.ts"]
+    }
+  },
+  "include": ["**/*.ts"]
+}

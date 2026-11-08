@@ -1,0 +1,76 @@
+{
+  "name": "kern-jobs",
+  "version": "0.0.0",
+  "description": "Background jobs on PostgreSQL for TypeScript: typed tasks, transactional enqueue, keys, debounce, queues, and leases.",
+  "homepage": "https://ilyasemenov.github.io/kern-jobs/",
+  "bugs": "https://github.com/IlyaSemenov/kern-jobs/issues",
+  "license": "MIT",
+  "author": "Ilya Semenov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IlyaSemenov/kern-jobs.git"
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./db/node-postgres": "./dist/db/node-postgres.mjs",
+    "./db/postgres-js": "./dist/db/postgres-js.mjs",
+    "./migrations": "./dist/migrations.mjs",
+    "./worker": "./dist/worker.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "lefthook install",
+    "types": "bun check && bun check -p tests",
+    "test": "bun test",
+    "test:package": "bun run build && bun test ./tests/package/consumer.package-test.ts ./tests/package/install.package-test.ts",
+    "prepublishOnly": "bun run build",
+    "lint": "oxlint --fix && oxfmt",
+    "lint:check": "oxlint && oxfmt --check",
+    "release": "changesets-local",
+    "release:check": "bun run lint:check && bun run types && bun run docs:build && bun run test:package && bun run test",
+    "docs:build": "vitepress build docs",
+    "docs:dev": "vitepress dev docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "dependencies": {
+    "kern-db": "^0.4.0",
+    "kern-migrations": "^0.4.1"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/core": "^0.18.5",
+    "@changesets/cli": "^3.0.3",
+    "@ilyasemenov/oxc-config": "^0.1.1",
+    "@tsconfig/bun": "^1.0.11",
+    "@types/bun": "^1.4.4",
+    "@types/pg": "^8.23.1",
+    "changesets-local": "^1.6.0",
+    "kern-orm": "^0.12.1",
+    "orchid-orm": "^1.78.47",
+    "oxfmt": "^0.77.0",
+    "oxlint": "^1.92.0",
+    "pg": "^8.23.1",
+    "postgres": "^4.1.0",
+    "publint": "^0.3.25",
+    "pure-rand": "^8.4.2",
+    "tsdown": "^0.23.7",
+    "typescript": "^7.0.2",
+    "typescript-6": "npm:typescript@6.0.3",
+    "vitepress": "^1.6.4"
+  },
+  "engines": {
+    "bun": ">=1.4",
+    "node": ">=24"
+  },
+  "packageManager": "bun@1.4.4"
+}
