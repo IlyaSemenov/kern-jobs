@@ -25,17 +25,6 @@ Read the relevant guide in [development/](development/README.md) before starting
 Extend this guide only with stable, non-obvious conventions, architecture, contracts, workflows, and gotchas that most changes need; put those of one topic in the guide or the index of that topic.
 Do not catalog files or restate information evident from their names and locations.
 
-## Release status
-
-The package is at version 0.0.0 and has no users; remove this section with the initial release.
-
-- Judge a change only by the contract it produces.
-  Do not compare behavior with previous revisions, call changes breaking, or add compatibility paths, migration notes, or deprecations.
-- Do not add changesets: the pending initial release covers every change.
-- Keep the history to the single commit of the initial release and amend it with every change: do not add commits, split a task into commits, or propose commit messages.
-- Code, tests, and user documentation of a change may land in separate steps; they must agree by the initial release.
-- Change the schema in its first migration, `0001_create_job`, rather than in a new one: no database has applied it.
-
 ## Scope
 
 - Keep production code in `src/`, and place tests as [development/testing.md](development/testing.md) describes.
