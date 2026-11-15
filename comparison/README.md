@@ -54,4 +54,5 @@ Scenarios worth comparing that the topics do not cover yet:
 - Do not link comparison/ back to architecture/.
 - Also record a scenario that another project fails while kern-jobs covers it in a comment of the test that checks the scenario, such as `// Graphile Worker ran jobs of one queue concurrently: <issue URL>`.
 - Keep a capability that another project has and kern-jobs lacks, such as `key_strict_fifo` of pg-boss, in the item of [backlog/](../backlog/README.md) that would add it, and move it here when the item is deleted.
+- Update [docs/comparison.md](../docs/comparison.md), a summary of comparison/ for choosing a queue, when a record that it summarizes changes; it gives the reviewed versions and review date and a link to the evidence of each claim about another project.
 - Add a scenario worth comparing that the topics do not cover yet to [Scenarios to compare](#scenarios-to-compare).

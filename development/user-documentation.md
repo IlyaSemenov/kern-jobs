@@ -6,7 +6,7 @@ How to write the user documentation of kern-jobs, the VitePress site in `docs/`,
 
 - Keep `README.md` short and link to the site.
 - Add every new page to the sidebar in `docs/.vitepress/config.ts`.
-- Keep `docs/comparison.md` a summary of [comparison/](../comparison/README.md) for choosing a queue, with the reviewed versions and review date and a link to the evidence of each claim about another project; update it when a record that it summarizes changes.
+- Keep `docs/comparison.md` a summary of [comparison/](../comparison/README.md) for choosing a queue, with the reviewed versions and review date and a link to the evidence of each claim about another project.
 - Link the other Kern libraries from the Kern menu of the nav, the end of the home page, and the Kern libraries section of `README.md`, which link the overview `docs/ecosystem.md` of the kern-orm site.
 
 ## Content
