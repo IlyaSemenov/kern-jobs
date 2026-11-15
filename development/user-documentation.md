@@ -6,6 +6,7 @@ How to write the user documentation of kern-jobs, the VitePress site in `docs/`,
 
 - Keep `README.md` short and link to the site.
 - Add every new page to the sidebar in `docs/.vitepress/config.ts`.
+- Link the other Kern libraries from the Kern menu of the nav, the end of the home page, and the Kern libraries section of `README.md`, which link the overview `docs/ecosystem.md` of the kern-orm site.
 
 ## Content
 
@@ -25,4 +26,4 @@ How to write the user documentation of kern-jobs, the VitePress site in `docs/`,
 - Use postgres.js and its driver, `postgresJsDriver` of `kern-jobs/db/postgres-js`, in the examples that need a database client, and show node-postgres only as an alternative, such as in [docs/database-clients.md](../docs/database-clients.md).
 - Name the definition of a task with the suffix `Task`, such as `indexProductTask`, which leaves `indexProduct` to the function of the application that its handler calls.
 - In the examples of an application, keep the definitions of tasks in `src/tasks.ts` and the code of the worker in `src/worker/`: each implementation of a task as the default export of a module of its own, such as `src/worker/tasks/index-product.ts`, the manifest that gathers them in `src/worker/manifest.ts`, and the start of the worker in `src/worker/start.ts`.
-  A short example that runs on its own may keep all of it in one module.
+  A short example that runs on its own, and the worker of the overview in `README.md`, may keep all of it in one module.

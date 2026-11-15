@@ -44,7 +44,7 @@ If your schema is not `kern_jobs`, pass its name as `schemaName`.
 
 Create the schema with [`migrateJobs`](../getting-started#create-the-schema) before the worker starts: a worker takes no jobs in a schema that is missing or lacks the changes of its version of kern-jobs, and [reports](./monitoring#report-errors) it until the schema is up to date.
 
-[Database Clients](../database-clients) shows how to start a worker on node-postgres or kern-orm, and [how many connections](../database-clients#connections-of-a-worker) it needs.
+[Database Clients and Transactions](../database-clients) shows how to start a worker on node-postgres or kern-orm, and [how many connections](../database-clients#connections-of-a-worker) it needs.
 
 ## Run several jobs at once
 

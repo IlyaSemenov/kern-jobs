@@ -1,4 +1,4 @@
-# Keys
+# Deduplication and Debouncing
 
 To keep at most one pending job per entity, such as one search indexing per product, give the jobs a key.
 An enqueue with the key of a pending job of the same task and [scope](./scopes) merges into it instead of adding a job, by `keyMode`:

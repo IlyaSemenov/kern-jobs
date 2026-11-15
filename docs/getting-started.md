@@ -23,24 +23,17 @@ bun add kern-jobs postgres
 :::
 
 Install the database client of your application beside kern-jobs: postgres.js, as in this guide, or another one, such as node-postgres.
-kern-jobs connects through it in two ways:
-
-- The code that enqueues jobs passes `createJobs` the client itself, such as `sql`, or the client of a transaction, so that its enqueues join that transaction.
-- `migrateJobs` and the worker take a driver that wraps the client, such as `postgresJsDriver(sql)`, and the worker runs outside the transactions of your application.
-
-See [Database Clients](./database-clients) for each client.
 
 kern-jobs runs on Node.js 24 or newer and Bun 1.4 or newer, with PostgreSQL 15 or newer.
 Use TypeScript 6.0 or newer.
 
 ## Try it
 
-To see a job run from start to end, create a project in an empty directory:
+To see a job run from start to end, create a project in an empty directory, and install kern-jobs and postgres in it as above:
 
 ```sh
 npm init -y
 npm pkg set type=module
-npm install kern-jobs postgres
 ```
 
 Save this module in it:
@@ -63,7 +56,12 @@ DATABASE_URL=postgres://localhost:5432/postgres bun quickstart.ts
 
 It creates the schema of kern-jobs in the database, enqueues a job, runs it in a worker, which prints `Hello, world!`, and stops the worker.
 
-The sections below split it into the modules of an application.
+The sections below split it into the modules of an application, which connects kern-jobs through its database client in two ways:
+
+- The code that enqueues jobs passes `createJobs` the client itself, such as `sql`, or the client of a transaction, so that its enqueues join that transaction.
+- `migrateJobs` and the worker take a driver that wraps the client, such as `postgresJsDriver(sql)`, and the worker runs outside the transactions of your application.
+
+See [Database Clients and Transactions](./database-clients) for each client.
 
 ## Create the schema
 
@@ -85,11 +83,9 @@ Run it at every deploy as well, as [Updating kern-jobs](./deployment/updating-ke
 
 To use a different schema name, pass it as `schemaName` to `migrateJobs`, and to `createJobs` and `startWorker` below.
 
-With kern-orm or kern-db, you can pass `migrateJobs` your `db` or `database` instead of a driver, so that it creates the schema in the current transaction, such as a test transaction that rolls it back.
-
 ## Define tasks
 
-A task is a kind of work, such as sending an email.
+A task is a kind of work, such as sending an email, and a job is one run of it.
 Define each task with its name and the type of its payload in a module that both the code that enqueues jobs and the worker import:
 
 ```ts [src/tasks.ts]
@@ -115,7 +111,7 @@ export const sql = postgres(process.env.DATABASE_URL!)
 export const jobs = createJobs(sql)
 ```
 
-[Database Clients](./database-clients) shows how to connect node-postgres and other clients, and how to enqueue in the transaction of your application.
+[Database Clients and Transactions](./database-clients) shows how to connect node-postgres and other clients.
 
 ## Enqueue
 
@@ -125,7 +121,17 @@ Enqueue a job of a task with its payload:
 await jobs.enqueue(sendWelcomeEmailTask, { userId: user.id })
 ```
 
-An enqueue in a transaction of your application becomes visible to workers when the transaction commits and never runs when it rolls back, so a job never misses the data that the transaction writes.
+Enqueue a job in the transaction that writes its data by passing `createJobs` the client of the transaction:
+
+```ts
+await sql.begin(async tx => {
+  const [user] = await tx`insert into users (email) values (${email}) returning id`
+  await createJobs(tx).enqueue(sendWelcomeEmailTask, { userId: user.id })
+})
+```
+
+The job becomes visible to workers when the transaction commits and never runs when it rolls back, so it never misses the data that the transaction writes.
+To share `jobs` across your application and still enqueue in its transactions, or to enqueue in the transactions of an ORM, see [Database Clients and Transactions](./database-clients).
 
 ## Run a worker
 

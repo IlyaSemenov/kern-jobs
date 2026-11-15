@@ -1,4 +1,4 @@
-# Queues
+# Sequential Queues
 
 To run jobs one at a time, such as those that update the same external account, give them a `queue`.
 A queue runs one of its jobs at a time and can hold the jobs of several tasks of one [scope](./scopes).

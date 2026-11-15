@@ -1,4 +1,4 @@
-# Stopping
+# Graceful Shutdown
 
 Stop the worker before the process exits: `stopOnSignals` stops it at SIGTERM or SIGINT, then closes your database client and exits the process.
 

@@ -1,4 +1,4 @@
-# Database Clients
+# Database Clients and Transactions
 
 kern-jobs connects through the database client of your application in two ways:
 
@@ -6,7 +6,7 @@ kern-jobs connects through the database client of your application in two ways:
   Pass it your client or the client of a transaction.
   You can also pass a function that returns the client of the current transaction: `createJobs` calls it at each enqueue.
 - The worker and `migrateJobs` take a driver that wraps the client: `postgresJsDriver` of `kern-jobs/db/postgres-js`, or `nodePostgresDriver` of `kern-jobs/db/node-postgres`.
-  They run outside the transactions of your application.
+  The worker runs outside the transactions of your application, and so does `migrateJobs` on a driver; with [kern-orm or kern-db](#kern-orm-and-kern-db), `migrateJobs` can run in the current transaction instead.
 
 Enqueue, retry, and delete jobs in transactions at `READ COMMITTED`, the default isolation level of PostgreSQL.
 
@@ -86,6 +86,12 @@ await db.$transaction(async () => {
 Without the ORM, pass your `database`, and enqueue in `database.transaction`.
 
 kern-jobs keeps its tables in its own schema, `kern_jobs`, whatever the schema of `db`.
+
+Pass your `db` or `database` to `migrateJobs` as well, and it creates the schema in the current transaction, such as a test transaction that rolls it back:
+
+```ts
+await migrateJobs(db)
+```
 
 Start the worker on the driver of your database, which shares its pool:
 

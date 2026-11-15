@@ -9,21 +9,38 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
-    nav: [{ text: "Docs", link: "/getting-started" }],
+    nav: [
+      { text: "Docs", link: "/getting-started" },
+      {
+        text: "Kern",
+        items: [
+          { text: "Kern Libraries", link: "https://ilyasemenov.github.io/kern-orm/ecosystem" },
+          { text: "ORM", link: "https://ilyasemenov.github.io/kern-orm/orm/getting-started" },
+          {
+            text: "Database",
+            link: "https://ilyasemenov.github.io/kern-orm/database/getting-started",
+          },
+          {
+            text: "Migrations",
+            link: "https://ilyasemenov.github.io/kern-orm/migrations/getting-started",
+          },
+        ],
+      },
+    ],
     sidebar: [
       {
         text: "Introduction",
         items: [
           { text: "Getting Started", link: "/getting-started" },
-          { text: "Database Clients", link: "/database-clients" },
+          { text: "Database Clients and Transactions", link: "/database-clients" },
         ],
       },
       {
         text: "Tasks",
         items: [
           { text: "Defining Tasks", link: "/tasks/" },
-          { text: "Keys", link: "/tasks/keys" },
-          { text: "Queues", link: "/tasks/queues" },
+          { text: "Deduplication and Debouncing", link: "/tasks/keys" },
+          { text: "Sequential Queues", link: "/tasks/queues" },
           { text: "Scopes", link: "/tasks/scopes" },
         ],
       },
@@ -35,7 +52,7 @@ export default defineConfig({
           { text: "Retries", link: "/workers/retries" },
           { text: "Failed Jobs", link: "/workers/failed-jobs" },
           { text: "Leases", link: "/workers/leases" },
-          { text: "Stopping", link: "/workers/stopping" },
+          { text: "Graceful Shutdown", link: "/workers/stopping" },
           { text: "Monitoring", link: "/workers/monitoring" },
         ],
       },
