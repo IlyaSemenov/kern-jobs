@@ -10,8 +10,8 @@ hero:
       text: Get Started
       link: /getting-started
     - theme: alt
-      text: GitHub
-      link: https://github.com/IlyaSemenov/kern-jobs
+      text: Compare
+      link: /comparison
 
 features:
   - title: Commit data and jobs together

@@ -6,7 +6,7 @@ It works with your PostgreSQL client: postgres.js, node-postgres, Orchid ORM, ke
 
 kern-jobs is in early development, and the API changes between minor versions.
 
-See the [documentation](https://ilyasemenov.github.io/kern-jobs/).
+See the [documentation](https://ilyasemenov.github.io/kern-jobs/), and how kern-jobs [compares](https://ilyasemenov.github.io/kern-jobs/comparison) with Graphile Worker and pg-boss.
 
 ## Install
 

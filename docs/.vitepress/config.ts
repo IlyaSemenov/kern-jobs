@@ -32,6 +32,7 @@ export default defineConfig({
         text: "Introduction",
         items: [
           { text: "Getting Started", link: "/getting-started" },
+          { text: "Comparison", link: "/comparison" },
           { text: "Database Clients and Transactions", link: "/database-clients" },
         ],
       },
