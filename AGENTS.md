@@ -4,7 +4,7 @@
 
 kern-jobs is a background job library on PostgreSQL for TypeScript.
 
-Read the user documentation in [docs/](docs/) completely before changing the public API, package behavior, supported runtimes, or user documentation.
+Before changing the public API, package behavior, supported runtimes, or user documentation, read the pages of the user documentation in [docs/](docs/) that the change affects.
 
 Before changing a module, read [architecture/README.md](architecture/README.md) and the files that its map lists for the module, and keep them in sync with the code.
 Keep [architecture/](architecture/README.md) to the code as it is: record a contract in the file of its topic and unresolved design of the code in its Open questions; list a new file in the map.
