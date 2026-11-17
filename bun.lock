@@ -15,7 +15,7 @@
         "@tsconfig/bun": "^1.0.11",
         "@types/bun": "^1.4.4",
         "@types/pg": "^8.23.1",
-        "changesets-local": "^1.6.0",
+        "changesets-release": "^2.1.0",
         "kern-orm": "^0.12.1",
         "orchid-orm": "^1.78.47",
         "oxfmt": "^0.77.0",
@@ -564,7 +564,7 @@
 
     "ccount": ["ccount@2.0.1", "", {}, "sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg=="],
 
-    "changesets-local": ["changesets-local@1.6.0", "", { "bin": { "changesets-local": "dist/cli.mjs" } }, "sha512-c7U00YJKE/BBLpueixqoMtR8c2sHcOtaInHAaQhLawK3hbYT6Hk5lQJ74uLNyd8/2I8c6dVL8XWz/BB2DYOg/w=="],
+    "changesets-release": ["changesets-release@2.1.0", "", { "bin": { "changesets-release": "dist/cli.mjs" } }, "sha512-FeDpNqSncN0qaZWBghQG/lkzZiTgKa6Q7xplY8kCgcnEHsIwXMIa6YhqaQTv0XUH4BQqm1hnc3SFw1VfyxgPEw=="],
 
     "character-entities-html4": ["character-entities-html4@2.1.0", "", {}, "sha512-1v7fgQRj6hnSwFpq1Eu0ynr/CDEw0rXo2B61qXrLNdHZmPKgb7fqS1a2JwF0rISo9q77jDI8VMEHoApn8qDoZA=="],
 
