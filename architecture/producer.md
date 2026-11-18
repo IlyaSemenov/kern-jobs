@@ -14,7 +14,7 @@ An application defines its tasks with `defineTask` and enqueues their jobs with 
   The worker reads `lease` and `backoff` from the code of the task, the lease when it claims a job, before it reads the payload, and the backoff when a job fails, so the row stores neither, and an enqueue cannot override them ([decision](../decisions/tasks/worker-settings.md)): the types of the options of `withOptions` and of overrides reject the three, and an enqueue throws `TypeError` for one that a JavaScript caller passes.
 - A lease is a number of seconds above 0 up to 10^12, about 31,700 years, a bound well within the intervals and timestamps of PostgreSQL, which rejects a claim whose lease is out of the range of an interval.
 - A name of a task is at most 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
-- `defineTask` throws `TypeError` for a name that is not a string, a `backoff` that is not a function, or a `scoped` that is not a boolean, and `RangeError` for a longer name or a `lease` outside its range; `withOptions` and `implement` throw `TypeError` for an argument that is not a function.
+- `defineTask` throws `TypeError` for a name that is not [storable text](README.md#terms), a `backoff` that is not a function, or a `scoped` that is not a boolean, and `RangeError` for a longer name or a `lease` outside its range; `withOptions` and `implement` throw `TypeError` for an argument that is not a function.
 
 ## Options
 
@@ -26,7 +26,8 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
 - `keyMode: "debounce"` takes `delay` and `maxWait`, and no `runAt`, so that a stream of events cannot postpone the run time of a job without a bound.
 - After the merge, an option that the key mode does not read, such as `maxWait` outside `debounce` or `resetAttempts` with `keep`, is ignored and not checked, since a later layer cannot remove it; the types reject such combinations within one layer.
 - The types of every layer admit `undefined` in every optional field also under `exactOptionalPropertyTypes`, so that a wrapper can pass its optional parameters through; the options of `defineTask` and `withOptions` that give `keyMode: "debounce"` give `delay` and `maxWait` too, while overrides may inherit either.
-- The checks throw `TypeError` for a wrong combination and `RangeError` for a value outside its range, before the client is called; the check constraints of the table reject a key or a queue longer than 1024 bytes.
+- The checks throw `TypeError` for a wrong combination, a task name that is not [storable text](README.md#terms), or a key or a queue that is neither `null` nor storable text, and `RangeError` for a value outside its range, before the client is called; the check constraints of the table reject a key or a queue longer than 1024 bytes.
+  Each enqueue checks the task name again, since the task may come from an older version of kern-jobs, whose `defineTask` accepted such a name.
 - `delay` and `maxWait` are numbers of seconds from 0 to 10^12, about 31,700 years, a bound well within the intervals and timestamps of PostgreSQL.
   `isDelay` of `task/delay.ts` checks this range, which delays of retries share.
   A run time in the past takes `runAt` rather than a negative `delay`.
@@ -71,7 +72,7 @@ The jobs of other tasks have the empty scope ([decision](../decisions/enqueue/sc
 - Whether a task is scoped is its setting, beside `lease` and `backoff`, since the jobs of a task either each belong to a scope, such as of a tenant, or serve every scope, and the jobs API gives only the value, so that one jobs API of an application serves both kinds.
 - Each enqueue of a scoped task calls the function of the scope, such as one that reads the tenant of the current request, as each enqueue calls a function of the client.
   An enqueue of another task neither calls the function of the scope nor checks the scope.
-- `createJobs` throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, and `RangeError` for the empty string, which would enqueue into the empty scope, such as for a tenant whose id is empty, and for one longer than 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
+- `createJobs` throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, or a string that is not [storable text](README.md#terms), and `RangeError` for the empty string, which would enqueue into the empty scope, such as for a tenant whose id is empty, and for one longer than 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
 - An enqueue of a scoped task rejects with `TypeError` without a scope, and with the errors of `createJobs` for a value that the function returns, before it calls the client.
 - A handler gets the scope of its job as `job.scope`, and `null` for the empty scope ([Worker](worker.md#tasks)), so `createJobs` with `scope: job.scope` enqueues the scoped tasks into the scope of the job; the jobs of other tasks keep the empty scope.
 - The type parameter `Scope` of a task, of its implementation, and of the context of its handler is `string` for a task of `scoped: true`, which an overload of `defineTask` selects for the literal `true`, and `string | null` for other tasks, whose jobs may keep the scope of an earlier definition that was scoped.
@@ -79,8 +80,8 @@ The jobs of other tasks have the empty scope ([decision](../decisions/enqueue/sc
 ## Schema
 
 The `schemaName` of `createJobs` names the PostgreSQL schema of the job table, `kern_jobs` by default, which [`migrateJobs`](migrations.md#migratejobs) creates.
-`checkSchemaName` of `core/schema.ts`, which `createJobTable` and `migrateJobs` call, throws `TypeError` for a name that is not a string of 1 to 63 bytes in UTF-8 without U+0000.
-PostgreSQL of a standard build truncates a longer name, also a quoted one, so two names that differ only after its 63rd byte would name one schema, and it rejects U+0000 in the text of a statement.
+`checkSchemaName` of `core/schema.ts`, which `createJobTable` and `migrateJobs` call, throws `TypeError` for a name that is not [storable text](README.md#terms) of 1 to 63 bytes in UTF-8.
+PostgreSQL of a standard build truncates a longer name, also a quoted one, so two names that differ only after its 63rd byte would name one schema.
 
 ## Open questions
 

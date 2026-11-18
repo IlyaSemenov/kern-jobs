@@ -173,4 +173,20 @@ describe("toEnqueueParams", () => {
       expect(() => toEnqueueParams("t", null, o)).toThrow(message)
     }
   })
+
+  test("rejects a task name, a key, or a queue that is not storable text, and accepts a surrogate pair", () => {
+    expect(() => toEnqueueParams("t\ud800", null, {})).toThrow("The name of a task must be")
+    for (const [o, message] of [
+      [{ key: "k\ud800" }, "key must be"],
+      [{ queue: "q\0" }, "queue must be"],
+      // As a JavaScript caller passes it, past the types.
+      [{ key: ["k\ud800"] as unknown as string }, "key must be"],
+    ] as const) {
+      expect(() => toEnqueueParams("t", null, o)).toThrow(message)
+    }
+    expect(toEnqueueParams("t", null, { key: "k😀", queue: "q😀" })).toMatchObject({
+      key: "k😀",
+      queue: "q😀",
+    })
+  })
 })

@@ -1,6 +1,6 @@
-import { utf8Length } from "../core/db"
+import { isStorableText, storableTextRule, utf8Length } from "../core/db"
 import { checkEnqueueOverrides, type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
-import { isTask, type Task } from "../task/task"
+import { checkTaskName, isTask, type Task } from "../task/task"
 
 import { compileCron, type CronDefinition } from "./cron"
 
@@ -69,10 +69,9 @@ export function toWorkerSchedule(schedule: Schedule): WorkerSchedule {
     throw new TypeError("A manifest takes schedules defined with defineSchedule")
   }
   const { id, task, payload, enqueue, enabled, catchUp } = schedule
-  // A lone surrogate encodes as U+FFFD in UTF-8, so two different IDs would share one row.
-  if (typeof id !== "string" || !id || id.includes("\0") || !id.isWellFormed()) {
+  if (typeof id !== "string" || !id || !isStorableText(id)) {
     throw new TypeError(
-      "Schedule ID must be a string that is not empty and has neither U+0000 nor a lone surrogate",
+      `Schedule ID must be a string that is not empty and has ${storableTextRule}`,
     )
   }
   if (utf8Length(id) > 128) {
@@ -81,6 +80,7 @@ export function toWorkerSchedule(schedule: Schedule): WorkerSchedule {
   if (!isTask(task) || (task.optionsFor !== undefined && typeof task.optionsFor !== "function")) {
     throw new TypeError(`Schedule ${id} must have a task defined with defineTask`)
   }
+  checkTaskName(task.name)
   if (task.scoped) {
     throw new TypeError(`Cannot schedule scoped task ${task.name}`)
   }

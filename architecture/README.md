@@ -27,6 +27,9 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - A lease is the time until which the reaper leaves a claimed job to its worker.
 - Settlement ends a claim: complete deletes the job, and fail retries it, merges it with the pending job of its key, or records it as failed.
 - Administration is what the application does with jobs by their ids: it retries a failed job and deletes a pending or failed one.
+- Storable text is a string that has neither U+0000 nor a lone surrogate.
+  PostgreSQL rejects U+0000 in text, and encoding as UTF-8 replaces a lone surrogate with U+FFFD, so two different strings would become one value, such as two keys that share a pending job.
+  The API rejects a name, scope, key, queue, or ID of the application that is not storable text before a statement uses it.
 
 ## Entry points
 

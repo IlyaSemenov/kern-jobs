@@ -27,14 +27,25 @@ test("the statements of the core run in a schema whose name needs quoting", asyn
   }
 })
 
-test("checkSchemaName counts the length of a name in bytes of UTF-8, up to 63, and rejects U+0000", () => {
+test("checkSchemaName counts the length of a name in bytes of UTF-8, up to 63, and rejects U+0000 and a lone surrogate", () => {
   // "é" takes 2 bytes, and "😀" takes 4.
   for (const name of ["a", "a".repeat(63), "é".repeat(31) + "a", "😀".repeat(15) + "abc"]) {
     expect(() => checkSchemaName(name)).not.toThrow()
   }
-  for (const name of ["", "a".repeat(64), "é".repeat(32), "😀".repeat(16), "a\0b", null, 5]) {
+  for (const name of [
+    "",
+    "a".repeat(64),
+    "é".repeat(32),
+    "😀".repeat(16),
+    "a\0b",
+    "a\ud800",
+    null,
+    5,
+  ]) {
     expect(() => checkSchemaName(name)).toThrow(
-      new TypeError("schemaName must be a string of 1 to 63 bytes in UTF-8 without U+0000"),
+      new TypeError(
+        "schemaName must be a string of 1 to 63 bytes in UTF-8 that has neither U+0000 nor a lone surrogate",
+      ),
     )
   }
 })

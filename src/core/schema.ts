@@ -1,5 +1,5 @@
 // Job table of the SQL core with its claim sequence, named in a PostgreSQL schema of their own.
-import { quoteIdentifier, utf8Length } from "./db"
+import { isStorableText, quoteIdentifier, storableTextRule, utf8Length } from "./db"
 
 /**
  * Job table of the SQL core with its claim sequence, in a PostgreSQL schema of their own.
@@ -21,18 +21,18 @@ export const DEFAULT_SCHEMA = "kern_jobs"
 const maxSchemaNameBytes = 63
 
 /**
- * Throws `TypeError` unless `schemaName` is a string of 1 to 63 bytes in UTF-8 without U+0000.
- * PostgreSQL truncates a longer name, also a quoted one, so two names that differ only after its 63rd byte would name the same schema; it rejects U+0000 in the text of a statement.
+ * Throws `TypeError` unless `schemaName` is storable text of 1 to 63 bytes in UTF-8.
+ * PostgreSQL truncates a longer name, also a quoted one, so two names that differ only after its 63rd byte would name the same schema.
  */
 export function checkSchemaName(schemaName: unknown): asserts schemaName is string {
   if (
     typeof schemaName !== "string" ||
     schemaName === "" ||
-    schemaName.includes("\0") ||
+    !isStorableText(schemaName) ||
     utf8Length(schemaName) > maxSchemaNameBytes
   ) {
     throw new TypeError(
-      `schemaName must be a string of 1 to ${maxSchemaNameBytes} bytes in UTF-8 without U+0000`,
+      `schemaName must be a string of 1 to ${maxSchemaNameBytes} bytes in UTF-8 that has ${storableTextRule}`,
     )
   }
 }

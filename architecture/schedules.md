@@ -5,7 +5,7 @@ Every worker whose manifest lists the schedule checks it.
 A shared cursor records the minutes already checked, so workers cannot enqueue the same minute twice.
 
 - The schedule ID identifies the schedule in the schema of kern-jobs and defaults to the task name.
-  It must not contain a lone surrogate, which UTF-8 encodes as U+FFFD, so that two IDs never share a row.
+  It must be [storable text](README.md#terms).
 - `defineSchedule` returns the definition as given, with defaults filled.
   `toWorkerSchedule` checks the definition and compiles the calendar; `defineSchedule`, `defineManifest`, and `startWorker` each run it, since any object of the shape of a schedule passes the types, and a manifest rejects a reused schedule ID.
   For a task without `withOptions`, it checks the merged enqueue options.

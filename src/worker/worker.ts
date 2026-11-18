@@ -3,7 +3,7 @@ import { hostname } from "node:os"
 
 import type { Driver } from "kern-db"
 
-import { checkCount } from "../core/db"
+import { checkCount, isStorableText, storableTextRule } from "../core/db"
 import { checkDriver } from "../core/driver"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { checkJobSchema } from "../migration/migrate"
@@ -170,9 +170,8 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
   const schedules = toWorkerSchedules(manifest.schedules)
   const table = createJobTable(schemaName)
   checkCount("concurrency", concurrency)
-  // PostgreSQL rejects U+0000 in a text value, so every claim of such a worker would fail.
-  if (typeof id !== "string" || id === "" || id.includes("\0")) {
-    throw new TypeError("id must be a string that is not empty and has no U+0000")
+  if (typeof id !== "string" || id === "" || !isStorableText(id)) {
+    throw new TypeError(`id must be a string that is not empty and has ${storableTextRule}`)
   }
   if (!isLease(lease)) throw new RangeError(`lease must be ${leaseRange}, got ${String(lease)}`)
   checkInterval("pollInterval", pollInterval)

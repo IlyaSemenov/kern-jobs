@@ -86,6 +86,10 @@ describe("defineManifest", () => {
         { ...schedule, task: { name: "missing" } },
         new TypeError(`Schedule ${schedule.id} must have a task defined with defineTask`),
       ],
+      [
+        { ...schedule, task: { ...purgeExpiredSessions, name: "t\ud800" } },
+        "The name of a task must be",
+      ],
     ] as const) {
       expect(() => defineManifest({ tasks: [], schedules: [invalid as never] })).toThrow(error)
     }

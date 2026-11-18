@@ -1,5 +1,5 @@
 // Task definitions: the name of a task, the type of its payload, the options of its enqueues, and the settings of its workers, which producers and workers import from the same definition; and the implementations of tasks, which only workers import.
-import { utf8Length } from "../core/db"
+import { checkStorableText, utf8Length } from "../core/db"
 
 import type { Backoff } from "./backoff"
 import type { EnqueueOptions, StaticEnqueueOptions } from "./options"
@@ -135,9 +135,11 @@ export function defineTask(name: string, options: TaskOptions = {}): TaskBuilder
 /** Longest name of a task in bytes of UTF-8, the limit of the column `task`. */
 const maxTaskNameBytes = 128
 
-/** Throws `TypeError` for a name of a task that is not a string, and `RangeError` for one longer than 128 bytes in UTF-8. */
-function checkTaskName(name: unknown): asserts name is string {
-  if (typeof name !== "string") throw new TypeError("The name of a task must be a string")
+/**
+ * Throws `TypeError` for a name of a task that is not storable text, and `RangeError` for one longer than 128 bytes in UTF-8.
+ */
+export function checkTaskName(name: unknown): asserts name is string {
+  checkStorableText("The name of a task", name)
   if (utf8Length(name) > maxTaskNameBytes) {
     throw new RangeError(
       `The name of a task must be at most ${maxTaskNameBytes} bytes in UTF-8, got ${name}`,

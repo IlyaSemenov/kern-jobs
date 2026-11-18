@@ -67,11 +67,7 @@ describe("migrateJobs", () => {
     const cases: [unknown, unknown, string][] = [
       // A client instead of its driver.
       [{ query: call }, undefined, "The target of migrations must be"],
-      [
-        driver,
-        { schemaName: 5 },
-        "schemaName must be a string of 1 to 63 bytes in UTF-8 without U+0000",
-      ],
+      [driver, { schemaName: 5 }, "schemaName must be"],
       [driver, { schemaName: "" }, "schemaName"],
       [driver, { schemaName: null }, "schemaName"],
       // PostgreSQL would truncate it to 63 bytes.

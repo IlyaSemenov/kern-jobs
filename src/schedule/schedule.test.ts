@@ -24,6 +24,7 @@ test("checks the overrides of a schedule without calling the withOptions functio
   })
   for (const [enqueue, message] of [
     [{ maxAttempts: 0 }, "maxAttempts must be"],
+    [{ key: "k\ud800" }, "key must be"],
     [{ delay: -1 }, "delay must be"],
     [{ keyMode: "debounce", maxWait: -1 }, "maxWait must be"],
     [{ keyMode: "debounce", runAt: new Date() }, 'keyMode "debounce" takes delay and maxWait'],

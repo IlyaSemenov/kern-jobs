@@ -103,11 +103,14 @@ describe("toWorkerTasks", () => {
     expect(() => toWorkerTasks([implementation, implementation])).toThrow("duplicate tasks: t")
   })
 
-  test("checks the settings of a task that defineTask did not check", () => {
+  test("checks the name and the settings of a task that defineTask did not check", () => {
     // Objects of the shape of a task pass the types without defineTask.
     const withSettings = (settings: object) => [
       { task: { ...defineTask("accounts.sync"), ...settings }, handler() {} },
     ]
+    expect(() => toWorkerTasks(withSettings({ name: "accounts.sync\ud800" }))).toThrow(
+      "The name of a task must be",
+    )
     expect(() => toWorkerTasks(withSettings({ lease: 1e13 }))).toThrow(
       new RangeError(
         "lease of task accounts.sync must be a number of seconds above 0 up to 1e12, got 10000000000000",

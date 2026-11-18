@@ -1,5 +1,5 @@
 // Options of an enqueue: what a task definition and an enqueue give, their merge, and the parameters of the core.
-import { checkCount } from "../core/db"
+import { checkCount, checkStorableText } from "../core/db"
 import type { EnqueueParams } from "../core/enqueue"
 
 import { delayRange, isDelay } from "./delay"
@@ -182,10 +182,16 @@ function checkOptions(o: MergedOptions, partial: boolean): void {
     throw new RangeError(`runAt must be ${runAtRange}, got ${String(o.runAt)}`)
   }
   if (o.maxAttempts != null) checkCount("maxAttempts", o.maxAttempts)
+  if (o.key != null) checkStorableText("key", o.key)
+  if (o.queue != null) checkStorableText("queue", o.queue)
 }
 
-/** Checks merged options and turns them into the parameters of an enqueue of the core. */
+/**
+ * Checks the name of the task and the merged options, and turns them into the parameters of an enqueue of the core.
+ * It checks the name again since a task defined by an older version of kern-jobs may carry a name that `defineTask` now rejects.
+ */
 export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions): EnqueueParams {
+  checkStorableText("The name of a task", task)
   checkOptions(o, false)
   const keyMode = o.keyMode ?? "replace"
   const maxWait = keyMode === "debounce" ? o.maxWait : null

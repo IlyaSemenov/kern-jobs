@@ -249,9 +249,9 @@ test("throws TypeError for a client of another kind, such as a connection string
 test("throws TypeError for a schemaName that checkSchemaName rejects, such as null or one of 64 bytes", () => {
   const executor = { query: () => Promise.reject(new Error("a statement ran")) }
   for (const schemaName of [null, "", 5, "a".repeat(64)]) {
-    expect(() => createJobs(executor, { schemaName } as unknown as JobsOptions)).toThrow(
-      new TypeError("schemaName must be a string of 1 to 63 bytes in UTF-8 without U+0000"),
-    )
+    const create = () => createJobs(executor, { schemaName } as unknown as JobsOptions)
+    expect(create).toThrow(TypeError)
+    expect(create).toThrow("schemaName must be")
   }
 })
 
@@ -329,9 +329,7 @@ describe("scope", () => {
       )
     }
     // As a JavaScript function returns it, past the types.
-    await expect(enqueueIn(() => undefined as unknown as string)).rejects.toThrow(
-      new TypeError("scope must be a string, got undefined"),
-    )
+    await expect(enqueueIn(() => undefined as unknown as string)).rejects.toThrow("scope must be")
     await expect(enqueueIn(() => "")).rejects.toThrow(
       new RangeError('scope must be 1 to 128 bytes in UTF-8, got ""'),
     )
@@ -381,13 +379,15 @@ describe("scope", () => {
     expect(calls).toBe(0)
   })
 
-  test("createJobs throws TypeError for a scope other than a string or a function, and RangeError for an empty one or one longer than 128 bytes", () => {
+  test("createJobs rejects a scope of a wrong type, one that is not storable text, an empty one, or one longer than 128 bytes in UTF-8", () => {
     const executor = { query: () => Promise.reject(new Error("a statement ran")) }
     const create = (scope: unknown) => () =>
       createJobs(executor, { scope } as unknown as JobsOptions)
     expect(create(42)).toThrow(
       new TypeError("scope must be a string or a function that returns one"),
     )
+    expect(create("tenant\ud800")).toThrow("scope must be")
+    expect(create("tenant\0")).toThrow("scope must be")
     for (const scope of ["", "é".repeat(64) + "a"]) {
       expect(create(scope)).toThrow(
         new RangeError(`scope must be 1 to 128 bytes in UTF-8, got "${scope}"`),
@@ -441,6 +441,28 @@ describe("options", () => {
     await expect(jobs.enqueue(sendEmail, { to: "a" }, { maxAttempts: 0 })).rejects.toBeInstanceOf(
       RangeError,
     )
+    expect(calls).toBe(0)
+  })
+
+  test("rejects a task name, a key, or a queue with a lone surrogate, also from withOptions, before it calls the executor", async () => {
+    let calls = 0
+    const jobs = createJobs(
+      () => {
+        calls++
+        return pool
+      },
+      { schemaName: schema.name },
+    )
+    const staticQueue = defineTask("t", { queue: "q\udc00" })
+    const computedKey = defineTask("t")
+      .withPayload<string>()
+      .withOptions(id => ({ key: `k:${id}` }))
+    // A task defined by an older version of kern-jobs, whose defineTask accepted such a name.
+    const olderTask = { ...defineTask("t"), name: "t\ud800" }
+    await expect(jobs.enqueue(olderTask)).rejects.toThrow("The name of a task must be")
+    await expect(jobs.enqueue(staticQueue)).rejects.toThrow("queue must be")
+    // Cut inside an emoji.
+    await expect(jobs.enqueue(computedKey, "😀".slice(0, 1))).rejects.toThrow("key must be")
     expect(calls).toBe(0)
   })
 })

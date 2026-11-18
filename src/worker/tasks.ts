@@ -2,13 +2,19 @@
 import type { JobRow } from "../core/job"
 import { TerminalError } from "../task/errors"
 import { toTaskMap } from "../task/manifest"
-import { isLease, type JobInfo, leaseRange, type TaskImplementation } from "../task/task"
+import {
+  checkTaskName,
+  isLease,
+  type JobInfo,
+  leaseRange,
+  type TaskImplementation,
+} from "../task/task"
 
 import type { WorkerTask } from "./runtime"
 
 /**
  * Returns the tasks of a worker by name from the task implementations of a manifest.
- * It checks the list and the settings of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types: it throws `RangeError` for a lease outside its range and `TypeError` for a backoff that is not a function or a `scoped` that is not a boolean.
+ * It checks the list, the name, and the settings of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types: it throws the errors of `defineTask` for a wrong name, `RangeError` for a lease outside its range, and `TypeError` for a backoff that is not a function or a `scoped` that is not a boolean.
  * A job of a scoped task without a scope, such as one enqueued before the task became scoped, does not run the handler, whose `job.scope` is typed as a string: it throws a `TerminalError`, so the job becomes failed without retries.
  */
 export function toWorkerTasks(
@@ -17,6 +23,7 @@ export function toWorkerTasks(
   // `Object.fromEntries` defines own properties, so that a task named `__proto__` does not set the prototype.
   return Object.fromEntries(
     [...toTaskMap(implementations)].map(([name, implementation]): [string, WorkerTask] => {
+      checkTaskName(name)
       const { lease, backoff, scoped } = implementation.task
       if (lease !== undefined && !isLease(lease)) {
         throw new RangeError(`lease of task ${name} must be ${leaseRange}, got ${String(lease)}`)

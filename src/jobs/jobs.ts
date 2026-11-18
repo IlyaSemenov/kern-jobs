@@ -1,6 +1,6 @@
 // Jobs API of an application: enqueues of its tasks, and retries and deletes of its jobs, through the database client of the application.
 import { deleteJob, retryFailedJob, type RetryResult } from "../core/administration"
-import { utf8Length } from "../core/db"
+import { checkStorableText, utf8Length } from "../core/db"
 import { enqueue, type EnqueueResult } from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
@@ -53,7 +53,7 @@ export interface Jobs {
  * - a function that returns one of them, called at each call of the jobs API so that it runs in the transaction that the application holds at the call;
  * - a `Database` of kern-db or a `Db` of kern-orm, whose calls of the jobs API join its current transaction.
  * It throws `TypeError` for a client of another kind, and a call of the jobs API rejects with it for a function that returns one.
- * It throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
+ * It throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
  * An enqueue of a scoped task rejects with `TypeError` without a scope, and with the errors of `createJobs` for a scope that the function returns, as a retry and a delete do.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
  */
@@ -121,10 +121,10 @@ function resolveScope(scope: JobsOptions["scope"]): string | null {
 const maxScopeBytes = 128
 
 /**
- * Throws `TypeError` for a scope that is not a string, and `RangeError` for an empty one, which the table stores for jobs without a scope, or one longer than 128 bytes in UTF-8.
+ * Throws `TypeError` for a scope that is not storable text, and `RangeError` for an empty one, which the table stores for jobs without a scope, or one longer than 128 bytes in UTF-8.
  */
 function checkScope(scope: unknown): asserts scope is string {
-  if (typeof scope !== "string") throw new TypeError(`scope must be a string, got ${String(scope)}`)
+  checkStorableText("scope", scope)
   if (scope === "" || utf8Length(scope) > maxScopeBytes) {
     throw new RangeError(`scope must be 1 to ${maxScopeBytes} bytes in UTF-8, got "${scope}"`)
   }

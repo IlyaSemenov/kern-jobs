@@ -51,9 +51,12 @@ describe("defineTask", () => {
       "The name of a task must be at most 128 bytes in UTF-8",
     )
     // As a JavaScript caller passes it, past the types.
-    expect(() => defineTask(5 as unknown as string)).toThrow(
-      new TypeError("The name of a task must be a string"),
-    )
+    expect(() => defineTask(5 as unknown as string)).toThrow("The name of a task must be")
+  })
+
+  test("rejects a name that is not storable text", () => {
+    expect(() => defineTask("t\ud800")).toThrow("The name of a task must be")
+    expect(() => defineTask("t\0")).toThrow("The name of a task must be")
   })
 
   test("rejects a lease that is not a number of seconds above 0 up to 1e12, a backoff that is not a function, and a scoped that is not a boolean", () => {

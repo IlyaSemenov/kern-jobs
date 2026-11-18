@@ -12,7 +12,7 @@ Claiming, heartbeats, and the reaper run in rounds, each one at a time: the next
 
 - `schemaName`: the PostgreSQL schema of the job table, `kern_jobs` by default, as of `createJobs` and `migrateJobs`.
 - `concurrency`: the [slots](#slots) of the worker, 1 by default, an integer from 1 to 2^31 − 1, the largest limit of a statement.
-- `id`: the name of the worker in the rows it claims, by default of its host, its process id, and a random suffix; a string that is not empty and has no U+0000, which PostgreSQL rejects in text.
+- `id`: the name of the worker in the rows it claims, by default of its host, its process id, and a random suffix; [storable text](README.md#terms) that is not empty.
 - `lease`: the lease in seconds of tasks without one, 60 by default, in the [range of a lease](producer.md#task-definitions).
 - `pollInterval`: seconds between claim cycles while slots are free, 1 by default.
 - `reaper`: `false`, or `interval`, 5 seconds by default, and `limit`, 100 jobs per batch by default, of the [reaper](#reaper).
@@ -41,7 +41,7 @@ A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns
   The worker evaluates its schedules after the schema check and reports errors with their IDs ([Schedules](schedules.md)).
   It sends no claim statement and still runs its heartbeat and, unless `reaper` is `false`, the reaper.
 - `findUnimplementedTasks(tasks, manifests)` returns the names of the tasks that none of the manifests implements, for a test of the application, since no worker can tell a task without an implementation from a task of another worker; it takes the tasks as the values of an object, such as the exports of a module, skips the values without a string `name` and a function `implement`, and names each task once.
-- `toWorkerTasks` checks the list of implementations and the lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
+- `toWorkerTasks` checks the list of implementations and the [name](producer.md#task-definitions), lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
 - A job of a scoped task without a scope, such as one enqueued before the task became scoped, does not run its handler: the worker fails it with a `TerminalError`, so it becomes failed without retries, since its handler gets `job.scope` typed as a string.
 - A handler fails its job for good with a `TerminalError`, and retries it after a given delay with a `RetryError`, such as the one of a `Retry-After` header, so that the error is decided where the handler meets it, and the definition, which producers import, holds no error classes of handlers ([decision](../decisions/tasks/handler-errors.md)).
 - A backoff is a function of the number of the failed attempt that returns seconds; `exponentialBackoff` and `fixedBackoff` build common ones, and `defaultBackoff`, which `exponentialBackoff()` builds, waits 2 seconds after the first attempt, doubled after each next one, up to an hour.
