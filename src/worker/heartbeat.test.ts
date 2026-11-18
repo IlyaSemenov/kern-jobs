@@ -106,14 +106,18 @@ afterEach(async () => {
   fakes.length = 0
 })
 
-function start(source: ReturnType<typeof createFakeSource>["source"], events: WorkerEvent[] = []) {
+function start(
+  source: ReturnType<typeof createFakeSource>["source"],
+  events: WorkerEvent[] = [],
+  onSuccess = () => {},
+) {
   heartbeat = startHeartbeat({
     source,
     table: createJobTable("fake"),
     interval: 0.02,
     margin: 0.1,
     onEvent: e => events.push(e),
-    onSuccess: () => {},
+    onSuccess,
   })
   return heartbeat
 }
@@ -146,6 +150,17 @@ test("is healthy after a heartbeat succeeded, and not while one is in flight lon
   next.resolve([])
   await fake.call(2)
   expect(hb.healthy()).toBe(true)
+})
+
+test("is healthy when it reports the success of a heartbeat that took longer than an interval", async () => {
+  const fake = createFakeSource()
+  const seen: boolean[] = []
+  const hb = start(fake.source, [], () => seen.push(hb.healthy()))
+  const slow = await fake.call(0)
+  await sleep(0.05)
+  slow.resolve([])
+  await fake.call(1)
+  expect(seen).toEqual([true])
 })
 
 test("a connection error releases the connection and acquires another; a rejected statement keeps it", async () => {

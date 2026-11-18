@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
+import { defineSchedule } from "../schedule/schedule"
+
 import { defineManifest, findUnimplementedTasks, toTaskMap } from "./manifest"
 import { defineTask, type TaskImplementation } from "./task"
 
@@ -49,6 +51,47 @@ describe("defineManifest", () => {
     tasks.push(indexProduct.implement(() => {}))
     expect(manifest.tasks).toHaveLength(1)
     expect(Object.isFrozen(manifest.tasks)).toBe(true)
+  })
+
+  test("accepts a schedule by its shape and rejects duplicate schedule IDs", () => {
+    const schedule = defineSchedule(purgeExpiredSessions, { cron: { minute: 0 } })
+    const copy = { ...schedule }
+    expect(defineManifest({ tasks: [], schedules: [copy] }).schedules).toEqual([copy])
+    expect(() => defineManifest({ tasks: [], schedules: [schedule, copy] })).toThrow(
+      `Duplicate schedule ID in a manifest: ${schedule.id}`,
+    )
+  })
+
+  test("checks a schedule built by hand as defineSchedule does", () => {
+    const schedule = defineSchedule(purgeExpiredSessions, { cron: { minute: 0 } })
+    const { enabled: _, ...withoutEnabled } = schedule
+    for (const [invalid, error] of [
+      [withoutEnabled, new TypeError(`enabled of schedule ${schedule.id} must be a boolean`)],
+      [{ ...schedule, cron: { minute: 60 } }, new RangeError("Invalid minute: 60")],
+      [
+        { ...schedule, catchUp: {} },
+        new RangeError(
+          `catchUp.within of schedule ${schedule.id} must be a positive whole number of seconds`,
+        ),
+      ],
+      [
+        { ...schedule, task: purgeExpiredSessions.implement(() => {}) },
+        new TypeError(`Schedule ${schedule.id} must have a task defined with defineTask`),
+      ],
+      [
+        { ...schedule, enqueue: "urgent" },
+        new TypeError(`enqueue of schedule ${schedule.id} must be an object of enqueue options`),
+      ],
+      [
+        { ...schedule, task: { name: "missing" } },
+        new TypeError(`Schedule ${schedule.id} must have a task defined with defineTask`),
+      ],
+    ] as const) {
+      expect(() => defineManifest({ tasks: [], schedules: [invalid as never] })).toThrow(error)
+    }
+    expect(() => defineManifest({ tasks: [], schedules: new Array(1) })).toThrow(
+      new TypeError("A manifest takes schedules defined with defineSchedule"),
+    )
   })
 })
 

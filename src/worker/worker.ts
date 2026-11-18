@@ -7,6 +7,7 @@ import { checkCount } from "../core/db"
 import { checkDriver } from "../core/driver"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { checkJobSchema } from "../migration/migrate"
+import { toWorkerSchedules } from "../schedule/schedule"
 import type { Manifest } from "../task/manifest"
 import { isLease, type JobInfo, leaseRange } from "../task/task"
 
@@ -29,6 +30,7 @@ export interface WorkerReaperOptions {
  * - `backoff`: the backoff of the task threw or returned no valid delay, and the job retries with the default backoff;
  * - `settlement`: a statement that records the outcome of a job failed; the worker retries it, and a job whose outcome it cannot record returns to pending once its lease expires, or fails on its last attempt;
  * - `schema`: the schema of kern-jobs is not up to date, such as before `migrateJobs`, or checking it failed; the worker takes no jobs and checks again after the poll interval;
+ * - `schedule`: the worker could not check the schedule identified by `info.id` and tries again in its next round;
  * - `claim`: taking jobs failed, which the worker tries again after the poll interval, or a job was taken too late to keep its lease, and the worker failed it without running its handler;
  * - `heartbeat`: extending the leases of the running jobs failed, which the worker tries again;
  * - `reaper`: returning the jobs of expired leases failed, which the worker tries again;
@@ -38,11 +40,12 @@ export interface WorkerReaperOptions {
 export type WorkerErrorInfo =
   | { source: "handler"; task: string; job: JobInfo; aborted: AbortReason | null }
   | { source: "backoff" | "settlement"; task: string; job: JobInfo }
+  | { source: "schedule"; id: string }
   | { source: "schema" | "claim" | "heartbeat" | "reaper" | "release" | "worker" }
 
 /** Options of `startWorker`. */
 export interface WorkerOptions {
-  /** Implementations of the tasks whose jobs the worker runs. */
+  /** Implementations of the tasks whose jobs the worker runs, and the schedules that it checks. */
   manifest: Manifest
   /** PostgreSQL schema of the tables of kern-jobs, which `migrateJobs` created; `kern_jobs` by default. */
   schemaName?: string | undefined
@@ -108,6 +111,8 @@ function toErrorReport(event: WorkerEvent): [error: unknown, info: WorkerErrorIn
     }
     case "schema-error":
       return [event.error, { source: "schema" }]
+    case "schedule-error":
+      return [event.error, { source: "schedule", id: event.id }]
     case "claim-error":
       return [event.error, { source: "claim" }]
     case "late-claim": {
@@ -132,8 +137,13 @@ function toErrorReport(event: WorkerEvent): [error: unknown, info: WorkerErrorIn
 
 /** Writes an error of a worker with `console.error`, the `onError` of a worker without one. */
 function logError(error: unknown, info: WorkerErrorInfo): void {
-  const job = "job" in info ? `, task ${info.task}, job ${info.job.id}` : ""
-  console.error(`kern-jobs: ${info.source} error${job}:`, error)
+  const details =
+    "job" in info
+      ? `, task ${info.task}, job ${info.job.id}`
+      : "id" in info
+        ? `, schedule ${info.id}`
+        : ""
+  console.error(`kern-jobs: ${info.source} error${details}:`, error)
 }
 
 /**
@@ -152,7 +162,12 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
     schemaName = DEFAULT_SCHEMA,
   } = options
   checkDriver(driver)
-  const tasks = toWorkerTasks(options.manifest)
+  const { manifest } = options
+  if (typeof manifest !== "object" || manifest === null) {
+    throw new TypeError("manifest must be an object, which defineManifest returns")
+  }
+  const tasks = toWorkerTasks(manifest.tasks)
+  const schedules = toWorkerSchedules(manifest.schedules)
   const table = createJobTable(schemaName)
   checkCount("concurrency", concurrency)
   // PostgreSQL rejects U+0000 in a text value, so every claim of such a worker would fail.
@@ -173,6 +188,7 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
     driver,
     table,
     tasks,
+    schedules,
     concurrency,
     id,
     lease,

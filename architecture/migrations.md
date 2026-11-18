@@ -45,5 +45,5 @@ kern-jobs keeps their history and applies it itself, on a driver of kern-db, rat
 
 ## Open questions
 
-- No test runs the producers and the workers of the previous version on a migrated schema, which the history of one migration cannot do; add it with the second migration.
+- No test runs the producers and the workers of the previous release on a schema that the current history migrated.
 - Removing the schema of kern-jobs has no API.

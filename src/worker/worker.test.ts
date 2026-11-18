@@ -2,12 +2,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { hostname } from "node:os"
 
-import { type Driver, QueryError } from "kern-db"
+import { type Driver, isQueryError, QueryError } from "kern-db"
+import { waitForLockedStatement } from "kern-db/testing"
 
 import { claimPlain } from "../core/claim"
 import { enqueue } from "../core/enqueue"
+import { query } from "../core/statement"
 import { createTestSchema, jobs, sleep, type TestSchema } from "../core/testing"
 import { migrateJobs } from "../migration/migrate"
+import { evaluateSchedule } from "../schedule/evaluate"
+import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { fixedBackoff } from "../task/backoff"
 import { defineManifest } from "../task/manifest"
 import { defineTask, type JobInfo } from "../task/task"
@@ -153,6 +157,138 @@ describe("a running worker", () => {
     expect(await jobs(schema)).toEqual([])
   })
 
+  test("without onError, writes a schedule error to the console with the schedule ID", async () => {
+    const failure = new Error("the options are unavailable")
+    const schedule = defineSchedule(
+      defineTask("reports.daily").withOptions(() => {
+        throw failure
+      }),
+      { id: "analytics.daily", cron: { minute: "*" } },
+    )
+    const logged = Promise.withResolvers<void>()
+    const error = spyOn(console, "error").mockImplementation(() => logged.resolve())
+    try {
+      const worker = start({ manifest: defineManifest({ tasks: [], schedules: [schedule] }) })
+      await logged.promise
+      await worker.stop()
+      expect(error.mock.calls[0]).toEqual([
+        "kern-jobs: schedule error, schedule analytics.daily:",
+        failure,
+      ])
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("runs a recovered occurrence once across three workers, also after all three stop and one restarts", async () => {
+    // Pick a minute an hour ago so the next daily occurrence cannot arrive during the test.
+    const [clock] = await query(schema.admin, "select extract(epoch from now()) as seconds")
+    const at = new Date((Math.floor(Number(clock!.seconds) / 60) - 60) * 60000)
+    const schedule = defineSchedule(indexProduct, {
+      cron: { minute: at.getUTCMinutes(), hour: at.getUTCHours() },
+      catchUp: { within: 7200 },
+      payload: { productId: "scheduled" },
+    })
+    await evaluateSchedule(schema.database, schema.table, toWorkerSchedule(schedule), {
+      now: new Date(at.getTime() - 60000),
+    })
+    const handled = Promise.withResolvers<void>()
+    const products: string[] = []
+    const manifest = defineManifest({
+      tasks: [
+        indexProduct.implement(({ productId }) => {
+          products.push(productId)
+          handled.resolve()
+        }),
+      ],
+      schedules: [schedule],
+    })
+    const launch = () => start({ manifest, onError: error => handled.reject(error) })
+    const replicas = [launch(), launch(), launch()]
+    await Promise.all([handled.promise, ...replicas.map(w => w.ready)])
+    await Promise.all(replicas.map(w => w.stop()))
+    expect(await jobs(schema)).toEqual([])
+    const restarted = launch()
+    await restarted.ready
+    await restarted.stop()
+    expect(await jobs(schema)).toEqual([])
+    expect(products).toEqual(["scheduled"])
+  })
+
+  test("enqueues from a manifest without tasks for a worker with another manifest", async () => {
+    const handled = Promise.withResolvers<string>()
+    const schedule = defineSchedule(indexProduct, {
+      cron: { minute: "*" },
+      payload: { productId: "separate" },
+    })
+    start({
+      manifest: defineManifest({ tasks: [], schedules: [schedule] }),
+      onError: error => handled.reject(error),
+    })
+    start({
+      manifest: defineManifest({
+        tasks: [indexProduct.implement(({ productId }) => handled.resolve(productId))],
+      }),
+      onError: error => handled.reject(error),
+    })
+    expect(await handled.promise).toBe("separate")
+  })
+
+  test("reports a schedule blocked by a producer's pending key and continues to the next schedule", async () => {
+    const blocked = defineSchedule(indexProduct, {
+      cron: { minute: "*" },
+      payload: { productId: "scheduled" },
+      enqueue: { key: "shared" },
+    })
+    // Register before either replica starts, so the second finds an existing schedule row.
+    await query(
+      schema.admin,
+      `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, 'epoch')`,
+      [blocked.id],
+    )
+    const independent = defineSchedule(purgeExpiredSessions, { cron: { minute: "*" } })
+    const reported = Promise.withResolvers<WorkerErrorInfo>()
+    const handled = Promise.withResolvers<void>()
+    const manifest = defineManifest({
+      tasks: [
+        indexProduct.implement(() => {}),
+        purgeExpiredSessions.implement(() => handled.resolve()),
+      ],
+      schedules: [blocked, independent],
+    })
+    const launch = () =>
+      start({
+        manifest,
+        onError(error, info) {
+          if (isQueryError(error, "lock_not_available")) reported.resolve(info)
+          else reported.reject(error)
+        },
+      })
+
+    const producer = await schema.connect()
+    await query(producer, "begin")
+    try {
+      await enqueue(producer, schema.table, { task: indexProduct.name, key: "shared" })
+      launch()
+      await waitForLockedStatement(schema.admin, `insert into ${schema.table.name} as j`)
+      launch()
+      // Keep the producer transaction open until the error and the unrelated delivery are both observed.
+      const deadline = AbortSignal.timeout(4000)
+      const expired = new Promise<never>((_, reject) => {
+        deadline.addEventListener("abort", () =>
+          reject(new Error("The schedules stalled behind the producer")),
+        )
+      })
+      const [error] = await Promise.race([
+        Promise.all([reported.promise, handled.promise]),
+        expired,
+      ])
+      expect(error).toEqual({ source: "schedule", id: blocked.id })
+    } finally {
+      await query(producer, "rollback")
+    }
+  })
+
   test("takes no jobs in a schema that migrateJobs has not created, reports it, and becomes ready once the schema is migrated", async () => {
     const table = schema.unmigratedTable("late")
     const reports: [unknown, WorkerErrorInfo][] = []
@@ -171,7 +307,7 @@ describe("a running worker", () => {
       // Neither a claim nor the reaper has run in the schema, which would fail without the table.
       expect(reports.map(([, info]) => info)).toEqual([{ source: "schema" }, { source: "schema" }])
       expect(String(reports[0]![0])).toBe(
-        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job)`,
+        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule)`,
       )
 
       await migrateJobs(schema.driver, { schemaName: table.schemaName })
@@ -246,7 +382,12 @@ describe("options", () => {
       ),
     )
     const cases: [Record<string, unknown>, ErrorConstructor, string][] = [
-      [{ manifest: undefined }, TypeError, "manifest.tasks must be an array"],
+      [
+        { manifest: undefined },
+        TypeError,
+        "manifest must be an object, which defineManifest returns",
+      ],
+      [{ manifest: {} }, TypeError, "manifest.tasks must be an array"],
       [{ manifest: { tasks: [purgeExpiredSessions] } }, TypeError, "A manifest takes"],
       // A task of a wrong setting, built without defineTask.
       [

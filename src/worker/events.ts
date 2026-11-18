@@ -62,6 +62,8 @@ export type WorkerEvent =
   | { type: "claim-error"; error: unknown }
   // The check of the schema failed; the worker takes no jobs and checks again after the poll interval.
   | { type: "schema-error"; error: unknown }
+  // Evaluating this schedule failed; the worker continues with the next schedule.
+  | { type: "schedule-error"; id: string; error: unknown }
   // The driver failed to release a connection; the outcome of the statements on it stands.
   | { type: "release-error"; error: unknown }
   | { type: "reap"; jobs: Reaped[] }

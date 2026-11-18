@@ -20,7 +20,9 @@ import {
   sleep,
   type TestSchema,
 } from "../core/testing"
+import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { RetryError, TerminalError } from "../task/errors"
+import { defineTask } from "../task/task"
 
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
@@ -292,6 +294,68 @@ describe("state", () => {
     await stop
     expect(worker.state).toBe("stopped")
   })
+
+  test("a worker without tasks becomes ready after one statement on its pool and sends no claim statement", async () => {
+    const statements: string[] = []
+    const worker = startTestWorker(schema, {
+      driver: {
+        ...schema.driver,
+        execute(statement) {
+          statements.push(statement.text)
+          return schema.driver.execute(statement)
+        },
+      },
+      tasks: {},
+    })
+    await worker.ready
+    // Claim cycles would run every poll interval.
+    await sleep(100)
+    expect(statements).toEqual(["select 1"])
+  })
+
+  test.each(["without tasks", "whose only slot runs the job it claimed"])(
+    "a worker %s whose heartbeat fails during its statement on the pool becomes ready once the heartbeat recovers",
+    async name => {
+      const withJob = name !== "without tasks"
+      if (withJob) await enqueue(schema.admin, schema.table, { task: "t" })
+      const { proxy, source } = await proxiedHeartbeat()
+      const log = recordEvents()
+      const returned = Promise.withResolvers<void>()
+      const answer = Promise.withResolvers<void>()
+      const handlerGate = Promise.withResolvers<void>()
+      openAll.push(answer.resolve, handlerGate.resolve)
+      let statements = 0
+      let resolved = false
+      const worker = startTestWorker(schema, {
+        driver: {
+          ...schema.driver,
+          async execute(statement) {
+            const result = await schema.driver.execute(statement)
+            if (++statements === 1) {
+              returned.resolve()
+              await answer.promise
+            }
+            return result
+          },
+        },
+        heartbeatSource: source,
+        tasks: withJob ? { t: { handler: () => handlerGate.promise } } : {},
+        onEvent: log.onEvent,
+      })
+      void worker.ready.then(() => (resolved = true))
+      await returned.promise
+      proxy.refuse = true
+      proxy.cut()
+      await log.waitFor("heartbeat-error")
+      answer.resolve()
+      // The promise chain of the statement settles before the next macrotask.
+      await timers.setImmediate()
+      expect([resolved, worker.state]).toEqual([false, "starting"])
+      proxy.refuse = false
+      await worker.ready
+      expect(statements).toBe(1)
+    },
+  )
 
   test("ready rejects once stop begins before the worker is ready", async () => {
     const worker = startTestWorker(schema, {
@@ -1009,6 +1073,58 @@ describe("stop", () => {
     await sleep(200)
     expect([statements - sent, log.all("settled"), log.all("start")]).toEqual([0, [], []])
   })
+
+  test.each(["its connection", "the response to SET LOCAL lock_timeout"])(
+    "a check of a schedule that gets %s after the timeout of stop writes nothing",
+    async gated => {
+      const reached = Promise.withResolvers<void>()
+      const gate = Promise.withResolvers<void>()
+      const released = Promise.withResolvers<void>()
+      openAll.push(gate.resolve)
+      const hold = async () => {
+        reached.resolve()
+        await gate.promise
+      }
+      let resolvedOptions = 0
+      const task = defineTask("report").withOptions(() => {
+        resolvedOptions++
+        return {}
+      })
+      const worker = startTestWorker(schema, {
+        driver: {
+          ...schema.driver,
+          async acquire() {
+            if (gated === "its connection") await hold()
+            const connection = await schema.driver.acquire()
+            return {
+              async execute(statement) {
+                const result = await connection.execute(statement)
+                if (gated !== "its connection" && statement.text.includes("lock_timeout")) {
+                  await hold()
+                }
+                return result
+              },
+              executeScript: text => connection.executeScript(text),
+              async release() {
+                await connection.release()
+                released.resolve()
+              },
+            }
+          },
+        },
+        heartbeatSource: schema.createDriver({ max: 1 }),
+        tasks: {},
+        schedules: [toWorkerSchedule(defineSchedule(task, { cron: { minute: "*" } }))],
+      })
+      await reached.promise
+      await expect(worker.stop({ timeout: 0 })).rejects.toThrow("did not stop within 0 s")
+      gate.resolve()
+      await released.promise
+      expect(resolvedOptions).toBe(0)
+      expect(await jobs(schema)).toEqual([])
+      expect(await query(schema.admin, `select id from "${schema.name}".schedule`)).toEqual([])
+    },
+  )
 
   test("at its timeout, stop does not wait for a stuck heartbeat, whose connection returns to its pool once the heartbeat ends", async () => {
     await enqueue(schema.admin, schema.table, { task: "t" })

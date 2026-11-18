@@ -4,7 +4,7 @@ import { utf8Length } from "../core/db"
 import { enqueue, type EnqueueResult } from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
-import { type EnqueueOverrides, mergeOptions, toEnqueueParams } from "../task/options"
+import { type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
 import type { Task } from "../task/task"
 
 /** Options of `createJobs`. */
@@ -71,11 +71,7 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
       payload?: unknown,
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult> {
-      const params = toEnqueueParams(
-        task.name,
-        payload,
-        mergeOptions(task.options, task.optionsFor?.(payload), overrides),
-      )
+      const params = getTaskEnqueueParams(task, payload, overrides)
       if (task.scoped === true) params.scope = toScope(task.name, scope)
       return enqueue(target(), table, params)
     },

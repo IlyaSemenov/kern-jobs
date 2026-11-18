@@ -145,6 +145,12 @@ function checkTaskName(name: unknown): asserts name is string {
   }
 }
 
+/** Whether a value is a task, which `defineTask` returns. */
+export function isTask(value: unknown): value is Task<string, unknown> {
+  const task = value as Partial<Task<string, unknown>> | null | undefined
+  return typeof task?.name === "string" && typeof task.implement === "function"
+}
+
 /** Longest lease in seconds, about 31,700 years, a bound well within the intervals and timestamps of PostgreSQL. */
 const maxLease = 1e12
 

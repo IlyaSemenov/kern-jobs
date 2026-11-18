@@ -15,6 +15,7 @@ const worker = startWorker(driver, {
 
 `info.source` tells what failed.
 For `handler`, the handler of a job threw, and `info` has the task and the job.
+For `schedule`, the worker could not check the schedule identified by `info.id` and tries again in its next round.
 The other sources are failures of the worker itself, such as a lost database connection, after which the worker keeps trying.
 
 Without `onError`, the worker writes the errors with `console.error`.
@@ -27,7 +28,7 @@ To tell your process manager or orchestrator that the worker has started, await 
 await worker.ready
 ```
 
-It resolves once the worker has checked its schema and taken jobs for the first time, or found none, so the database, the schema, and the connections of your client work.
+It resolves once the worker has checked its schema and reached the database on the connections of your client.
 Until then, the worker [reports](#report-errors) what keeps it from starting, such as a schema that `migrateJobs` has not created.
 If `stop` begins first, `ready` rejects.
 
@@ -42,12 +43,15 @@ createServer((request, response) => {
 ```
 
 - `starting`: the worker is not ready yet.
-- `ready`: the worker takes jobs when its slots are free.
+- `ready`: the worker has started, and its heartbeat is healthy.
 - `unhealthy`: the worker cannot reach the database in time, such as after losing its connection: it takes no new jobs and keeps trying, and it becomes `ready` again by itself once the database answers.
 - `stopping` and `stopped`: `stop` has begun or ended.
 
 `state` does not tell whether jobs progress: a worker whose handlers keep every connection of its client busy stays `ready` while it waits for one.
 Watch the age of the oldest due job, in [Watch the backlog](#watch-the-backlog), to catch that.
+
+Neither `ready` nor `state` tells whether the worker checks its [schedules](./schedules): a worker stays `ready` while every check of a schedule fails.
+Alert on `schedule` errors in `onError` to catch that.
 
 ## Watch the backlog
 

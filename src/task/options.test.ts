@@ -123,9 +123,10 @@ describe("toEnqueueParams", () => {
     }
   })
 
-  test("rejects debounce without delay or maxWait, or with runAt", () => {
+  test("rejects debounce without delay or maxWait, or with runAt, before checking the ranges of values", () => {
     for (const o of [
       { keyMode: "debounce", delay: 2 },
+      { keyMode: "debounce", delay: -1 },
       { keyMode: "debounce", maxWait: 10 },
       { keyMode: "debounce", maxWait: 10, runAt: date },
     ] as const) {

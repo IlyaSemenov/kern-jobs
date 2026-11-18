@@ -11,7 +11,8 @@ Each scenario states what kern-jobs does, and gives each project a verdict:
 
 ## Projects
 
-Records of other projects, here and in [decisions](../decisions/README.md), describe these versions unless a record names another one, and a record of an issue or a pull request tells what the project did then.
+Use the version listed here for every comparison of a project, including [decisions](../decisions/README.md) and the [user guide](../docs/comparison.md).
+When changing a project's version, recheck all its comparison items against the new version and update their source links together.
 
 - [Graphile Worker](https://github.com/graphile/worker) 0.18.0.
 - [graphile-worker-tasks](https://github.com/IlyaSemenov/graphile-worker-tasks) 2.6.1, typed task definitions over Graphile Worker.
@@ -26,6 +27,7 @@ Records of other projects, here and in [decisions](../decisions/README.md), desc
 - [Tasks](tasks.md)
 - [Keys](keys.md)
 - [Queues](queues.md)
+- [Schedules](schedules.md)
 - [Leases](leases.md)
 - [Stopping](stopping.md)
 - [Database clients](database-clients.md)
@@ -40,7 +42,6 @@ Scenarios worth comparing that the topics do not cover yet:
 - At most one running job per key without a queue, as the `singleton` policy of pg-boss.
 - The delay from an enqueue to the start of its job, with polling and with LISTEN/NOTIFY.
 - Claiming from many queues at once under load.
-- Schedules in cron expressions across several workers.
 
 ## Writing a record
 
@@ -49,7 +50,8 @@ Scenarios worth comparing that the topics do not cover yet:
   - Give each project an item with its name, a link to its issue, documentation, or source, and a verdict.
   - State what the project does in the scenario, such as which jobs run after which events, rather than a judgment such as a loss of jobs.
   - Cite an issue or a pull request only for behavior of the listed version, such as a missing feature, never for a defect that the listed version fixes.
-- Name another project, here and in decisions/, as [Projects](#projects) lists it, without a link to the project and without a version unless it differs from the listed one; write a record of an issue or a pull request in the past tense.
+- Use the project name from [Projects](#projects) as plain text in each item and give the version once in the project list.
+  Describe historical issues and pull requests in the past tense.
   List a new project there with its link and the version you checked.
 - Do not link comparison/ back to architecture/.
 - Also record a scenario that another project fails while kern-jobs covers it in a comment of the test that checks the scenario, such as `// Graphile Worker ran jobs of one queue concurrently: <issue URL>`.

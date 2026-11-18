@@ -6,7 +6,6 @@ Within Next and Later, items run roughly from the most important; the order is a
 ## Next
 
 - [Worker events](worker-events.md): public events of the worker beside `onError`.
-- [Cron](cron.md): schedules in cron expressions without an elected leader.
 - [Enqueue from SQL](enqueue-from-sql.md): a SQL function for migrations of the application.
 - [Testing helpers](testing-helpers.md): capturing enqueues and running handlers in tests.
 - [Administration](administration.md): delete and check a key, act on many jobs at once, and count jobs.
@@ -37,6 +36,7 @@ Ideas that wait for an application that needs them, or that are not planned.
 - [Job dependencies and workflows](job-dependencies-and-workflows.md): jobs that wait for other jobs.
 - [Dashboard](dashboard.md): a user interface over administration.
 - [Terminal failure hook](terminal-failure-hook.md): application writes in the transaction that fails a job for good.
+- [Schedule extensions](schedule-extensions.md): time zones, recurrence rules, bounded multi-occurrence recovery, cheaper checks, and lag monitoring.
 
 ## Keeping the backlog
 

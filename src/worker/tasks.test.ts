@@ -1,4 +1,4 @@
-// Tasks of a worker from a manifest: the handler of an implementation with the payload and metadata of its job, the lease and backoff of its task, and the check of the manifest; and a worker that runs them.
+// Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, the lease and backoff of its task, and the check of the list; and a worker that runs them.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { enqueue } from "../core/enqueue"
@@ -6,7 +6,6 @@ import type { JobRow } from "../core/job"
 import { createTestSchema, jobs, only, type TestSchema } from "../core/testing"
 import { fixedBackoff } from "../task/backoff"
 import { TerminalError } from "../task/errors"
-import { defineManifest } from "../task/manifest"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { toWorkerTasks } from "./tasks"
@@ -45,7 +44,7 @@ describe("toWorkerTasks", () => {
         calls.push([payload, context])
         return "done"
       })
-    const task = toWorkerTasks(defineManifest({ tasks: [implementation] }))["search.indexProduct"]!
+    const task = toWorkerTasks([implementation])["search.indexProduct"]!
     const signal = new AbortController().signal
     expect(await task.handler(job, { signal })).toBe("done")
     expect(calls).toEqual([
@@ -72,7 +71,7 @@ describe("toWorkerTasks", () => {
     const implementation = defineTask("search.indexProduct").implement((_, { job }) => {
       scopes.push(job.scope)
     })
-    const task = toWorkerTasks(defineManifest({ tasks: [implementation] }))["search.indexProduct"]!
+    const task = toWorkerTasks([implementation])["search.indexProduct"]!
     const signal = new AbortController().signal
     await task.handler({ ...job, scope: "tenant" }, { signal })
     await task.handler(job, { signal })
@@ -84,7 +83,7 @@ describe("toWorkerTasks", () => {
     const implementation = defineTask("search.indexProduct", { scoped: true }).implement(() => {
       calls++
     })
-    const task = toWorkerTasks(defineManifest({ tasks: [implementation] }))["search.indexProduct"]!
+    const task = toWorkerTasks([implementation])["search.indexProduct"]!
     let error: unknown
     try {
       task.handler(job, { signal: new AbortController().signal })
@@ -99,18 +98,16 @@ describe("toWorkerTasks", () => {
     expect(calls).toBe(0)
   })
 
-  test("checks a manifest that defineManifest did not check", () => {
+  test("checks a list of implementations that defineManifest did not check", () => {
     const implementation = defineTask("t").implement(() => {})
-    expect(() => toWorkerTasks({ tasks: [implementation, implementation] })).toThrow(
-      "duplicate tasks: t",
-    )
+    expect(() => toWorkerTasks([implementation, implementation])).toThrow("duplicate tasks: t")
   })
 
   test("checks the settings of a task that defineTask did not check", () => {
     // Objects of the shape of a task pass the types without defineTask.
-    const withSettings = (settings: object) => ({
-      tasks: [{ task: { ...defineTask("accounts.sync"), ...settings }, handler() {} }],
-    })
+    const withSettings = (settings: object) => [
+      { task: { ...defineTask("accounts.sync"), ...settings }, handler() {} },
+    ]
     expect(() => toWorkerTasks(withSettings({ lease: 1e13 }))).toThrow(
       new RangeError(
         "lease of task accounts.sync must be a number of seconds above 0 up to 1e12, got 10000000000000",
@@ -125,7 +122,7 @@ describe("toWorkerTasks", () => {
   })
 
   test("keeps a task named __proto__ as a task", () => {
-    const tasks = toWorkerTasks({ tasks: [defineTask("__proto__").implement(() => {})] })
+    const tasks = toWorkerTasks([defineTask("__proto__").implement(() => {})])
     expect(Object.keys(tasks)).toEqual(["__proto__"])
     expect(Object.getPrototypeOf(tasks)).toBe(Object.prototype)
   })
@@ -162,7 +159,7 @@ describe("a worker of a manifest", () => {
     try {
       startTestWorker(schema, {
         concurrency: 2,
-        tasks: toWorkerTasks(defineManifest({ tasks: [index, purge] })),
+        tasks: toWorkerTasks([index, purge]),
         onEvent: log.onEvent,
       })
       expect((await log.waitFor("settled", e => e.claim.id === purged.id)).outcome).toBe(

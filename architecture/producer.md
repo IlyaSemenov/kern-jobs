@@ -25,7 +25,7 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
 - `delay` and `runAt` exclude each other: a layer that gives one drops the other of the layers before it, and both left after the merge, such as from one layer, throw `TypeError`.
 - `keyMode: "debounce"` takes `delay` and `maxWait`, and no `runAt`, so that a stream of events cannot postpone the run time of a job without a bound.
 - After the merge, an option that the key mode does not read, such as `maxWait` outside `debounce` or `resetAttempts` with `keep`, is ignored and not checked, since a later layer cannot remove it; the types reject such combinations within one layer.
-- The types of every layer admit `undefined` in every optional field also under `exactOptionalPropertyTypes`, so that a wrapper can pass its optional parameters through; a layer that gives `keyMode: "debounce"` gives `delay` and `maxWait` too.
+- The types of every layer admit `undefined` in every optional field also under `exactOptionalPropertyTypes`, so that a wrapper can pass its optional parameters through; the options of `defineTask` and `withOptions` that give `keyMode: "debounce"` give `delay` and `maxWait` too, while overrides may inherit either.
 - The checks throw `TypeError` for a wrong combination and `RangeError` for a value outside its range, before the client is called; the check constraints of the table reject a key or a queue longer than 1024 bytes.
 - `delay` and `maxWait` are numbers of seconds from 0 to 10^12, about 31,700 years, a bound well within the intervals and timestamps of PostgreSQL.
   `isDelay` of `task/delay.ts` checks this range, which delays of retries share.

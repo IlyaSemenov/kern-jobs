@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
 import type { Backoff, JobInfo, Jobs, TaskBuilder, TaskImplementation } from "kern-jobs"
-import type { AbortReason, Manifest, Worker } from "kern-jobs/worker"
+import type { AbortReason, CronDefinition, Manifest, Schedule, Worker } from "kern-jobs/worker"
 
 import {
   defineCleanup,
@@ -9,7 +9,12 @@ import {
   indexProductTask,
   purgeExpiredSessionsTask,
 } from "../declarations/tasks.js"
-import { manifest, unimplementedTasks } from "../declarations/worker/manifest.js"
+import {
+  createCleanupSchedule,
+  manifest,
+  unimplementedTasks,
+  weeklyCleanup,
+} from "../declarations/worker/manifest.js"
 import { describeAbort, describeJob, startConsumerWorker } from "../declarations/worker/start.js"
 import indexProduct from "../declarations/worker/tasks/index-product.js"
 import purgeExpiredSessions from "../declarations/worker/tasks/purge-expired-sessions.js"
@@ -17,7 +22,7 @@ import purgeExpiredSessions from "../declarations/worker/tasks/purge-expired-ses
 declare const jobs: Jobs
 
 describe("emitted declarations of the worker", () => {
-  test("keep the task and the payload of each implementation, the manifest, and the metadata of a job", () => {
+  test("keep the task and the payload of each implementation, the manifest, a schedule, and the metadata of a job", () => {
     expectTypeOf(indexProduct).toEqualTypeOf<
       TaskImplementation<"search.indexProduct", { productId: string }>
     >()
@@ -25,6 +30,9 @@ describe("emitted declarations of the worker", () => {
       TaskImplementation<"sessions.purgeExpired", void>
     >()
     expectTypeOf(manifest).toEqualTypeOf<Manifest>()
+    expectTypeOf(weeklyCleanup).toEqualTypeOf<Schedule<void>>()
+    expectTypeOf(weeklyCleanup.cron).toEqualTypeOf<string | CronDefinition>()
+    expectTypeOf(createCleanupSchedule).returns.toEqualTypeOf<Schedule<void>>()
     expectTypeOf(describeJob).returns.toEqualTypeOf<JobInfo>()
   })
 

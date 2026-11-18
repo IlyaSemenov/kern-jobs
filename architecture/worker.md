@@ -31,9 +31,17 @@ The worker reserves the heartbeat connection from the pool of its driver ([Drive
 A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns into the tasks of the runtime:
 
 - `task.implement(handler)` pairs a task with the handler of its jobs, which gets the payload of the job and a context: the signal of [Leases](#leases) and the metadata of the job, its id, its scope (`null` for the empty scope), the number of the attempt from 1, `maxAttempts`, its key, and its queue.
-- `defineManifest({ tasks })` takes implementations, one per task name: it throws `Error` for a name of several implementations, also for one implementation listed twice, so that a test that imports the manifest finds them, and `TypeError` for tasks that are not an array or an element that is not an implementation; it keeps a frozen copy of the list.
+- `defineManifest({ tasks, schedules })` takes an array of task implementations and an optional array of schedules.
+  It copies and freezes both arrays and freezes the manifest.
+  It throws `TypeError` for an invalid array or entry.
+  It checks each schedule as `defineSchedule` does ([Schedules](schedules.md)).
+  Reusing a task name or schedule ID throws `Error`, including when the same entry is listed twice.
+- A scheduling-only worker may pass `tasks: []`.
+  Another worker in the same schema may provide the scheduled task's handler.
+  The worker evaluates its schedules after the schema check and reports errors with their IDs ([Schedules](schedules.md)).
+  It sends no claim statement and still runs its heartbeat and, unless `reaper` is `false`, the reaper.
 - `findUnimplementedTasks(tasks, manifests)` returns the names of the tasks that none of the manifests implements, for a test of the application, since no worker can tell a task without an implementation from a task of another worker; it takes the tasks as the values of an object, such as the exports of a module, skips the values without a string `name` and a function `implement`, and names each task once.
-- `toWorkerTasks` checks the manifest and the lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition.
+- `toWorkerTasks` checks the list of implementations and the lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
 - A job of a scoped task without a scope, such as one enqueued before the task became scoped, does not run its handler: the worker fails it with a `TerminalError`, so it becomes failed without retries, since its handler gets `job.scope` typed as a string.
 - A handler fails its job for good with a `TerminalError`, and retries it after a given delay with a `RetryError`, such as the one of a `Retry-After` header, so that the error is decided where the handler meets it, and the definition, which producers import, holds no error classes of handlers ([decision](../decisions/tasks/handler-errors.md)).
 - A backoff is a function of the number of the failed attempt that returns seconds; `exponentialBackoff` and `fixedBackoff` build common ones, and `defaultBackoff`, which `exponentialBackoff()` builds, waits 2 seconds after the first attempt, doubled after each next one, up to an hour.
@@ -53,11 +61,14 @@ Before its first claim, the worker checks that its schema has applied the migrat
 
 `ready` of a worker resolves once it has checked its schema and a claim cycle has returned without an error.
 The cycle checks that the heartbeat is healthy and then sends at least one claim statement on the pool, which proves the database, the schema, and a connection of the pool beside the one that the heartbeat holds.
+A worker without tasks sends `select 1` on the pool instead, until it is ready.
+The worker becomes ready once such a statement has returned and the heartbeat is healthy, at that return or at the next successful heartbeat, which may come while every slot runs a job.
 
 - `ready` rejects when `stop` begins before it resolves; the worker handles that rejection itself, so that an application that never awaits `ready` gets no unhandled rejection.
 - `state` is `starting` until then, `stopping` from the call of `stop`, and `stopped` once `stop` resolves or rejects.
 - Between them, `state` is `ready` while the heartbeat is healthy, as [Claiming](#claiming) defines it, and `unhealthy` otherwise, so it follows the loss and the recovery of the database without an event; once ready, it does not return to `starting`.
 - A claim or settlement that waits for a connection of a busy pool does not change `state`.
+- Neither `ready` nor `state` reflects the checks of schedules, which report their failures only to `onError`.
 
 ## Slots
 
@@ -116,16 +127,16 @@ A producer that holds the key of an expired job does not stop the return of othe
 `stop` takes `abortAfter`, 5 seconds by default, and `timeout`, none by default, both in seconds from its call, from 0 up to the longest interval of a loop; `startWorker` checks them on the first call, and a later call returns the promise of the first.
 It runs these phases:
 
-1. At once, the worker starts no claim cycle, and the cycle in flight sends no further claim statement; the heartbeat keeps the leases of the running jobs, and handlers that end are settled as usual.
+1. At once, the worker starts no claim cycle and no check of a schedule, and the cycle in flight sends no further claim statement; the heartbeat keeps the leases of the running jobs, and handlers that end are settled as usual.
 2. At `abortAfter`, or at `timeout` if it comes first, the worker aborts the signals of the handlers that still run with `stop`.
-3. Once the claim cycle and the check of the schema in flight have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, releases the heartbeat connection, and resolves.
+3. Once the claim cycle, the check of the schema, and the check of a schedule in flight have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, releases the heartbeat connection, and resolves.
 
 The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
 
 At `timeout`, if `stop` has not resolved, the worker gives up, then aborts the handlers that still run, so that one that ends on the abort is not settled, and rejects ([decision](../decisions/settlement/stop-timeout-leaves-claims.md)):
 
-- It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, and no round of the reaper.
-- It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, and a round of the reaper end in the background, and the heartbeat releases its connection after its statement in flight.
+- It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, no first write of a check of a schedule, and no round of the reaper.
+- It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, a check of a schedule that has begun to write, which may still enqueue its job, and a round of the reaper end in the background, and the heartbeat releases its connection after its statement in flight.
 - A connection that `acquire` of the heartbeat returns after the stop is released without a statement.
 - A heartbeat sent before the timeout may still extend the leases of its claims once; nothing extends them after it.
 - A handler that still runs keeps running: the worker neither settles nor requeues its job, which returns after its lease, with its attempt spent, as after a crash.
@@ -140,6 +151,7 @@ The other of the two signals joins the stop, and the same signal again ends the 
 - `handler`: the handler of a job threw, unless it was interrupted by `stop`; with the task, the metadata of the job, and the reason of the abort of its signal, or `null`.
 - `backoff` and `settlement`: the backoff of a task failed, or a settlement statement did; with the task and the metadata of the job.
 - `schema`: the schema is not up to date, or its check failed.
+- `schedule`: the check of a schedule failed; with the schedule ID.
 - `claim`, `heartbeat`, `reaper`, and `release`: a claim cycle, a heartbeat, a reaper round, or the release of a connection failed; `claim` also reports a claim that returned after the deadline of its lease, whose job the worker failed without running its handler.
 - `worker`: an unexpected failure of the runtime, such as a defect.
 

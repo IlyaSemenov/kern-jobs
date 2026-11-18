@@ -23,6 +23,8 @@ import purgeExpiredSessions from "./tasks/purge-expired-sessions"
 export const manifest = defineManifest({ tasks: [indexProduct, purgeExpiredSessions] })
 ```
 
+Register [schedules](./schedules) in the manifest to enqueue recurring jobs.
+
 Start a worker with the manifest and a driver of your database client:
 
 ```ts [src/worker/start.ts]

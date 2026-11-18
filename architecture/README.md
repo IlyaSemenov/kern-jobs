@@ -46,6 +46,7 @@ Module paths are relative to `src/`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
 - [Enqueue](enqueue.md): key modes and debounce; `core/enqueue.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `jobs/`.
+- [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/`.
 - [Administration](administration.md): retry of failed jobs and delete of pending or failed ones by the application; `core/administration.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `core/claim.ts`.
 - [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `core/settlement.ts`.

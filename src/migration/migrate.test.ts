@@ -37,7 +37,7 @@ describe("migrateJobs", () => {
     await migrateJobs(schema.driver, { schemaName: table.schemaName })
     const { id } = await enqueue(schema.admin, table, { task: "t" })
     expect((await jobs({ admin: schema.admin, table })).map(job => job.id)).toEqual([id])
-    expect(await appliedKeys(table.schemaName)).toEqual(["0001_create_job"])
+    expect(await appliedKeys(table.schemaName)).toEqual(["0001_create_job", "0002_schedule"])
   })
 
   test("with a database, migrates in its transaction, which rolls the schema back", async () => {
@@ -54,7 +54,7 @@ describe("migrateJobs", () => {
   test("with a Db of kern-orm, migrates the schema of kern-jobs rather than the schema of the Db", async () => {
     const db = bindSchema(defineSchema(), schema.database, { schemaName: schema.name })
     await migrateJobs(db, { schemaName: table.schemaName })
-    expect(await appliedKeys(table.schemaName)).toEqual(["0001_create_job"])
+    expect(await appliedKeys(table.schemaName)).toEqual(["0001_create_job", "0002_schedule"])
   })
 
   test("rejects a wrong target or option before it runs a statement", async () => {
@@ -89,7 +89,7 @@ describe("migrateJobs", () => {
 describe("checkJobSchema", () => {
   test("rejects a schema that lacks migrations with an error that names migrateJobs, and passes it once migrated", async () => {
     await expect(checkJobSchema(schema.database, table.schemaName)).rejects.toThrow(
-      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job)`,
+      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule)`,
     )
     await migrateJobs(schema.driver, { schemaName: table.schemaName })
     await checkJobSchema(schema.database, table.schemaName)
@@ -99,7 +99,8 @@ describe("checkJobSchema", () => {
     const newerMigrations = defineMigrations(
       {
         "0001_create_job": () => import("./migrations/0001_create_job"),
-        "0002_newer": { up: "select 1" },
+        "0002_schedule": () => import("./migrations/0002_schedule"),
+        "0003_newer": { up: "select 1" },
       },
       { tableName: MIGRATION_TABLE },
     )

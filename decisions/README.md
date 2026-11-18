@@ -14,6 +14,12 @@ Measurements come from single runs on one local machine without network, so they
 - [`maxWait` bounds the computed run time](enqueue/max-wait-bounds-run-at.md), not the claim.
 - [A debounce window opens at its first debounce event, and its run time never moves backwards](enqueue/debounce-window.md).
 
+## Schedules
+
+- [A durable cursor for each schedule](schedules/occurrence-cursor.md).
+- [One job per recovery window](schedules/one-job-per-recovery-window.md).
+- [One definition per schedule ID](schedules/one-definition-per-id.md): a changed definition takes a new ID.
+
 ## Claiming
 
 - [Queue mutex by a unique index](claiming/queue-mutex-index.md).

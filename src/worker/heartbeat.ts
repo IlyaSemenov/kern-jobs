@@ -123,6 +123,8 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
         }
       }
       succeeded = true
+      // A slow heartbeat that succeeded is no longer in flight for the observers of its success.
+      inFlightSince = null
       if (failed) {
         failed = false
         o.onEvent({ type: "heartbeat-recovered" })

@@ -3,6 +3,7 @@ import { checkCount } from "../core/db"
 import type { EnqueueParams } from "../core/enqueue"
 
 import { delayRange, isDelay } from "./delay"
+import type { Task } from "./task"
 
 interface CommonOptions {
   /** Key of the pending job within its task, such as `product:42`; `null` enqueues the job without a key. */
@@ -81,7 +82,20 @@ export type EnqueueOptions = StaticEnqueueOptions & NoSettings
  */
 export type EnqueueOverrides = CommonOptions & TimeOptions & KeyModeOverrides & NoSettings
 
-/** Merged layers of options, which only `toEnqueueParams` checks. */
+/** Resolves the enqueue parameters shared by producers and schedules, with overrides applied last. */
+export function getTaskEnqueueParams<P>(
+  task: Task<string, P>,
+  payload: P,
+  overrides?: EnqueueOverrides,
+): EnqueueParams {
+  return toEnqueueParams(
+    task.name,
+    payload,
+    mergeOptions(task.options, task.optionsFor?.(payload), overrides),
+  )
+}
+
+/** Options after merging one or more layers. */
 interface MergedOptions {
   key?: string | null
   queue?: string | null
@@ -129,11 +143,18 @@ function isRunAt(value: unknown): value is Date {
 }
 
 /**
- * Checks merged options and turns them into the parameters of an enqueue of the core.
+ * Checks the overrides of an enqueue without the layers before them, such as those of a schedule whose task computes its options at each enqueue.
+ * It rejects only errors that no earlier layer can correct; the enqueue checks the merged options.
+ */
+export function checkEnqueueOverrides(overrides: EnqueueOverrides | undefined): void {
+  checkOptions(mergeOptions(overrides), true)
+}
+
+/**
+ * Checks merged options, or with `partial`, the last layer alone, whose omitted fields earlier layers may still give.
  * Fields that the key mode does not read, such as `maxWait` that a task in `debounce` mode leaves to an override of `keyMode: "replace"`, are ignored, since an override cannot remove a field.
  */
-export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions): EnqueueParams {
-  const keyMode = o.keyMode ?? "replace"
+function checkOptions(o: MergedOptions, partial: boolean): void {
   if (o.lease !== undefined || o.backoff !== undefined || o.scoped !== undefined) {
     throw new TypeError(
       "lease, backoff, and scoped are settings of defineTask, which an enqueue cannot override",
@@ -141,13 +162,17 @@ export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions
   }
   if (o.delay != null && o.runAt != null)
     throw new TypeError("Pass either delay or runAt, not both")
-  if (keyMode === "debounce" && (o.delay == null || o.maxWait == null || o.runAt != null)) {
+  const debounce = o.keyMode === "debounce"
+  // A field that the last layer gives, also as `null` past the types, is final; even its `runAt: null` clears an inherited delay, so a debounce layer must then give its own.
+  const missing = partial
+    ? o.delay === null || o.maxWait === null || (o.delay === undefined && o.runAt === null)
+    : o.delay == null || o.maxWait == null
+  if (debounce && (missing || o.runAt != null)) {
     throw new TypeError('keyMode "debounce" takes delay and maxWait, and no runAt')
   }
-  const maxWait = keyMode === "debounce" ? o.maxWait : null
   for (const [name, value] of [
     ["delay", o.delay],
-    ["maxWait", maxWait],
+    ["maxWait", debounce ? o.maxWait : null],
   ] as const) {
     if (value != null && !isDelay(value)) {
       throw new RangeError(`${name} must be ${delayRange}, got ${String(value)}`)
@@ -157,6 +182,13 @@ export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions
     throw new RangeError(`runAt must be ${runAtRange}, got ${String(o.runAt)}`)
   }
   if (o.maxAttempts != null) checkCount("maxAttempts", o.maxAttempts)
+}
+
+/** Checks merged options and turns them into the parameters of an enqueue of the core. */
+export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions): EnqueueParams {
+  checkOptions(o, false)
+  const keyMode = o.keyMode ?? "replace"
+  const maxWait = keyMode === "debounce" ? o.maxWait : null
   return {
     task,
     payload,

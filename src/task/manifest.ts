@@ -1,19 +1,28 @@
-// Manifest of a worker: the implementations of the tasks that it runs, one per task name, and the check that every task of an application has one.
-import type { Task, TaskImplementation } from "./task"
+// Worker manifests collect task implementations and recurring schedules.
+// An application can check handler coverage across all its manifests.
+import { type Schedule, toWorkerSchedules } from "../schedule/schedule"
 
-/** Implementations of the tasks that a worker runs, defined with `defineManifest`. */
+import { isTask, type TaskImplementation } from "./task"
+
+/** Tasks a worker runs and schedules it evaluates. */
 export interface Manifest {
   readonly tasks: readonly TaskImplementation<string, unknown>[]
+  /** Recurring jobs this worker enqueues, including jobs handled by other workers in the same schema. */
+  readonly schedules?: readonly Schedule[] | undefined
 }
 
 /**
- * Defines the manifest of a worker from the implementations of its tasks.
- * It throws when two implementations have the same task name, as soon as the module that defines the manifest runs.
+ * Defines a worker manifest and rejects duplicate task names, invalid schedules, and duplicate schedule IDs.
  */
 export function defineManifest(manifest: Manifest): Manifest {
   const tasks = [...toTaskMap(manifest?.tasks).values()]
-  // Frozen, so that an implementation added later does not escape the check.
-  return Object.freeze({ tasks: Object.freeze(tasks) })
+  const { schedules = [] } = manifest
+  toWorkerSchedules(schedules)
+  // Copy and freeze both lists so later additions cannot escape validation.
+  return Object.freeze({
+    tasks: Object.freeze(tasks),
+    schedules: Object.freeze([...schedules]),
+  })
 }
 
 /**
@@ -64,10 +73,4 @@ export function findUnimplementedTasks(
     .filter(isTask)
     .map(task => task.name)
   return [...new Set(names)].filter(name => !implemented.has(name))
-}
-
-/** Whether a value is a task, which `defineTask` returns. */
-function isTask(value: unknown): value is Task<string, unknown> {
-  const task = value as Partial<Task<string, unknown>> | null | undefined
-  return typeof task?.name === "string" && typeof task.implement === "function"
 }

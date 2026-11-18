@@ -6,7 +6,9 @@ import { claimCycle, createClaimState } from "../core/claim"
 import type { Claim, JobRow } from "../core/job"
 import type { JobTable } from "../core/schema"
 import type { FailOptions } from "../core/settlement"
-import type { StatementTarget } from "../core/statement"
+import { query, type StatementTarget } from "../core/statement"
+import { evaluateSchedule } from "../schedule/evaluate"
+import type { WorkerSchedule } from "../schedule/schedule"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
 import { RetryError, TerminalError } from "../task/errors"
@@ -63,6 +65,8 @@ export interface RuntimeOptions {
   abortMargin?: number | undefined
   /** Seconds between claim cycles while slots are free. */
   pollInterval: number
+  /** Recurring enqueues evaluated independently of free handler slots. */
+  schedules?: readonly WorkerSchedule[] | undefined
   /** Reaper of the worker, seconds between its rounds and jobs per batch, or `false` to run none. */
   reaper: false | { interval: number; limit: number }
   /**
@@ -89,7 +93,8 @@ export interface Worker {
   /** Name of the worker, which the jobs that it runs store. */
   readonly id: string
   /**
-   * Resolves once the worker is ready: it has checked its schema and has taken jobs, or found none, while its heartbeat works, so its database, its schema, and a connection of its pool beside the one of its heartbeat work.
+   * Resolves once the worker is ready: it has checked its schema and run a claim cycle, or a statement without tasks, on its pool, and its heartbeat works.
+   * So its database, its schema, and a connection of its pool beside the one of its heartbeat work.
    * Rejects if `stop` begins before the worker is ready.
    */
   readonly ready: Promise<void>
@@ -98,7 +103,8 @@ export interface Worker {
   /**
    * Stops the worker: it takes no more jobs, lets the running handlers end until `abortAfter`, then aborts their signals, and resolves once they end and the worker has recorded their outcomes or given that up, such as without a connection; a job whose outcome is not recorded returns to pending once its lease expires, or fails on its last attempt.
    * A job whose handler throws after the abort, other than a `TerminalError` or a `RetryError`, returns to pending at once without spending its attempt.
-   * At `timeout`, it stops waiting and rejects: the worker starts no more operations, a handler that still runs is no longer settled, and its job returns once its lease expires; the statements in flight are not cancelled.
+   * It starts no further check of a schedule and waits for the one in flight.
+   * At `timeout`, it stops waiting and rejects: the worker starts no more operations, a handler that still runs is no longer settled, and its job returns once its lease expires; the statements in flight are not cancelled, so a check of a schedule in flight may still enqueue its job.
    * A later call returns the promise of the first one.
    */
   stop(options?: StopOptions): Promise<void>
@@ -165,6 +171,7 @@ function toFailOptions(
 /** Starts the runtime of a worker; it trusts its options, which `startWorker` checks. */
 export function startRuntime(o: RuntimeOptions): Worker {
   const { id, lease } = o
+  const taskNames = Object.keys(o.tasks)
   const leases = Object.fromEntries(
     Object.entries(o.tasks).map(([name, task]) => [name, task.lease ?? lease]),
   )
@@ -184,7 +191,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
     }
   }
 
-  // Database of the settlements: no other code runs transactions in it, so a fail transaction never nests in another one.
+  // Database for independent worker transactions, outside the application transaction context.
   // The worker never closes it, since that would close the driver.
   const database = createDatabase({
     driver: o.driver,
@@ -200,7 +207,9 @@ export function startRuntime(o: RuntimeOptions): Worker {
   // The timeout of `stop` passed: the worker starts no operation any more.
   let givenUp = false
   let waitingForHeartbeat = false
-  // The worker has checked its schema and finished a claim cycle, whose statement used a connection of the pool while the heartbeat held its own.
+  // The worker has checked its schema and finished a claim cycle, or a statement of a worker without tasks, on a connection of the pool beside the one of the heartbeat.
+  let poolProven = false
+  // The pool is proven and the heartbeat was healthy then or later.
   let isReady = false
   let isStopped = false
   const ready = Promise.withResolvers<void>()
@@ -214,9 +223,18 @@ export function startRuntime(o: RuntimeOptions): Worker {
     margin,
     onEvent: emit,
     onSuccess: () => {
+      // The heartbeat may recover while every slot runs a job, when no claim cycle would follow.
+      becomeReady()
       if (waitingForHeartbeat) claimLoop.wake()
     },
   })
+
+  /** Resolves `ready` once the pool is proven while the heartbeat is healthy. */
+  function becomeReady() {
+    if (isReady || !poolProven || !heartbeat.healthy()) return
+    isReady = true
+    ready.resolve()
+  }
 
   /** Starts the execution of a claim: its handler, or no handler after `stop` began or after the deadline of its lease. */
   function start(claim: Claim, since: number) {
@@ -306,12 +324,29 @@ export function startRuntime(o: RuntimeOptions): Worker {
   // The reaper starts with the first claim cycle, once the schema is checked.
   let schemaChecked = o.checkSchema === undefined
   let reaper: Loop | undefined
-  function startReaperOnce() {
+  let scheduler: Loop | undefined
+  function startMaintenance() {
+    const schedules = o.schedules
+    if (schedules?.length && !stopping) {
+      scheduler ??= startLoop(
+        async () => {
+          for (const schedule of schedules) {
+            if (stopping) break
+            try {
+              await evaluateSchedule(database, o.table, schedule, { proceed: () => !givenUp })
+            } catch (error) {
+              emit({ type: "schedule-error", id: schedule.id, error })
+            }
+          }
+        },
+        { interval: 15, onError: error => emit({ type: "error", error }) },
+      )
+    }
     if (o.reaper !== false && !stopping) {
       reaper ??= startReaper(o.driver, o.table, { ...o.reaper, onEvent: emit })
     }
   }
-  if (schemaChecked) startReaperOnce()
+  if (schemaChecked) startMaintenance()
 
   const claimState = createClaimState()
   const claimLoop: Loop = startLoop(
@@ -325,7 +360,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
           return
         }
         schemaChecked = true
-        startReaperOnce()
+        startMaintenance()
       }
       const free = o.concurrency - executions.size
       if (stopping || free <= 0) return
@@ -333,29 +368,33 @@ export function startRuntime(o: RuntimeOptions): Worker {
       waitingForHeartbeat = !heartbeat.healthy()
       if (waitingForHeartbeat) return
       try {
-        await claimCycle(
-          timedDriver,
-          o.table,
-          {
-            worker: id,
-            tasks: Object.keys(o.tasks),
-            slots: free,
-            leases,
-            defaultLease: lease,
-            onClaim: claim => start(claim, sentAt),
-            proceed: () => !stopping && heartbeat.healthy(),
-          },
-          undefined,
-          claimState,
-        )
+        // A worker without tasks claims nothing; one statement proves a connection of the pool beside the heartbeat's.
+        if (taskNames.length === 0) {
+          if (!poolProven) await query(database, "select 1")
+        } else {
+          await claimCycle(
+            timedDriver,
+            o.table,
+            {
+              worker: id,
+              tasks: taskNames,
+              slots: free,
+              leases,
+              defaultLease: lease,
+              onClaim: claim => start(claim, sentAt),
+              proceed: () => !stopping && heartbeat.healthy(),
+            },
+            undefined,
+            claimState,
+          )
+        }
       } catch (error) {
         emit({ type: "claim-error", error })
         return
       }
-      if (!isReady) {
-        isReady = true
-        ready.resolve()
-      }
+      poolProven = true
+      // The heartbeat may have failed while the statement ran; then the next successful heartbeat makes the worker ready.
+      becomeReady()
     },
     { interval: o.pollInterval, onError: error => emit({ type: "claim-error", error }) },
   )
@@ -375,7 +414,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
         : undefined
     // The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
     const finished = (async () => {
-      await claimLoop.stop()
+      await Promise.all([claimLoop.stop(), scheduler?.stop()])
       while (executions.size > 0) await Promise.all([...executions].map(e => e.done))
       await reaper?.stop()
       await heartbeat.stop()

@@ -1,7 +1,7 @@
 # Comparison
 
 This page helps you choose between kern-jobs and two other job queues that keep their jobs in PostgreSQL and run on Node.js: [Graphile Worker](https://worker.graphile.org/) and [pg-boss](https://github.com/timgit/pg-boss).
-It compares Graphile Worker 0.18.0, pg-boss 12.38.1, and kern-jobs 0.1, as of November 2026, by their documentation and sources, which each row links.
+The comparison uses the documentation and source code of Graphile Worker 0.18.0 and pg-boss 12.38.1, reviewed in November 2026.
 
 ## When kern-jobs fits
 
@@ -14,9 +14,9 @@ Choose kern-jobs when the jobs of your application follow its data:
 
 Consider another queue when you need what kern-jobs does not have yet:
 
-- Recurring jobs on a schedule: Graphile Worker has a [crontab](https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md), and pg-boss has [schedules](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md) of cron expressions.
 - Waking workers by LISTEN/NOTIFY as soon as a job is enqueued, as [Graphile Worker](https://github.com/graphile/worker/blob/v0.18.0/website/docs/faq.md?plain=1#L22-L33) and [pg-boss](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/workers.md#low-latency-dispatch-with-listen-notify) can: a worker of kern-jobs polls for due jobs, every second unless you pass a shorter [`pollInterval`](./workers/#run-several-jobs-at-once).
 - A queue that a failed job blocks until it is retried, as the policy `key_strict_fifo` of pg-boss does; a queue of kern-jobs moves on to its next job.
+- Running recurring jobs in a local time zone or on an RRULE calendar with [pg-boss](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md#rrule-expressions).
 - Priorities, rate limits, dependencies between jobs, or a dashboard.
 
 kern-jobs is in early development, and its API changes between minor versions.
@@ -30,10 +30,10 @@ kern-jobs is in early development, and its API changes between minor versions.
 | [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                       | Job keys                                             | Queue policies, with other rules                       |
 | [Debounce with a bound on postponing](#debounce)                         | Built in                                                   | Without a bound                                      | Time slots of a fixed length                           |
 | [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                     | Named queues                                         | `key_strict_fifo`, which also blocks on a failed job   |
+| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window             | UTC crontab, backfill of each eligible occurrence    | Cron or RRULE in a time zone, one catch-up job         |
 | [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | Released after a lease, 60 seconds by default              | Locked for at least 4 hours                          | Released after a heartbeat timeout or their expiration |
 | [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt | A job that throws after the abort spends its attempt | Jobs still running at the timeout fail                 |
 | [Schema migrations](#schema-migrations)                                  | A call of the application                                  | At the start of a worker                             | At the start of an instance                            |
-| [Recurring jobs](#recurring-jobs)                                        | Not supported                                              | Built in                                             | Built in                                               |
 
 ## Enqueue in a transaction
 
@@ -72,6 +72,13 @@ With kern-jobs, a [queue](./tasks/queues) runs one of its jobs at a time.
 - Graphile Worker: a [named queue](https://github.com/graphile/worker/blob/v0.18.0/website/docs/library/add-job.md) runs its jobs one at a time.
 - pg-boss: the queue policy [`key_strict_fifo`](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/queues.md?plain=1#L43) runs the jobs of a key one at a time, and also holds them back while one of them waits for a retry or has failed; this comparison has not evaluated its other policies for this scenario.
 
+## Recurring jobs
+
+kern-jobs [schedules](./workers/schedules) use UTC calendars and can enqueue one job for all occurrences missed within a configured window.
+
+- Graphile Worker: a [crontab](https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md#distributed-crontab) in UTC, which several workers share, with a backfill of missed moments.
+- pg-boss: cron or RRULE schedules in a chosen time zone can recover [one missed job alongside the current one](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md#catch-up-after-an-outage).
+
 ## Jobs of a worker that dies
 
 With kern-jobs, a worker extends the leases of its running jobs, and when it dies, each of its jobs returns to pending once its lease expires, and runs again, or fails if that was its last attempt; see [Leases](./workers/leases).
@@ -94,10 +101,3 @@ With kern-jobs, the application calls `migrateJobs`, such as at every deploy, an
 
 - Graphile Worker: its runner [migrates the schema](https://github.com/graphile/worker/blob/v0.18.0/src/lib.ts#L509-L512) at its start.
 - pg-boss: [`start`](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/constructor.md#migrate) migrates the schema, and with `migrate: false` rejects a schema that needs a migration.
-
-## Recurring jobs
-
-kern-jobs has no schedules yet.
-
-- Graphile Worker: a [crontab](https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md#distributed-crontab) in UTC, which several workers share, with a backfill of missed moments.
-- pg-boss: [schedules](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md) of cron and RRULE expressions in a time zone.

@@ -34,7 +34,7 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Claims, complete, and the reaper run single statements on the pool.
 - The check of the schema at the start of the worker runs its statements on the pool ([Migrations](migrations.md#check-of-a-worker)).
 - Fail and requeue run in a transaction of a `Database` of kern-db that the worker creates over its driver, which reserves a connection from `BEGIN` to the end of the transaction, so a statement of another handler never runs inside it ([decision](../decisions/drivers/transaction-connection.md)).
-  No other code runs transactions in that database, so such a transaction never nests in another one, and the worker never closes it, since that would close the driver.
+  Scheduled enqueues start independent transactions in the same database; no application code runs transactions in it, so such a transaction never nests in another one, and the worker never closes it, since that would close the driver.
 - Fail and requeue start their transaction at `READ COMMITTED`, whatever the default isolation of the connection.
 - Heartbeats run on a connection that the worker reserves for its life from the pool of its driver, which therefore needs at least two connections, and one more for each other worker on it ([Worker](worker.md#accepted-limitations)); the runtime can take the connection from another pool, which tests use to break it alone.
   [Leases](leases.md#heartbeat) describes why they need a connection of their own.
