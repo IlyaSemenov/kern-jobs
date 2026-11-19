@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
 
-import type { Driver } from "kern-db"
+import type { Connection, Driver } from "kern-db"
 import { nodePostgresDriver } from "kern-db/node-postgres"
 import { waitForLockedStatement } from "kern-db/testing"
 import pg from "pg"
@@ -1041,6 +1041,68 @@ describe("stop", () => {
     expect((await log.waitFor("settled")).outcome).toBe("stopped")
     const row = only(await jobs(schema))
     expect([row.state, row.attempts]).toEqual(["active", 1])
+  })
+
+  test("force gives up a stop in progress at once, then aborts the handlers, so a handler that ends right after it is not settled, and its job on its last attempt fails once its lease expires", async () => {
+    const job = await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const gates = createGates({ honorAbort: true })
+    const log = recordEvents()
+    const worker = startTestWorker(schema, { tasks: { t: gates.task }, onEvent: log.onEvent })
+    const start = await log.waitFor("start")
+    const stopped = worker.stop({ abortAfter: 60 })
+    expect(worker.stop({ force: true })).toBe(stopped)
+    gates.open(start.claim.claimId)
+    const error = await stopped.catch((e: unknown) => e)
+    expect((error as Error).message).toStartWith("The worker stop was forced")
+    expect(log.all("abort").map(e => e.reason)).toEqual(["stop"])
+    expect((await log.waitFor("settled")).outcome).toBe("stopped")
+    const row = only(await jobs(schema))
+    expect([row.state, row.attempts]).toEqual(["active", 1])
+    await reapNow(schema, job.id)
+    expect(only(await jobs(schema)).state).toBe("failed")
+  })
+
+  test("a stop that has resolved keeps its outcome after a force", async () => {
+    const worker = startTestWorker(schema, { tasks: {} })
+    const stopped = worker.stop()
+    await stopped
+    expect(worker.stop({ force: true })).toBe(stopped)
+    await stopped
+    expect(worker.state).toBe("stopped")
+  })
+
+  test("a connection that the heartbeat acquires right after a force sends no statement and is released", async () => {
+    const acquiring = Promise.withResolvers<void>()
+    const arrived = Promise.withResolvers<Connection>()
+    const statements: string[] = []
+    let releases = 0
+    const released = Promise.withResolvers<void>()
+    const connection: Connection = {
+      async execute({ text }) {
+        statements.push(text)
+        return { command: "SELECT", count: 0, columns: [], rows: [] }
+      },
+      async executeScript() {},
+      async release() {
+        releases++
+        released.resolve()
+      },
+    }
+    const worker = startTestWorker(schema, {
+      tasks: {},
+      heartbeatSource: {
+        acquire() {
+          acquiring.resolve()
+          return arrived.promise
+        },
+      },
+    })
+    await acquiring.promise
+    const stopped = worker.stop({ force: true })
+    arrived.resolve(connection)
+    await expect(stopped).rejects.toThrow("The worker stop was forced")
+    await released.promise
+    expect([statements, releases]).toEqual([[], 1])
   })
 
   test("a claim that returns after the timeout of stop sends nothing, and its job stays claimed until its lease expires", async () => {

@@ -38,6 +38,8 @@ export interface StopOptions {
   abortAfter?: number | undefined
   /** Seconds from the stop after which it rejects, leaving the jobs that still run to their leases; without it, `stop` waits as long as they run. */
   timeout?: number | undefined
+  /** When true, `stop` stops waiting at once and rejects, as at `timeout`, also when another call has begun the stop; `abortAfter` and `timeout` then change nothing. */
+  force?: boolean | undefined
 }
 
 /** Options of the runtime of a worker, which `startWorker` checks and fills from the options of the application. */
@@ -102,10 +104,10 @@ export interface Worker {
   readonly state: WorkerState
   /**
    * Stops the worker: it takes no more jobs, lets the running handlers end until `abortAfter`, then aborts their signals, and resolves once they end and the worker has recorded their outcomes or given that up, such as without a connection; a job whose outcome is not recorded returns to pending once its lease expires, or fails on its last attempt.
-   * A job whose handler throws after the abort, other than a `TerminalError` or a `RetryError`, returns to pending at once without spending its attempt.
+   * A job whose handler throws after the abort, other than a `TerminalError` or a `RetryError`, returns to pending at once without spending its attempt, unless the stop has given up by then.
    * It starts no further check of a schedule and waits for the one in flight.
-   * At `timeout`, it stops waiting and rejects: the worker starts no more operations, a handler that still runs is no longer settled, and its job returns once its lease expires; the statements in flight are not cancelled, so a check of a schedule in flight may still enqueue its job.
-   * A later call returns the promise of the first one.
+   * At `timeout`, or at once with `force`, it stops waiting and rejects: the worker starts no more operations, a handler that still runs is no longer settled, and its job returns once its lease expires; the statements in flight are not cancelled, so a check of a schedule in flight may still enqueue its job.
+   * Every call throws `TypeError` or `RangeError` for a wrong option before it acts; a later call with valid options returns the promise of the first one, and its `abortAfter` and `timeout` change nothing, while its `force` gives up the stop in progress.
    */
   stop(options?: StopOptions): Promise<void>
 }
@@ -204,8 +206,10 @@ export function startRuntime(o: RuntimeOptions): Worker {
   }
   const executions = new Set<Execution>()
   let stopping = false
-  // The timeout of `stop` passed: the worker starts no operation any more.
+  // The timeout of `stop` passed, or `stop` was forced: the worker starts no operation any more.
   let givenUp = false
+  // Gives up the stop in progress with the message of its rejection; a no-op until `stop` begins.
+  let giveUp: (failure: string) => void = () => {}
   let waitingForHeartbeat = false
   // The worker has checked its schema and finished a claim cycle, or a statement of a worker without tasks, on a connection of the pool beside the one of the heartbeat.
   let poolProven = false
@@ -412,33 +416,40 @@ export function startRuntime(o: RuntimeOptions): Worker {
       timeout === undefined || abortAfter < timeout
         ? setTimeout(abortAll, abortAfter * 1000)
         : undefined
+    let isFinished = false
     // The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
     const finished = (async () => {
       await Promise.all([claimLoop.stop(), scheduler?.stop()])
       while (executions.size > 0) await Promise.all([...executions].map(e => e.done))
       await reaper?.stop()
       await heartbeat.stop()
+      isFinished = true
     })()
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+    let failure: string | undefined
+    const gaveUp = new Promise<void>(resolve => {
+      giveUp = message => {
+        // A stop that has finished or given up already keeps its outcome.
+        if (isFinished || givenUp) return
+        givenUp = true
+        failure = message
+        // The reaper and the heartbeat stop within the call, so that a connection that the heartbeat acquires after it sends no statement.
+        // A statement in flight cannot be cancelled: it ends in the background, and the heartbeat releases its connection after its own.
+        // Handlers that still run get no heartbeat, so their jobs return after their leases.
+        void reaper?.stop()
+        void heartbeat.stop()
+        abortAll()
+        resolve()
+      }
+    })
+    const deadlineTimer =
+      timeout === undefined
+        ? undefined
+        : setTimeout(() => giveUp(`The worker did not stop within ${timeout} s`), timeout * 1000)
     try {
-      if (timeout === undefined) return await finished
-      let inTime = true
-      const deadline = new Promise<void>(resolve => {
-        deadlineTimer = setTimeout(() => {
-          inTime = false
-          givenUp = true
-          abortAll()
-          resolve()
-        }, timeout * 1000)
-      })
-      await Promise.race([finished, deadline])
-      if (inTime) return
-      // Statements in flight cannot be cancelled: they end in the background, and the heartbeat releases its connection after its own.
-      // Handlers that still run get no heartbeat, so their jobs return after their leases.
-      void reaper?.stop()
-      void heartbeat.stop()
+      await Promise.race([finished, gaveUp])
+      if (failure === undefined) return
       const jobs = executions.size > 0 ? `; jobs still running or settling: ${executions.size}` : ""
-      throw new Error(`The worker did not stop within ${timeout} s${jobs}`)
+      throw new Error(`${failure}${jobs}`)
     } finally {
       clearTimeout(abortTimer)
       clearTimeout(deadlineTimer)
@@ -459,6 +470,8 @@ export function startRuntime(o: RuntimeOptions): Worker {
       stopped ??= stopRuntime(options.abortAfter ?? 5, options.timeout).finally(() => {
         isStopped = true
       })
+      // The promise is kept before the abort, so that a call of `stop` from a listener of the abort returns it.
+      if (options.force) giveUp("The worker stop was forced")
       return stopped
     },
   }

@@ -45,7 +45,7 @@ Measurements come from single runs on one local machine without network, so they
 - [Merge on failure by the key mode of the pending job](settlement/merge-on-failure.md).
 - [The worker retries a settlement after connection loss](settlement/worker-retries-settlement.md): a job keeps its slot until then.
 - [A job interrupted by stop returns without spending its attempt](settlement/requeue-on-stop.md): an error after the abort counts as an interruption unless it is a `TerminalError` or a `RetryError`.
-- [At its timeout, stop leaves the jobs of running handlers to their leases](settlement/stop-timeout-leaves-claims.md), rather than failing or requeuing them at once.
+- [When it gives up, stop leaves the jobs of running handlers to their leases](settlement/stop-timeout-leaves-claims.md), rather than failing or requeuing them at once.
 
 ## Tasks
 

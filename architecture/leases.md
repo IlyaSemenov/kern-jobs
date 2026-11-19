@@ -20,7 +20,7 @@ A worker keeps its leases with these requirements, which [the worker](worker.md#
 
 - It sends heartbeats on a connection of their own, so that slow claims and settlements do not delay them ([decision](../decisions/leases/heartbeat-connection.md)).
 - It sends one heartbeat at a time.
-- It keeps heartbeating a claim until its settlement ends, or until the timeout of its `stop` passes ([Worker](worker.md#stopping)).
+- It keeps heartbeating a claim until its settlement ends, or until its `stop` gives up at its timeout or with `force` ([Worker](worker.md#stopping)).
 - It aborts a handler whose lease it could not confirm, a margin before the lease ends.
 - It does not claim while its heartbeat connection is broken or a heartbeat is stuck, since it could not keep a new lease and would burn an attempt of every job it claims.
 

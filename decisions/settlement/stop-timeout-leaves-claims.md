@@ -1,6 +1,6 @@
-# At its timeout, stop leaves the jobs of running handlers to their leases
+# When it gives up, stop leaves the jobs of running handlers to their leases
 
-At the timeout of `stop`, the worker stops heartbeating, starts no operation, and rejects; a handler that still runs keeps running, and its job returns after its lease with its attempt spent, as after a crash.
+At the timeout of `stop`, or at once with `force`, the worker stops heartbeating, starts no operation, and rejects; a handler that still runs keeps running, and its job returns after its lease with its attempt spent, as after a crash.
 Neither the worker nor kern-db can cancel a statement in flight or stop JavaScript that ignores its signal.
 
 ## Alternatives

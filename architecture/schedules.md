@@ -50,7 +50,7 @@ Let M be the UTC minute containing that instant.
 - The transaction bounds each of its lock waits to one second, including registration and enqueue.
   An error before `COMMIT`, such as a lock timeout or a throwing `withOptions`, rolls it back, and the worker reports a schedule error and continues to its next schedule.
 - A worker checks its schedules one at a time in every round.
-  `stop` starts no further check and waits for the one in flight; a check that has not begun to write by the timeout of `stop` writes nothing, and one that has may still commit in the background.
+  `stop` starts no further check and waits for the one in flight; a check that has not begun to write when `stop` gives up writes nothing, and one that has may still commit in the background.
 - The cursor advance commits atomically with the enqueue, including a merge into an existing pending job.
   After rollback or an unknown commit outcome, the next check reads the durable cursor.
   Completing or deleting the job leaves the cursor in place ([decision](../decisions/schedules/occurrence-cursor.md)).

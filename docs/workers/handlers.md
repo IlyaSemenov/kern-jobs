@@ -20,7 +20,7 @@ A job runs again only after a failure or a stop:
 
 - Its handler threw: the [retry](./retries) runs the whole handler, also the steps that succeeded before the error.
 - Its worker [stopped](./stopping) and aborted the handler, which threw: the job runs again from the start.
-- Its worker died, or lost the database for longer than the [lease](./leases), after the handler did its work and before the worker recorded the completion.
+- Its worker died, stopped without waiting for the handler, or lost the database for longer than the [lease](./leases), after the handler did its work and before the worker recorded the completion.
   No setting rules it out.
 
 So decide for each handler what a second run does.
@@ -55,10 +55,10 @@ The reason of the signal is a `HandlerAbort`, whose `reason` tells why:
 - `lost`: the worker no longer holds the job, and another worker may run it.
 - `deadline`: the worker could not extend the lease, which is about to end.
 
-A handler that ignores the signal keeps running: it delays the stop of its worker, and after `lost` or `deadline`, another worker can run the same job at the same time.
+After the abort of a stop, a handler that throws while the stop still waits for it returns its job to pending at once without spending an attempt, also on its last attempt, and `onError` does not get the error; a `TerminalError`, a `RetryError`, or a return keeps its usual meaning.
+Once the stop [stops waiting](./stopping#stop-from-your-code), at its timeout or when forced, the outcome of a handler that ends later does not change its job, which returns once its lease expires with its attempt spent, or fails if that was its last attempt.
 
-After `stop`, a handler that throws returns its job to pending at once without spending an attempt, also on its last attempt, and `onError` does not get the error.
-A `TerminalError` or a `RetryError` keeps its meaning also after the abort, and a handler that returns completes its job.
+A handler that ignores the signal keeps running: it delays the stop of its worker, and after `lost` or `deadline`, another worker can run the same job at the same time.
 
 ## Wrap every handler
 
@@ -74,5 +74,5 @@ const worker = startWorker(driver, {
 })
 ```
 
-The worker settles the job by the outcome of `runHandler` as by the outcome of a handler, with the same rules after [an abort](#stop-long-handlers), so call `run` at most once and return or await its promise.
+The worker takes the outcome of `runHandler` as the outcome of the handler, also after [an abort](#stop-long-handlers), so call `run` at most once and return or await its promise.
 A `runHandler` that resolves without calling `run` completes the job without running its handler, such as the job of a [tenant](../tasks/scopes) that no longer exists.

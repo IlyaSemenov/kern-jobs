@@ -87,7 +87,7 @@ The worker becomes ready once such a statement has returned and the heartbeat is
 - The worker claims only while its heartbeat is healthy: the latest heartbeat succeeded, and none has been in flight for longer than the heartbeat interval.
   It checks this again before each claim statement of a cycle and ends the cycle when the heartbeat fails or the worker stops.
 - A claim cycle fills the free slots, and each claim starts its handler as soon as its statement returns ([Claiming](claiming.md#claim-cycle)), unless:
-  - the timeout of `stop` has passed: the worker sends nothing, and the job returns after its lease;
+  - `stop` has given up, at its timeout or by `force`: the worker sends nothing, and the job returns after its lease;
   - `stop` has begun: the worker requeues the job with its attempt given back, also when the deadline of its lease has passed too;
   - the deadline of its lease, the abort margin before its end, passed before its statement returned: the worker fails the job as by an error of its handler, `lease confirmation deadline passed before the handler started`, with the backoff of its task, and reports it, since a handler would start aborted, and the attempt counts, so that a claim statement that is always this slow cannot return the job forever.
 - A failed claim cycle is reported, and the next one runs after the poll interval.
@@ -108,13 +108,13 @@ A handler gets an `AbortSignal`, which the worker aborts with a `HandlerAbort`, 
 
 - `lost`: a heartbeat found the claim lost;
 - `deadline`: the lease is not confirmed the abort margin before it ends;
-- `stop`: the worker stops, and the handler did not end within `abortAfter`, or the timeout of `stop` passed first.
+- `stop`: the worker stops, and the handler did not end within `abortAfter`, or `stop` gave up first.
 
-After the handler ends, the worker aborts nothing, and the heartbeat keeps the lease until the settlement ends or the timeout of `stop` passes.
+After the handler ends, the worker aborts nothing, and the heartbeat keeps the lease until the settlement ends or `stop` gives up.
 
 ## Settlement
 
-- A handler that returns completes its job, and one that throws fails it: a `TerminalError` for good, a `RetryError` with its delay, and any other error with the backoff of the task for the number of the attempt; the attempt counts in each case, so the last one fails for good, except after an interruption by `stop`.
+- A handler that returns completes its job, and one that throws fails it: a `TerminalError` for good, a `RetryError` with its delay, and any other error with the backoff of the task for the number of the attempt; the attempt counts in each case, so the last one fails for good, except after an interruption by `stop`; once `stop` has given up, a handler that ends is not settled.
 - A handler whose signal was aborted with `stop` and that throws any other error than a `TerminalError` or a `RetryError` is interrupted: the worker [requeues](settlement.md#requeue) its job with the attempt given back and does not report the error, since libraries wrap an abort in errors of their own, and counting such an error as a failure would fail jobs for good at a deploy ([decision](../decisions/settlement/requeue-on-stop.md)); an abort `lost` or `deadline` does not change the outcome.
 - A backoff that throws or returns a value outside the range of a delay is reported as `backoff-error`, and the job retries with `defaultBackoff`, so that it is still settled; so is a thrown value whose class `instanceof` cannot tell, such as a proxy whose trap throws.
 - A claim that a heartbeat found lost is not settled.
@@ -130,7 +130,8 @@ A producer that holds the key of an expired job does not stop the return of othe
 
 ## Stopping
 
-`stop` takes `abortAfter`, 5 seconds by default, and `timeout`, none by default, both in seconds from its call, from 0 up to the longest interval of a loop; `startWorker` checks them on the first call, and a later call returns the promise of the first.
+`stop` takes `abortAfter`, 5 seconds by default, and `timeout`, none by default, both in seconds from its call, from 0 up to the longest interval of a loop, and `force`; `startWorker` checks the options of every call before it acts on them.
+A later call returns the promise of the first, and its `abortAfter` and `timeout` change nothing, so that a caller cannot cut short the stop of another; its `force` gives up the stop in progress.
 It runs these phases:
 
 1. At once, the worker starts no claim cycle and no check of a schedule, and the cycle in flight sends no further claim statement; the heartbeat keeps the leases of the running jobs, and handlers that end are settled as usual.
@@ -139,12 +140,14 @@ It runs these phases:
 
 The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
 
-At `timeout`, if `stop` has not resolved, the worker gives up, then aborts the handlers that still run, so that one that ends on the abort is not settled, and rejects ([decision](../decisions/settlement/stop-timeout-leaves-claims.md)):
+At `timeout`, or at once at a call with `force`, if `stop` has not resolved, the worker gives up, then aborts the handlers that still run, so that one that ends on the abort is not settled, and rejects ([decision](../decisions/settlement/stop-timeout-leaves-claims.md)).
+`force` gives up within its call, before the abort runs the listeners of the application, and `stop` keeps its promise before that, so that a call of `stop` from such a listener returns it.
+After it gives up:
 
 - It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, no first write of a check of a schedule, and no round of the reaper.
 - It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, a check of a schedule that has begun to write, which may still enqueue its job, and a round of the reaper end in the background, and the heartbeat releases its connection after its statement in flight.
 - A connection that `acquire` of the heartbeat returns after the stop is released without a statement.
-- A heartbeat sent before the timeout may still extend the leases of its claims once; nothing extends them after it.
+- A heartbeat sent before it gave up may still extend the leases of its claims once; nothing extends them after it.
 - A handler that still runs keeps running: the worker neither settles nor requeues its job, which returns after its lease, with its attempt spent, as after a crash.
 
 `stopOnSignals` of `worker/shutdown.ts` stops a worker at the first SIGTERM or SIGINT of the process, calls `close` of the application, and exits with 0, or with 1 after a failed stop or close, or once its `timeout`, 25 seconds by default, passes from the signal, since the worker cancels no query and cannot end a handler that ignores its abort.
@@ -171,7 +174,7 @@ The events are not public: an application observes the worker through `onError`,
 
 ## Accepted limitations
 
-- A handler that ignores the abort keeps its slot and delays `stop` until it returns or the timeout of `stop` passes; after its claim is lost or the timeout passes, it can overlap the next execution of its job ([Leases](leases.md#accepted-limitations)).
+- A handler that ignores the abort keeps its slot and delays `stop` until it returns or `stop` gives up; after its claim is lost or `stop` gives up, it can overlap the next execution of its job ([Leases](leases.md#accepted-limitations)).
 - Every worker reserves one connection of its pool for its heartbeats, so a pool of N connections stops N workers, and a pool of one connection stops its only worker: the check of the schema or the claims wait for a connection without an error, and the worker stays `starting`.
   Its `stop` then waits until its timeout, since it awaits the round in flight before it releases the heartbeat connection.
   The driver does not tell the size of its pool, so `startWorker` cannot check it.
@@ -180,8 +183,8 @@ The events are not public: an application observes the worker through `onError`,
   A pause plus two round trips longer than S/2 can therefore abort handlers with `deadline`, and a lease of milliseconds makes the worker heartbeat without a pause.
   The documentation asks for a shortest lease more than twice the sum of the longest pause and two round trips.
 - Without `timeout`, `stop` waits for the handlers and the statements in flight, also for ones that never end.
-- A claim statement in flight at the timeout of `stop` may still commit its claims; their jobs spend an attempt and return after their leases.
-- An ordinary error that a handler throws after the abort `stop` counts as an interruption, also when it is a real failure: it is not reported, and the job runs again without spending its attempt, on every stop that interrupts it, beyond `maxAttempts`.
+- A claim statement in flight when `stop` gives up may still commit its claims; their jobs spend an attempt and return after their leases.
+- An ordinary error that a handler throws after the abort `stop` counts as an interruption, also when it is a real failure: it is not reported, and the job runs again without spending its attempt, on every stop that interrupts it before it gives up, beyond `maxAttempts`.
 - After a claim statement whose connection broke, the server may have committed the claim; the job spends an attempt and returns after its lease.
 
 ## Open questions

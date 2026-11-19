@@ -1,7 +1,7 @@
 # A job interrupted by stop returns without spending its attempt
 
-A handler whose signal `stop` aborted, and that then throws any error other than a `TerminalError` or a `RetryError`, is interrupted: the worker does not report the error and, before the timeout of `stop`, requeues its job at once with the attempt given back and its `last_error` kept.
-A claim that returns after `stop` began and before its timeout is requeued the same way without running its handler.
+A handler whose signal `stop` aborted, and that then throws any error other than a `TerminalError` or a `RetryError`, is interrupted: the worker does not report the error and, before `stop` gives up at its timeout or with `force`, requeues its job at once with the attempt given back and its `last_error` kept.
+A claim that returns after `stop` began and before it gives up is requeued the same way without running its handler.
 A `TerminalError` or a `RetryError` keeps its meaning after the abort, since the handler decided the outcome.
 
 ## Alternatives

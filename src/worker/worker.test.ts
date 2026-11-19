@@ -1,4 +1,4 @@
-// Worker of an application: runs the jobs of its manifest in its schema, through its `runHandler`, reports the errors of handlers and of the database to `onError`, or to the console without one, runs a reaper by default, becomes ready only once its schema is migrated and never on a pool of one connection, checks its options before it starts anything, and checks the options of its stop before it stops anything.
+// Worker of an application: runs the jobs of its manifest in its schema, through its `runHandler`, reports the errors of handlers and of the database to `onError`, or to the console without one, runs a reaper by default, becomes ready only once its schema is migrated and never on a pool of one connection, checks its options before it starts anything, checks the options of each call of its stop before it stops anything, and gives up a stop with force.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { hostname } from "node:os"
@@ -366,6 +366,69 @@ describe("a running worker", () => {
     expect((await jobs(schema)).map(job => job.state)).toEqual(["pending"])
   })
 
+  test("stop with force gives up at once and keeps its promise before the abort, so a stop called from the abort of a handler returns it", async () => {
+    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let fromAbort: Promise<void> | undefined
+    const worker: Worker = startWorker(schema.driver, {
+      manifest: defineManifest({
+        tasks: [
+          purgeExpiredSessions.implement((_payload, { signal }) => {
+            // A block body, since Bun reports the rejection of a promise that a listener returns as unhandled.
+            signal.addEventListener("abort", () => {
+              fromAbort = worker.stop()
+            })
+            started.resolve()
+            // Ignores the abort.
+            return release.promise
+          }),
+        ],
+      }),
+      schemaName: schema.name,
+      pollInterval: 0.02,
+      reaper: false,
+    })
+    await started.promise
+    // A valid deadline beside force changes nothing.
+    const stopped = worker.stop({ force: true, timeout: 10 })
+    expect(fromAbort).toBe(stopped)
+    await expect(stopped).rejects.toThrow(
+      "The worker stop was forced; jobs still running or settling: 1",
+    )
+    release.resolve()
+  })
+
+  test("a later stop without force changes nothing, and one with force gives up the stop in progress, which rejects before its handler ends", async () => {
+    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    const started = Promise.withResolvers<AbortSignal>()
+    const release = Promise.withResolvers<void>()
+    const worker = startWorker(schema.driver, {
+      manifest: defineManifest({
+        tasks: [
+          purgeExpiredSessions.implement((_payload, { signal }) => {
+            started.resolve(signal)
+            return release.promise
+          }),
+        ],
+      }),
+      schemaName: schema.name,
+      pollInterval: 0.02,
+      reaper: false,
+    })
+    const signal = await started.promise
+    const stopped = worker.stop({ abortAfter: 60 })
+    let settled = false
+    stopped.catch(() => {}).finally(() => (settled = true))
+    expect(worker.stop({ abortAfter: 0, timeout: 0 })).toBe(stopped)
+    await sleep(100)
+    expect([signal.aborted, settled]).toEqual([false, false])
+    expect(worker.stop({ force: true })).toBe(stopped)
+    expect(signal.aborted).toBe(true)
+    await expect(stopped).rejects.toThrow("The worker stop was forced")
+    release.resolve()
+  })
+
   test("reports a failure of the database, such as a claim after the job table is dropped, and goes on", async () => {
     const claims: unknown[] = []
     const reportedTwice = Promise.withResolvers<void>()
@@ -450,7 +513,7 @@ describe("options", () => {
     expect(calls).toBe(0)
   })
 
-  test("stop throws for wrong options before it stops anything, and a later call joins the stop in progress whatever its options", async () => {
+  test("stop throws for wrong options before it stops anything, also on a later call, and a later call without force joins the stop in progress whatever its deadlines", async () => {
     const call = () => Promise.reject(new Error("no database"))
     const driver: Driver = { execute: call, executeScript: call, acquire: call, close: call }
     let reports = 0
@@ -466,17 +529,39 @@ describe("options", () => {
       [{ abortAfter: "1" }, RangeError, "abortAfter"],
       [{ timeout: NaN }, RangeError, "timeout"],
       [{ timeout: maxInterval + 1 }, RangeError, "timeout"],
+      [{ force: "yes" }, TypeError, "force must be a boolean"],
+      [{ force: true, timeout: -1 }, RangeError, "timeout"],
     ]
-    for (const [options, type, message] of cases) {
-      const stop = () => worker.stop(options as StopOptions)
-      expect(stop).toThrow(type)
-      expect(stop).toThrow(message)
+    const throwsForEach = () => {
+      for (const [options, type, message] of cases) {
+        const stop = () => worker.stop(options as StopOptions)
+        expect(stop).toThrow(type)
+        expect(stop).toThrow(message)
+      }
     }
+    throwsForEach()
     // The worker goes on: it keeps checking its schema, which fails without a database.
     const before = reports
     while (reports === before) await new Promise(resolve => setTimeout(resolve, 10))
-    const stopped = worker.stop({ abortAfter: 0 })
-    expect(worker.stop({ abortAfter: -1 })).toBe(stopped)
+    expect(worker.state).toBe("starting")
+    const stopped = worker.stop({ abortAfter: 60 })
+    throwsForEach()
+    expect(worker.stop({ abortAfter: 0, timeout: 0 })).toBe(stopped)
     await stopped
+    expect(worker.stop({ force: true })).toBe(stopped)
+  })
+
+  test("stop acts on the options it checked, also when a getter returns another value when read again", async () => {
+    const call = () => Promise.reject(new Error("no database"))
+    const driver: Driver = { execute: call, executeScript: call, acquire: call, close: call }
+    const worker = startWorker(driver, { manifest, onError: () => {} })
+    let reads = 0
+    const options = {
+      get force() {
+        return reads++ === 0 ? false : "yes"
+      },
+    }
+    await worker.stop(options as StopOptions)
+    expect(reads).toBe(1)
   })
 })

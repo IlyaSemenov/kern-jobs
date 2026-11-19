@@ -9,9 +9,8 @@ stopOnSignals(worker, { close: () => sql.end() })
 ```
 
 The worker takes no more jobs and lets the running handlers end for 5 seconds; pass `abortAfter` in seconds to change it.
-Then it [aborts their signals](./handlers#stop-long-handlers) and waits until they end and the worker has recorded their outcomes or given that up, such as without a database connection.
-A job whose handler throws after the abort returns to pending at once without spending an attempt.
-A job whose outcome is not recorded returns to pending once its lease expires, or fails if that was its last attempt.
+Then it [aborts their signals](./handlers#stop-long-handlers) and waits until they end: a job whose handler throws on the abort returns to pending at once without spending an attempt.
+A job whose outcome the worker cannot record, such as without a database connection, returns to pending once its lease expires, or fails if that was its last attempt.
 
 The process exits within 25 seconds of the signal, also when a handler ignores its abort or a query hangs, since the worker cannot cancel them.
 Pass `timeout` in seconds shorter than the time that your process manager gives the process before it kills it:
@@ -25,14 +24,27 @@ The same signal again, such as a second Ctrl+C, ends the process at once.
 
 ## Stop from your code
 
-To stop a worker that runs beside your application, such as in the shutdown of your server, call `stop`, and close the database client after it:
+To stop a worker that runs beside your application, such as in the shutdown of your server, call `stop`, and close the database client after it, also when `stop` rejects:
 
 ```ts
-await worker.stop({ abortAfter: 10, timeout: 20 })
-await sql.end({ timeout: 5 })
+try {
+  await worker.stop({ abortAfter: 10, timeout: 20 })
+} finally {
+  await sql.end({ timeout: 5 })
+}
 ```
 
-`stop` stops the worker as above and resolves once it has stopped.
-At `timeout`, it rejects instead: the worker starts no more database work, and it leaves a handler that still runs to its lease, which no new heartbeat extends, though one already sent may extend it once more.
-It does not cancel the queries in flight, so exit the process rather than wait for them.
-Without `timeout`, `stop` waits as long as the handlers run.
+`stop` stops the worker as above and resolves once the handlers have ended and the worker has finished its attempts to record their outcomes, so the database client can close then; without `timeout`, it waits as long as the handlers run.
+At `timeout`, it stops waiting and rejects: the worker starts no more database work and records the outcome of no handler that ends later, and the job of such a handler returns once its lease expires with its attempt spent, or fails if that was its last attempt.
+A database operation that has already begun is not cancelled and may end after the rejection, such as a check of a schedule that still enqueues its job, so exit the process rather than wait for it.
+
+`force` aborts the signals of the running handlers at once, without waiting for `abortAfter`, and rejects as at `timeout`, also the promise of a call of `stop` that is already waiting, such as at a second Ctrl+C:
+
+```ts
+const stopped = worker.stop({ abortAfter: 10 })
+// later, when the stop takes too long
+worker.stop({ force: true })
+await stopped // rejects
+```
+
+Another call without `force` returns the promise of the first and changes nothing.

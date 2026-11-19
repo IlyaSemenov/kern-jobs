@@ -79,13 +79,13 @@ function checkInterval(name: string, value: unknown): asserts value is number {
   }
 }
 
-/** Checks the options of `stop`. */
-function checkStopOptions(options: unknown): asserts options is StopOptions | undefined {
-  if (options === undefined) return
+/** Checks the options of `stop` and returns the values it checked, so that a getter read again cannot change them. */
+function toStopOptions(options: unknown): StopOptions {
+  if (options === undefined) return {}
   if (typeof options !== "object" || options === null) {
     throw new TypeError("The options of stop must be an object")
   }
-  const { abortAfter, timeout } = options as Record<string, unknown>
+  const { abortAfter, timeout, force } = options as Record<string, unknown>
   for (const [name, value] of [
     ["abortAfter", abortAfter],
     ["timeout", timeout],
@@ -93,6 +93,10 @@ function checkStopOptions(options: unknown): asserts options is StopOptions | un
     if (value !== undefined && !isTimerDelay(value))
       throw new RangeError(`${name} must be ${timerDelayRange}, got ${String(value)}`)
   }
+  if (force !== undefined && typeof force !== "boolean") {
+    throw new TypeError("force must be a boolean")
+  }
+  return { abortAfter, timeout, force } as StopOptions
 }
 
 /** Returns the error and what failed of an event that reports an error, or `null` for any other event. */
@@ -207,7 +211,6 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
       if (report) onError(...report)
     },
   })
-  let stopped: Promise<void> | undefined
   return {
     id: runtime.id,
     ready: runtime.ready,
@@ -215,12 +218,8 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
       return runtime.state
     },
     stop(stopOptions) {
-      // A later call joins the stop in progress, whatever its options.
-      if (!stopped) {
-        checkStopOptions(stopOptions)
-        stopped = runtime.stop(stopOptions)
-      }
-      return stopped
+      // Every call is checked, since a later one may force the stop in progress.
+      return runtime.stop(toStopOptions(stopOptions))
     },
   }
 }
