@@ -8,7 +8,7 @@ export type {
   JobsDb,
   UnsafeClient,
 } from "./core/statement"
-export { createJobs, type Jobs, type JobsOptions } from "./jobs/jobs"
+export { createJobs, type DeletePendingFilter, type Jobs, type JobsOptions } from "./jobs/jobs"
 export {
   type Backoff,
   defaultBackoff,

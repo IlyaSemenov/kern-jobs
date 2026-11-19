@@ -53,5 +53,25 @@ When the running job fails and has attempts left, or its worker [stops](../worke
 
 The pending job stays as it is when the running job completes, fails for good, or its worker dies: the job of a dead worker that has attempts left runs again beside the pending job, without its key.
 
-So treat a job of a key as a signal that its entity changed rather than as one event: every event either merges into a job that runs after it or becomes the next job, but several events run as one job with one payload, and [deleting](../workers/failed-jobs#delete-a-job) that job deletes them all.
+So treat a job of a key as a signal that its entity changed rather than as one event: every event either merges into a job that runs after it or becomes the next job, but several events run as one job with one payload, and [deleting](#cancel-a-pending-job) that job deletes them all.
 Read the current state of the entity in the handler, and enqueue the events without a key to process each of them with its own payload.
+
+## Cancel a pending job
+
+To cancel the next run of a job of a key, such as a reminder whose reason is gone, delete its pending job:
+
+```ts
+export const remindAboutDraftTask = defineTask("documents.remindAboutDraft", {
+  delay: 24 * 60 * 60,
+})
+  .withPayload<{ documentId: string }>()
+  .withOptions(({ documentId }) => ({ key: `document:${documentId}` }))
+
+// When the document is published.
+await jobs.deletePending({ task: remindAboutDraftTask, key: `document:${documentId}` })
+```
+
+`deletePending` resolves to the number of the jobs it deleted, `1` or `0`; the job takes with it the events that merged into it.
+For a [scoped](./scopes) task, it deletes the job of the scope of `jobs`, as an enqueue does; for another task, it does not call the scope function of `jobs`.
+
+Deleting the pending job neither interrupts a running attempt of a job of the key nor keeps it from being retried, so check in the handler whether its work is still needed.

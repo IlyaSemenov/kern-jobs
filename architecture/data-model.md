@@ -41,7 +41,7 @@ Check constraints enforce these invariants for every write:
 - Requeue makes an active job pending again or deletes it as superseded, as fail does, but never makes it failed ([Settlement](settlement.md#requeue)).
 - The reaper makes an active job whose lease expired pending again, or failed on its last attempt.
 - No worker or enqueue changes a `failed` row: it stays as a dead letter, outside the uniqueness of keys.
-- A retry of the application makes a failed job pending again, unless a pending job of its key exists; a delete of the application deletes a pending or failed job ([Administration](administration.md)).
+- A retry of the application makes a failed job pending again, unless a pending job of its key exists; a delete of the application deletes a pending or failed job, or the pending jobs of a scope, a task, or a key ([Administration](administration.md)).
 
 ## Indexes
 

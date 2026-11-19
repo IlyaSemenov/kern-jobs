@@ -1,5 +1,6 @@
 // Enqueues, retries, and deletes through the clients of an application: node-postgres and postgres.js, with their transactions, renamed columns, and parsers of their own, and a Database of kern-db and a Db of kern-orm.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { runInNewContext } from "node:vm"
 
 import { createDatabase } from "kern-db"
 import { postgresJsDriver } from "kern-db/postgres-js"
@@ -17,7 +18,7 @@ import {
 } from "../core/testing"
 import { defineTask } from "../task/task"
 
-import { createJobs, type JobsOptions } from "./jobs"
+import { createJobs, type DeletePendingFilter, type JobsOptions } from "./jobs"
 
 /** Client of an application whose enqueues follow the transaction that `transaction` holds. */
 interface Client {
@@ -219,10 +220,11 @@ for (const [name, createClient] of clients) {
       expect(await jobRows(schema)).toEqual([])
     })
 
-    test("a retry and a delete in a transaction that rolls back change nothing", async () => {
+    test("a retry and deletes in a transaction that rolls back change nothing", async () => {
       const jobs = createTestJobs()
       const { id: retried } = await jobs.enqueue(sendEmail, { to: "a@example.com" })
       const { id: deleted } = await jobs.enqueue(sendEmail, { to: "b@example.com" })
+      await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(retried)
       const before = await jobRows(schema)
       const error = new Error("rollback")
@@ -230,6 +232,7 @@ for (const [name, createClient] of clients) {
         client.transaction(async () => {
           expect(await jobs.retry(retried)).toEqual({ retried: true })
           expect(await jobs.delete(deleted)).toBe(true)
+          expect(await jobs.deletePending({ task: indexProduct })).toBe(1)
           throw error
         }),
       ).rejects.toBe(error)
@@ -274,6 +277,106 @@ test("retry and delete reject an id that is not a string with TypeError, and one
   expect(calls).toBe(0)
   // The largest id of the table reaches the client.
   await expect(jobs.retry("9223372036854775807")).rejects.toThrow("a statement ran")
+})
+
+test("deletePending rejects an argument that is not an object of a task and, optionally, its key, and a task name or a key that is not storable text, with TypeError, before it calls the client", async () => {
+  let calls = 0
+  const jobs = createJobs(() => {
+    calls++
+    return { query: () => Promise.reject(new Error("a statement ran")) }
+  })
+  // A task defined by an older version of kern-jobs, whose defineTask accepted such a name.
+  const olderTask = { ...sendEmail, name: "t\ud800" }
+  await expect(jobs.deletePending({ task: olderTask })).rejects.toThrow(TypeError)
+  // An explicit undefined too, which would otherwise widen the delete to every key of the task.
+  for (const key of [undefined, 42, null, "k\u0000", "k\udc00"]) {
+    await expect(jobs.deletePending({ task: sendEmail, key: key as string })).rejects.toThrow(
+      "key must be a string that has",
+    )
+  }
+  // As JavaScript passes them, past the types: each would otherwise delete more jobs than it names.
+  for (const filter of [
+    undefined,
+    sendEmail,
+    "k",
+    null,
+    [],
+    {},
+    { key: "k" },
+    { task: "email.send" },
+    { scope: "a" },
+    Object.create({ scope: "a" }),
+    { task: sendEmail, keys: ["k"] },
+    { [Symbol("task")]: sendEmail },
+    Object.defineProperty({}, "scope", { value: "a" }),
+    Promise.resolve({ task: sendEmail, key: "k" }),
+    new Map([["task", sendEmail]]),
+    new (class Tenant {
+      readonly #id = "a"
+      get id() {
+        return this.#id
+      }
+    })(),
+  ]) {
+    await expect(jobs.deletePending(filter as DeletePendingFilter)).rejects.toThrow(
+      new TypeError("deletePending takes a filter of a task and, optionally, its key"),
+    )
+  }
+  expect(calls).toBe(0)
+})
+
+test("deletePending takes a filter of another realm, with a null prototype, or with inherited getters", async () => {
+  const values: unknown[][] = []
+  const jobs = createJobs({
+    query: async (_text: string, params: unknown[]) => {
+      values.push(params)
+      return { rows: [["0"]] }
+    },
+  })
+  await jobs.deletePending(runInNewContext("({ task })", { task: sendEmail }))
+  await jobs.deletePending(Object.assign(Object.create(null), { task: sendEmail, key: "k" }))
+  // The getters are inherited from the prototype of the class, and each is read once.
+  const reads = { task: 0, key: 0 }
+  await jobs.deletePending(
+    new (class {
+      get task() {
+        reads.task++
+        return sendEmail
+      }
+      get key() {
+        reads.key++
+        return "k"
+      }
+    })(),
+  )
+  expect(values).toEqual([
+    ["", "email.send"],
+    ["", "email.send", "k"],
+    ["", "email.send", "k"],
+  ])
+  expect(reads).toEqual({ task: 1, key: 1 })
+})
+
+test("deletePending reads the name of the task once, so that the statement gets the name that it checked", async () => {
+  const values: unknown[][] = []
+  const jobs = createJobs(
+    {
+      query: async (_text: string, params: unknown[]) => {
+        values.push(params)
+        return { rows: [["0"]] }
+      },
+    },
+    { scope: "a" },
+  )
+  let reads = 0
+  const task = {
+    ...defineTask("search.indexProduct", { scoped: true }),
+    get name() {
+      return reads++ === 0 ? "search.indexProduct" : "t\ud800"
+    },
+  }
+  expect(await jobs.deletePending({ task, key: "k" })).toBe(0)
+  expect(values).toEqual([["a", "search.indexProduct", "k"]])
 })
 
 describe("scope", () => {
@@ -357,7 +460,7 @@ describe("scope", () => {
     ])
   })
 
-  test("rejects a retry and a delete whose scope function throws or returns an invalid scope, before it calls the client", async () => {
+  test("rejects a retry, a delete, and a delete of pending jobs without a task whose scope function throws or returns an invalid scope, before it calls the client", async () => {
     let calls = 0
     const jobsIn = (scope: () => string) =>
       createJobs(
@@ -373,9 +476,77 @@ describe("scope", () => {
     })
     await expect(outsideRequest.retry("1")).rejects.toBe(error)
     await expect(outsideRequest.delete("1")).rejects.toBe(error)
+    await expect(outsideRequest.deletePending()).rejects.toBe(error)
     await expect(jobsIn(() => "").delete("1")).rejects.toThrow(
       new RangeError('scope must be 1 to 128 bytes in UTF-8, got ""'),
     )
+    expect(calls).toBe(0)
+  })
+
+  test("deletes the pending jobs of a scoped task, or of a key of it, in the scope of createJobs, and of a task that is not scoped in the empty scope", async () => {
+    let tenant = "a"
+    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    await jobs.enqueue(indexProduct, undefined, { key: "k" })
+    tenant = "b"
+    await jobs.enqueue(indexProduct, undefined, { key: "k" })
+    await jobs.enqueue(indexProduct)
+    await jobs.enqueue(sendEmail, { to: "a" }, { key: "k" })
+    await jobs.enqueue(sendEmail, { to: "a" })
+    expect(await jobs.deletePending({ task: indexProduct, key: "k" })).toBe(1)
+    expect(await scopes()).toEqual(["a", "b", "", ""])
+    expect(await jobs.deletePending({ task: indexProduct })).toBe(1)
+    expect(await jobs.deletePending({ task: sendEmail, key: "k" })).toBe(1)
+    expect(await jobs.deletePending({ task: sendEmail, key: "k" })).toBe(0)
+    expect(await jobs.deletePending({ task: sendEmail })).toBe(1)
+    expect(await scopes()).toEqual(["a"])
+  })
+
+  test("deletes the pending jobs of a task that is not scoped without calling the function of the scope", async () => {
+    const everyScope = createJobs(pool, { schemaName: schema.name })
+    await everyScope.enqueue(sendEmail, { to: "a" }, { key: "k" })
+    await everyScope.enqueue(sendEmail, { to: "a" })
+    const outsideRequest = createJobs(pool, {
+      schemaName: schema.name,
+      scope: () => {
+        throw new Error("no request")
+      },
+    })
+    expect(await outsideRequest.deletePending({ task: sendEmail, key: "k" })).toBe(1)
+    expect(await outsideRequest.deletePending({ task: sendEmail })).toBe(1)
+  })
+
+  test("deletes the pending jobs of every task in the scope of createJobs, a string or what its function returns at the call, and in every scope without one", async () => {
+    const enqueueIn = (scope: string) =>
+      createJobs(pool, { schemaName: schema.name, scope }).enqueue(indexProduct)
+    await enqueueIn("a")
+    await enqueueIn("b")
+    await enqueueIn("b")
+    const everyScope = createJobs(pool, { schemaName: schema.name })
+    await everyScope.enqueue(sendEmail, { to: "a" })
+    let tenant = "b"
+    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    expect(await jobs.deletePending()).toBe(2)
+    expect(await scopes()).toEqual(["a", ""])
+    tenant = "c"
+    expect(await jobs.deletePending()).toBe(0)
+    expect(await everyScope.deletePending()).toBe(2)
+    expect(await scopes()).toEqual([])
+  })
+
+  test("rejects a delete of the pending jobs of a scoped task without a scope, before it calls the client", async () => {
+    let calls = 0
+    const jobs = createJobs(
+      () => {
+        calls++
+        return pool
+      },
+      { schemaName: schema.name },
+    )
+    for (const filter of [{ task: indexProduct }, { task: indexProduct, key: "k" }]) {
+      await expect(jobs.deletePending(filter)).rejects.toThrow(
+        new TypeError("Task search.indexProduct is scoped: pass its scope to createJobs"),
+      )
+    }
     expect(calls).toBe(0)
   })
 

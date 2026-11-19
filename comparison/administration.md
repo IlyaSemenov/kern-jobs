@@ -18,6 +18,13 @@ The retry changes neither job and reports the pending job, so that the operator 
   Its `redrive` from a dead letter queue inserts a new job and leaves a colliding one failed with `redrive_conflict` ([docs](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/jobs.md#L571-L616)).
 - BullMQ, differs: a job that fails releases its deduplication id, unless the id has a time to live, and a retry does not take it back, so a job of the same deduplication id added after the failure runs beside it ([source](https://github.com/taskforcesh/bullmq/blob/v6.7.5/src/commands/includes/removeDeduplicationKeyIfNeededOnFinalization.lua#L6-L23)).
 
+## Deleting the pending job of a key
+
+`deletePending` with a task and a key deletes the pending job of the key, and leaves a job of the key that runs.
+
+- Graphile Worker, differs: `remove_job` deletes the job of a key that no worker holds or whose lock is older than four hours, also one that failed for good, and a job locked more recently loses its key and its remaining attempts while its handler runs on ([source](https://github.com/graphile/worker/blob/v0.18.0/sql/000018.sql#L177-L206)).
+- graphile-worker-orchid, differs: `removeJob` calls `remove_job` of Graphile Worker with the key ([source](https://github.com/IlyaSemenov/graphile-worker-orchid/blob/v2.5.1/src/utils/removeJob.ts#L9-L23)).
+
 ## Deleting a running job
 
 A delete leaves a running job as it is, and its handler runs on.

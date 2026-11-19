@@ -8,12 +8,12 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Worker events](worker-events.md): public events of the worker beside `onError`.
 - [Enqueue from SQL](enqueue-from-sql.md): a SQL function for migrations of the application.
 - [Testing helpers](testing-helpers.md): capturing enqueues and running handlers in tests.
-- [Administration](administration.md): delete and check a key, act on many jobs at once, and count jobs.
+- [Administration](administration.md): check a key, act on many jobs at once, and count jobs.
 
 ## Later
 
 - [Claiming with many queues](claiming-with-many-queues.md): the cost of a queue per entity, as Keys suggests.
-- [Administration of scopes](administration-of-scopes.md): list and delete the jobs of a scope.
+- [Administration of scopes](administration-of-scopes.md): list the jobs of a scope and delete its failed ones.
 - [Shared heartbeat connection](shared-heartbeat-connection.md): one heartbeat connection for the workers of a process.
 - [Enqueue in an explicit transaction](enqueue-in-an-explicit-transaction.md): `jobs.using(client).enqueue(…)`.
 - [Placement of the job table](placement-of-the-job-table.md): a table in a schema of the application or of each tenant, and partitions by scope.

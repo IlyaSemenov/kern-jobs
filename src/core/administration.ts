@@ -1,4 +1,4 @@
-// Administration of jobs by the application: retry of a failed job and delete of a pending or failed one, each in one statement on the client of the application.
+// Administration of jobs by the application: retry of a failed job, delete of a pending or failed one, and delete of the pending jobs of a scope, a task, or a key, each in one statement on the client of the application.
 import { hook, NOW } from "./db"
 import type { JobTable } from "./schema"
 import { queryValues, type ValuesTarget } from "./statement"
@@ -72,4 +72,39 @@ export async function deleteJob(
     [o.id, o.scope ?? null],
   )
   return rows.length === 1
+}
+
+/** Filter of the pending jobs that `deletePendingJobs` deletes: each given column must equal its value. */
+export interface PendingJobsFilter {
+  /** Scope of the jobs; every scope when omitted. */
+  scope?: string | null
+  task?: string | null
+  key?: string | null
+}
+
+/**
+ * Deletes the pending jobs that match a filter, and returns their count.
+ * A row that another transaction holds, such as a claim, is deleted only if it is still pending after that transaction ends; active and failed jobs stay.
+ */
+export async function deletePendingJobs(
+  db: ValuesTarget,
+  table: JobTable,
+  filter: PendingJobsFilter,
+): Promise<number> {
+  const values: string[] = []
+  const conditions = ["state = 'pending'"]
+  // Only the given columns get a condition, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
+  for (const column of ["scope", "task", "key"] as const) {
+    const value = filter[column]
+    if (value == null) continue
+    values.push(value)
+    conditions.push(`${column} = $${values.length}::text`)
+  }
+  const rows = await queryValues(
+    db,
+    `with d as (delete from ${table.name} where ${conditions.join(" and ")} returning 1)
+     select count(*)::text from d`,
+    values,
+  )
+  return Number(rows[0]![0])
 }

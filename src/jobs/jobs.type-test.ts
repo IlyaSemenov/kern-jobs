@@ -92,3 +92,20 @@ describe("retry and delete", () => {
     if (result?.retried) void result.pendingId
   })
 })
+
+describe("deletePending", () => {
+  test("takes no filter, a task of any payload, scoped or not, or a task and a key, and resolves to a count", () => {
+    expectTypeOf(jobs.deletePending()).toEqualTypeOf<Promise<number>>()
+    // @ts-expect-error A filter names a task.
+    void jobs.deletePending({})
+    // @ts-expect-error Only a call without an argument deletes the jobs of every task.
+    void jobs.deletePending(undefined)
+    void jobs.deletePending({ task: sendEmail, key: "k" })
+    void jobs.deletePending({ task: purgeExpiredSessions })
+    void jobs.deletePending({ task: defineTask("search.indexProduct", { scoped: true }), key: "k" })
+    // @ts-expect-error A key is a string.
+    void jobs.deletePending({ task: sendEmail, key: null })
+    // @ts-expect-error A key needs its task.
+    void jobs.deletePending({ key: "k" })
+  })
+})

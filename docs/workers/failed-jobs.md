@@ -43,7 +43,7 @@ In a transaction, the error aborts the transaction: roll it back, and retry the 
 
 ## Delete a job
 
-To give up a failed job, or to keep a pending one from running, such as a job of a task that no worker implements any more, delete it:
+To give up a failed job, or to keep a pending one from running, delete it:
 
 ```ts
 await jobs.delete(id)
@@ -53,6 +53,30 @@ A pending job of a key carries the events that the enqueues of its key merged in
 
 `delete` resolves to `false` when no pending or failed job has the id, such as one that has completed or that a worker runs.
 A worker cannot stop a running handler at the request of the database, so wait until the job ends: if it fails, or returns to pending for another attempt, delete it then.
+
+## Delete pending jobs
+
+To keep the pending jobs of a task from running, such as of a task that no worker implements any more, delete them without looking up their ids:
+
+```ts
+await jobs.deletePending({ task: syncLegacyCrmTask })
+```
+
+To delete the pending jobs of every task of a [scope](../tasks/scopes), such as when you delete the data of a tenant, call it without a filter through `jobs` with that scope, in the [transaction](../database-clients#transactions-without-an-orm) that deletes the data:
+
+```ts
+await sql.begin(async tx => {
+  await tx`delete from product where tenant_id = ${tenant.id}`
+  await createJobs(tx, { scope: tenant.id }).deletePending()
+})
+```
+
+Through `jobs` without a scope, it deletes the pending jobs of every scope.
+
+To delete the pending job of a key, pass the task and the key, as in [Cancel a pending job](../tasks/keys#cancel-a-pending-job).
+
+`deletePending` resolves to the number of the jobs it deleted, and leaves the jobs that run or failed.
+Each job takes with it the events that the enqueues of its key merged into it.
 
 ## Delete old failed jobs
 
@@ -66,5 +90,7 @@ It is the only statement on the table that may change it besides kern-jobs: keep
 
 ## Jobs of a scope
 
-Through `jobs` with a [scope](../tasks/scopes), `retry` and `delete` act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
+Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and `deletePending` without a filter act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
 Through `jobs` without a scope, they act on the jobs of every scope: use such `jobs` for the jobs of the tasks that are not scoped, and in scripts that manage the jobs of every scope.
+
+`deletePending` of a task deletes the jobs that an enqueue of the task through the same `jobs` would add: of the scope of `jobs` for a scoped task, and without a scope for another task.

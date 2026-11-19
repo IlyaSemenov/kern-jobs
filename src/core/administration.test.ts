@@ -1,16 +1,16 @@
-// Administration of jobs: a retry of a failed job with and without a pending job of its key, in a scope, and its races with producers, claims, other retries, fail, and the reaper; and a delete of a pending or failed job in a scope, and its races with claims, producers, and fail.
+// Administration of jobs: a retry of a failed job with and without a pending job of its key, in a scope, and its races with producers, claims, other retries, fail, and the reaper; a delete of a pending or failed job in a scope, and its races with claims, producers, and fail; and a delete of the pending jobs of a scope, a task, or a key, and its races with claims and fail.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { waitForLock } from "kern-db/testing"
 
-import { deleteJob, retryFailedJob } from "./administration"
+import { deleteJob, deletePendingJobs, retryFailedJob } from "./administration"
 import { claimCycle, claimPlain } from "./claim"
 import { enqueue, type EnqueueParams } from "./enqueue"
 import type { KeyMode } from "./job"
 import { reap } from "./lease"
 import { fail } from "./settlement"
 import { query } from "./statement"
-import { createTestSchema, holdHook, jobs, only, T, type TestSchema } from "./testing"
+import { type Conn, createTestSchema, holdHook, jobs, only, T, type TestSchema } from "./testing"
 import { isUniqueViolation } from "./violation"
 
 let schema: TestSchema
@@ -49,6 +49,56 @@ async function createFailedJob(o: Partial<EnqueueParams> = {}): Promise<string> 
 
 const retry = (id: string, o: { scope?: string; now?: Date } = {}) =>
   retryFailedJob(schema.admin, schema.table, { id, now: T(20), ...o })
+
+/**
+ * Outcomes of a fail with attempts left of a job of a key while a delete waits for the pending job of the key that the fail transaction holds.
+ * With keep, fail deletes the pending job and returns its own to pending, so the delete finds no row; with replace, fail deletes its own job, and the delete takes the pending one.
+ */
+const failRaces = [
+  { mode: "keep", outcome: "replaced-pending", deleted: false },
+  { mode: "replace", outcome: "superseded", deleted: true },
+] as const
+
+/** Ids and states of the jobs that a fail race leaves. */
+const getFailRaceRows = (mode: KeyMode, claimedJobId: string) =>
+  mode === "keep" ? [[claimedJobId, "pending"]] : []
+
+/**
+ * Fails a claimed job of a key with attempts left, and starts `remove` of the pending job of the key on a separate connection and waits until it blocks on the pending row before letting the fail transaction commit.
+ * Returns the id of the claimed job, the outcome of the fail, the result of `remove`, and the ids and states of the jobs left.
+ */
+async function deleteDuringFail<R>(
+  mode: KeyMode,
+  remove: (operator: Conn, pendingId: string) => Promise<R>,
+) {
+  await enqueue(schema.admin, schema.table, { task: "t", key: "k", mode, now: T(0) })
+  const claim = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(1) }))
+  const { id: pending } = await enqueue(schema.admin, schema.table, {
+    task: "t",
+    key: "k",
+    mode,
+    now: T(2),
+  })
+  const operator = await schema.connect()
+  let deletion: Promise<R> | undefined
+  const outcome = await fail(schema.database, schema.table, claim, {
+    error: "boom",
+    backoff: 30,
+    now: T(3),
+    pause: {
+      beforeCommit: async () => {
+        deletion = remove(operator, pending)
+        await waitForLock(schema.admin, operator.pid)
+      },
+    },
+  })
+  return {
+    claimedJobId: claim.id,
+    outcome,
+    deleted: await deletion,
+    left: (await jobs(schema)).map(r => [r.id, r.state]),
+  }
+}
 
 /** Returns the error with which a promise rejects, and throws when it resolves. */
 async function getRejection(promise: Promise<unknown>): Promise<unknown> {
@@ -384,40 +434,99 @@ describe("delete", () => {
     expect(await jobs(schema)).toEqual([])
   })
 
-  for (const [mode, outcome, deleted] of [
-    ["keep", "replaced-pending", false],
-    ["replace", "superseded", true],
-  ] as const) {
-    test(`waits for a fail transaction that holds a pending job as the pending job of its key in mode ${mode}`, async () => {
-      await enqueue(schema.admin, schema.table, { task: "t", key: "k", mode, now: T(0) })
-      const claim = only(
-        await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(1) }),
+  for (const { mode, outcome, deleted } of failRaces) {
+    test(`waits for a fail transaction that holds a pending job as the pending job of its key in mode ${mode}, and then resolves to ${deleted}`, async () => {
+      const { claimedJobId, ...race } = await deleteDuringFail(mode, (operator, id) =>
+        deleteJob(operator, schema.table, { id }),
       )
-      const { id: pending } = await enqueue(schema.admin, schema.table, {
+      expect(race).toEqual({ outcome, deleted, left: getFailRaceRows(mode, claimedJobId) })
+    })
+  }
+})
+
+describe("delete pending", () => {
+  const deletePending = (filter: Parameters<typeof deletePendingJobs>[2]) =>
+    deletePendingJobs(schema.admin, schema.table, filter)
+
+  test("deletes only the pending job of the key in its scope and task, and returns 0 when there is none", async () => {
+    const failed = await createFailedJob({ key: "k", scope: "a" })
+    await enqueue(schema.admin, schema.table, { task: "t", key: "k", scope: "a", now: T(12) })
+    only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(13) }))
+    const { id: pending } = await enqueue(schema.admin, schema.table, {
+      task: "t",
+      key: "k",
+      scope: "a",
+      now: T(14),
+    })
+    for (const o of [{ scope: "b" }, { task: "u" }, { key: "other" }]) {
+      await enqueue(schema.admin, schema.table, {
         task: "t",
         key: "k",
-        mode,
-        now: T(2),
+        scope: "a",
+        ...o,
+        now: T(14),
       })
-      const operator = await schema.connect()
-      let deletion: Promise<boolean> | undefined
-      const failed = fail(schema.database, schema.table, claim, {
-        error: "boom",
-        backoff: 30,
-        now: T(3),
-        pause: {
-          beforeCommit: async () => {
-            deletion = deleteJob(operator, schema.table, { id: pending })
-            await waitForLock(schema.admin, operator.pid)
-          },
-        },
-      })
-      expect(await failed).toBe(outcome)
-      expect(await deletion).toBe(deleted)
-      // With keep, fail deleted the pending job and returned its own; with replace, it deleted its own, and the delete took the pending one.
-      expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual(
-        mode === "keep" ? [[claim.id, "pending"]] : [],
+    }
+    const others = (await jobs(schema)).filter(r => r.id !== pending)
+    expect(others.map(r => r.state)).toEqual(["failed", "active", "pending", "pending", "pending"])
+    expect(others[0]!.id).toBe(failed)
+    const filter = { scope: "a", task: "t", key: "k" }
+    expect(await deletePending(filter)).toBe(1)
+    expect(await jobs(schema)).toEqual(others)
+    expect(await deletePending(filter)).toBe(0)
+  })
+
+  test("deletes the pending jobs of a scope, of a task, or of every scope, with and without a key, and leaves active and failed jobs", async () => {
+    await createFailedJob({ scope: "a" })
+    await enqueue(schema.admin, schema.table, { task: "t", scope: "a", now: T(12) })
+    only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(13) }))
+    const enqueueIn = (scope: string, task: string, key?: string) =>
+      enqueue(schema.admin, schema.table, { task, scope, key, now: T(14) })
+    await enqueueIn("a", "t", "k")
+    await enqueueIn("a", "t")
+    await enqueueIn("a", "u")
+    await enqueueIn("b", "t")
+    await enqueueIn("", "t")
+    const pending = async () =>
+      (await jobs(schema, `state = 'pending'`)).map(r => [r.scope, r.task])
+    expect(await deletePending({ scope: "a", task: "t" })).toBe(2)
+    expect(await pending()).toEqual([
+      ["a", "u"],
+      ["b", "t"],
+      ["", "t"],
+    ])
+    expect(await deletePending({ scope: "a" })).toBe(1)
+    expect(await deletePending({ task: "t" })).toBe(2)
+    expect(await pending()).toEqual([])
+    expect((await jobs(schema)).map(r => r.state)).toEqual(["failed", "active"])
+    expect(await deletePending({})).toBe(0)
+  })
+
+  test("waits for an uncommitted claim of the pending job, and then returns 0", async () => {
+    const { id } = await enqueue(schema.admin, schema.table, {
+      task: "t",
+      key: "k",
+      scope: "a",
+      now: T(0),
+    })
+    const worker = await schema.connect()
+    const operator = await schema.connect()
+    await query(worker, "begin")
+    only(await claimPlain(worker, schema.table, { ...W, limit: 1, now: T(1) }))
+    const deleted = deletePendingJobs(operator, schema.table, { scope: "a", task: "t", key: "k" })
+    await waitForLock(schema.admin, operator.pid)
+    await query(worker, "commit")
+    expect(await deleted).toBe(0)
+    expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[id, "active"]])
+  })
+
+  for (const { mode, outcome, deleted } of failRaces) {
+    const count = Number(deleted)
+    test(`waits for a fail transaction that holds the pending job of the key in mode ${mode}, and then returns ${count}`, async () => {
+      const { claimedJobId, ...race } = await deleteDuringFail(mode, operator =>
+        deletePendingJobs(operator, schema.table, { scope: "", task: "t", key: "k" }),
       )
+      expect(race).toEqual({ outcome, deleted: count, left: getFailRaceRows(mode, claimedJobId) })
     })
   }
 })
