@@ -59,3 +59,20 @@ A handler that ignores the signal keeps running: it delays the stop of its worke
 
 After `stop`, a handler that throws returns its job to pending at once without spending an attempt, also on its last attempt, and `onError` does not get the error.
 A `TerminalError` or a `RetryError` keeps its meaning also after the abort, and a handler that returns completes its job.
+
+## Wrap every handler
+
+To run every handler of a worker inside code of your own, such as to set the current tenant, a logging context, or a tracing span, or to skip the handler of a job, pass `runHandler` to `startWorker`.
+It gets the context of the handler with the name of the task and the payload of the job, and `run`, which runs the handler and returns its promise:
+
+```ts [src/worker/start.ts]
+import { logContext } from "../logger"
+
+const worker = startWorker(driver, {
+  manifest,
+  runHandler: ({ task, job }, run) => logContext.run({ task, jobId: job.id }, run),
+})
+```
+
+The worker settles the job by the outcome of `runHandler` as by the outcome of a handler, with the same rules after [an abort](#stop-long-handlers), so call `run` at most once and return or await its promise.
+A `runHandler` that resolves without calling `run` completes the job without running its handler, such as the job of a [tenant](../tasks/scopes) that no longer exists.

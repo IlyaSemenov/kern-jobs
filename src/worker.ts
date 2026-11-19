@@ -9,6 +9,7 @@ export type { AbortReason } from "./worker/events"
 export { HandlerAbort } from "./worker/heartbeat"
 export type { StopOptions, Worker, WorkerState } from "./worker/runtime"
 export { stopOnSignals, type StopOnSignalsOptions } from "./worker/shutdown"
+export type { RunHandler, RunHandlerContext } from "./worker/tasks"
 export {
   startWorker,
   type WorkerErrorInfo,

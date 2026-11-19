@@ -49,6 +49,26 @@ export default indexProductTask.implement(async ({ productId }, { job }) => {
 })
 ```
 
+If your application keeps the current tenant in a context, such as an `AsyncLocalStorage` that the code of a request reads, pass `runHandler` to the worker to run every handler in the context of the scope of its job:
+
+```ts [src/worker/start.ts]
+import { findTenant, withTenant } from "../tenants"
+
+const worker = startWorker(driver, {
+  manifest,
+  runHandler: async ({ job }, run) => {
+    // A job of a task that is not scoped.
+    if (job.scope === null) return await run()
+    const tenant = await findTenant(job.scope)
+    // The tenant was deleted: complete the job without running its handler.
+    if (!tenant) return
+    return await withTenant(tenant, run)
+  },
+})
+```
+
+[Wrap every handler](../workers/handlers#wrap-every-handler) tells how the outcome of `runHandler` settles the job.
+
 To enqueue more jobs of the same scope from a handler, pass `scope: job.scope` to `createJobs`.
 
 A worker does not run the handler for a job of a scoped task that has no scope, such as one enqueued before the task became scoped: it marks the job as failed at once, without retries.

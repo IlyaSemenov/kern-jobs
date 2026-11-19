@@ -16,9 +16,10 @@ Claiming, heartbeats, and the reaper run in rounds, each one at a time: the next
 - `lease`: the lease in seconds of tasks without one, 60 by default, in the [range of a lease](producer.md#task-definitions).
 - `pollInterval`: seconds between claim cycles while slots are free, 1 by default.
 - `reaper`: `false`, or `interval`, 5 seconds by default, and `limit`, 100 jobs per batch by default, of the [reaper](#reaper).
+- `runHandler`: the wrapper of every handler of [Tasks](#tasks).
 - `onError`: the receiver of [errors](#errors).
 
-It throws for a wrong option before it starts anything: `TypeError` for a value that is not a driver of kern-db, such as a client passed instead of its driver, for a manifest, a `schemaName` that [`checkSchemaName`](producer.md#schema) rejects, an id, a `reaper`, or an `onError` of a wrong type, and `RangeError` for a number outside its range.
+It throws for a wrong option before it starts anything: `TypeError` for a value that is not a driver of kern-db, such as a client passed instead of its driver, for a manifest, a `schemaName` that [`checkSchemaName`](producer.md#schema) rejects, an id, a `reaper`, a `runHandler`, or an `onError` of a wrong type, and `RangeError` for a number outside its range.
 An option given as `undefined` takes its default, so that a wrapper can pass its optional parameters through.
 
 An interval of a loop is above 0 and at most the longest delay of a timer, 2^31 − 1 milliseconds, in whole seconds, since a timer of a longer delay fires at once and the loop would run without a pause.
@@ -43,6 +44,11 @@ A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns
 - `findUnimplementedTasks(tasks, manifests)` returns the names of the tasks that none of the manifests implements, for a test of the application, since no worker can tell a task without an implementation from a task of another worker; it takes the tasks as the values of an object, such as the exports of a module, skips the values without a string `name` and a function `implement`, and names each task once.
 - `toWorkerTasks` checks the list of implementations and the [name](producer.md#task-definitions), lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
 - A job of a scoped task without a scope, such as one enqueued before the task became scoped, does not run its handler: the worker fails it with a `TerminalError`, so it becomes failed without retries, since its handler gets `job.scope` typed as a string.
+- `runHandler` of the worker runs every other job in place of its handler, such as in the context of the tenant of its scope: it gets the context of the handler with the task and the payload, and `run`, which runs the handler and returns its promise.
+  The outcome of `runHandler` is the outcome of the handler for its settlement, its report, and an interruption by `stop`, so one that resolves without calling `run` completes the job without running the handler, such as of a deleted tenant.
+  It must call `run` at most once and return or await its promise: each call runs the handler again in the same attempt, and a `runHandler` that calls `run` without returning or awaiting its promise lets the worker settle the job while the handler still runs.
+  `run` returns a promise also when the handler throws synchronously.
+  It is one function of the worker rather than a wrapper of each implementation, so that a manifest is shared by workers of different contexts and the application does not rebuild it.
 - A handler fails its job for good with a `TerminalError`, and retries it after a given delay with a `RetryError`, such as the one of a `Retry-After` header, so that the error is decided where the handler meets it, and the definition, which producers import, holds no error classes of handlers ([decision](../decisions/tasks/handler-errors.md)).
 - A backoff is a function of the number of the failed attempt that returns seconds; `exponentialBackoff` and `fixedBackoff` build common ones, and `defaultBackoff`, which `exponentialBackoff()` builds, waits 2 seconds after the first attempt, doubled after each next one, up to an hour.
 - A delay of a retry is in the same [range](producer.md#options) as a delay of an enqueue; the factories and `RetryError` throw `RangeError` for a value outside it.

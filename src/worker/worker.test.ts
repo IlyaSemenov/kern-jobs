@@ -1,5 +1,6 @@
-// Worker of an application: runs the jobs of its manifest in its schema, reports the errors of handlers and of the database to `onError`, or to the console without one, runs a reaper by default, becomes ready only once its schema is migrated and never on a pool of one connection, checks its options before it starts anything, and checks the options of its stop before it stops anything.
+// Worker of an application: runs the jobs of its manifest in its schema, through its `runHandler`, reports the errors of handlers and of the database to `onError`, or to the console without one, runs a reaper by default, becomes ready only once its schema is migrated and never on a pool of one connection, checks its options before it starts anything, and checks the options of its stop before it stops anything.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { hostname } from "node:os"
 
 import { type Driver, isQueryError, QueryError } from "kern-db"
@@ -103,6 +104,26 @@ describe("a running worker", () => {
     expect(rows.map(row => [row.id, row.state, row.attempts, row.last_error])).toEqual([
       [failed.id, "pending", 1, "the index is down"],
     ])
+  })
+
+  test("runs each handler through runHandler, such as in the context of the scope of its job, and completes a job whose handler runHandler skips", async () => {
+    const tenant = new AsyncLocalStorage<string>()
+    const indexed = Promise.withResolvers<string | undefined>()
+    const indexTenantProduct = defineTask("search.indexProduct", { scoped: true })
+    await enqueue(schema.admin, schema.table, { task: "search.indexProduct", scope: "deleted" })
+    await enqueue(schema.admin, schema.table, { task: "search.indexProduct", scope: "acme" })
+    const worker = start({
+      manifest: defineManifest({
+        tasks: [indexTenantProduct.implement(() => indexed.resolve(tenant.getStore()))],
+      }),
+      reaper: false,
+      runHandler: ({ job }, run) =>
+        job.scope === "deleted" ? undefined : tenant.run(`tenant ${job.scope}`, run),
+      onError: error => indexed.reject(error),
+    })
+    expect(await indexed.promise).toBe("tenant acme")
+    await worker.stop()
+    expect(await jobs(schema)).toEqual([])
   })
 
   test("without onError, writes an error to the console", async () => {
@@ -417,6 +438,7 @@ describe("options", () => {
       [{ reaper: { interval: 0 } }, RangeError, "reaper.interval"],
       [{ reaper: { interval: maxInterval + 1 } }, RangeError, "reaper.interval"],
       [{ reaper: { limit: 0 } }, RangeError, "reaper.limit must be an integer"],
+      [{ runHandler: "wrap" }, TypeError, "runHandler must be a function"],
       [{ onError: "log" }, TypeError, "onError must be a function"],
     ]
     for (const [option, type, message] of cases) {

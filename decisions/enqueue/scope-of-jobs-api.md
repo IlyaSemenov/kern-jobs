@@ -27,4 +27,4 @@ A `scope` that `withOptions` computes from the payload or an override passes put
 ## A wrapped definition in the application
 
 graphile-worker-tasks 2.5.0 wraps the definition of a tenant task in the application: its enqueue reads the tenant from the context of the application, stores it in the payload, prefixes the key and the queue with it, and its handler runs in the context of the tenant ([docs](https://github.com/IlyaSemenov/graphile-worker-tasks/blob/v2.5.0/README.md#wrapping-tasks)).
-It needs nothing of the queue, but the prefixes and the payload envelope are the work of the application, which the column `scope` of kern-jobs does, and the context of a handler stays a hook that kern-jobs lacks ([Backlog](../../backlog/scopes-in-the-application-context.md)).
+It needs nothing of the queue, but the prefixes and the payload envelope are the work of the application, which the column `scope` of kern-jobs does, and the `runHandler` of the worker sets the context of the tenant before it runs a handler ([Worker](../../architecture/worker.md#tasks)).

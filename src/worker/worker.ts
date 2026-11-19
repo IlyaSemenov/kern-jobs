@@ -14,7 +14,7 @@ import { isLease, type JobInfo, leaseRange } from "../task/task"
 import type { AbortReason, WorkerEvent } from "./events"
 import { intervalRange, isInterval, isTimerDelay, timerDelayRange } from "./loop"
 import { startRuntime, type StopOptions, type Worker } from "./runtime"
-import { toJobInfo, toWorkerTasks } from "./tasks"
+import { type RunHandler, toJobInfo, toWorkerTasks } from "./tasks"
 
 /** Options of the reaper of a worker. */
 export interface WorkerReaperOptions {
@@ -61,6 +61,10 @@ export interface WorkerOptions {
    * Reaper of the worker, which returns the jobs of expired leases, such as of a worker that died, to pending; `false` to run none, such as when another process runs one.
    */
   reaper?: false | WorkerReaperOptions | undefined
+  /**
+   * Wraps the handler of every job, such as to run it in the context of the tenant of its scope, as `RunHandler` describes.
+   */
+  runHandler?: RunHandler | undefined
   /**
    * Receives every error of the worker and of its handlers, synchronously, with what failed; an error that it throws is ignored.
    * By default, the worker writes them with `console.error`.
@@ -159,6 +163,7 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
     pollInterval = 1,
     reaper = {},
     onError = logError,
+    runHandler,
     schemaName = DEFAULT_SCHEMA,
   } = options
   checkDriver(driver)
@@ -166,7 +171,10 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
   if (typeof manifest !== "object" || manifest === null) {
     throw new TypeError("manifest must be an object, which defineManifest returns")
   }
-  const tasks = toWorkerTasks(manifest.tasks)
+  if (runHandler !== undefined && typeof runHandler !== "function") {
+    throw new TypeError("runHandler must be a function")
+  }
+  const tasks = toWorkerTasks(manifest.tasks, runHandler)
   const schedules = toWorkerSchedules(manifest.schedules)
   const table = createJobTable(schemaName)
   checkCount("concurrency", concurrency)

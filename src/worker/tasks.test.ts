@@ -1,4 +1,4 @@
-// Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, the lease and backoff of its task, and the check of the list; and a worker that runs them.
+// Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, through `runHandler`, the lease and backoff of its task, and the check of the list; and a worker that runs them.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { enqueue } from "../core/enqueue"
@@ -8,7 +8,7 @@ import { fixedBackoff } from "../task/backoff"
 import { TerminalError } from "../task/errors"
 import { defineTask, type HandlerContext } from "../task/task"
 
-import { toWorkerTasks } from "./tasks"
+import { type RunHandlerContext, toWorkerTasks } from "./tasks"
 import { recordEvents, startTestWorker, stopTestWorkers } from "./testing"
 
 const job: JobRow = {
@@ -78,12 +78,15 @@ describe("toWorkerTasks", () => {
     expect(scopes).toEqual(["tenant", null])
   })
 
-  test("throws a TerminalError for a job of a scoped task without a scope, without running its handler", () => {
+  test("throws a TerminalError for a job of a scoped task without a scope, without running its handler or runHandler", () => {
     let calls = 0
     const implementation = defineTask("search.indexProduct", { scoped: true }).implement(() => {
       calls++
     })
-    const task = toWorkerTasks([implementation])["search.indexProduct"]!
+    const task = toWorkerTasks([implementation], (_, run) => {
+      calls++
+      return run()
+    })["search.indexProduct"]!
     let error: unknown
     try {
       task.handler(job, { signal: new AbortController().signal })
@@ -95,6 +98,62 @@ describe("toWorkerTasks", () => {
     expect((error as Error).message).toBe(
       "task search.indexProduct is scoped, but its job has no scope",
     )
+    expect(calls).toBe(0)
+  })
+
+  test("runs the handler through runHandler, which gets the context of the handler, the task, and the payload, and decides the outcome", async () => {
+    const contexts: RunHandlerContext[] = []
+    const failure = new Error("the index is down")
+    const implementation = defineTask("search.indexProduct")
+      .withPayload<{ productId: string }>()
+      .implement((_, { job }) => {
+        if (job.attempt > 2) throw failure
+        return `indexed in ${job.scope}`
+      })
+    const task = toWorkerTasks([implementation], async (context, run) => {
+      contexts.push(context)
+      return `${await run()}, wrapped`
+    })["search.indexProduct"]!
+    const signal = new AbortController().signal
+    expect(await task.handler({ ...job, scope: "tenant" }, { signal })).toBe(
+      "indexed in tenant, wrapped",
+    )
+    expect(contexts).toEqual([
+      {
+        task: "search.indexProduct",
+        payload: { productId: "42" },
+        signal,
+        job: {
+          id: "1",
+          scope: "tenant",
+          attempt: 2,
+          maxAttempts: 5,
+          key: "product:42",
+          queue: "search",
+        },
+      },
+    ])
+    await expect(task.handler({ ...job, attempts: 3 }, { signal })).rejects.toBe(failure)
+  })
+
+  test("gives runHandler a run whose promise rejects also when the handler throws synchronously", async () => {
+    const failure = new Error("the index is down")
+    const implementation = defineTask("search.indexProduct").implement(() => {
+      throw failure
+    })
+    const task = toWorkerTasks([implementation], (_, run) => run().catch(error => error))[
+      "search.indexProduct"
+    ]!
+    expect(await task.handler(job, { signal: new AbortController().signal })).toBe(failure)
+  })
+
+  test("runs no handler when runHandler does not call run", async () => {
+    let calls = 0
+    const implementation = defineTask("search.indexProduct").implement(() => {
+      calls++
+    })
+    const task = toWorkerTasks([implementation], () => {})["search.indexProduct"]!
+    expect(await task.handler(job, { signal: new AbortController().signal })).toBeUndefined()
     expect(calls).toBe(0)
   })
 
