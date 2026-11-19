@@ -5,6 +5,7 @@
       "kern-jobs": ["../src"],
       "kern-jobs/db/*": ["../src/db/*"],
       "kern-jobs/migrations": ["../src/migrations.ts"],
+      "kern-jobs/testing": ["../src/testing.ts"],
       "kern-jobs/worker": ["../src/worker.ts"]
     }
   },

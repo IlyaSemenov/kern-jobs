@@ -33,6 +33,7 @@ When changing a project's version, recheck all its comparison items against the 
 - [Database clients](database-clients.md)
 - [Migrations](migrations.md)
 - [Administration](administration.md)
+- [Testing](testing.md)
 
 ## Scenarios to compare
 

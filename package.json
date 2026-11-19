@@ -22,6 +22,7 @@
     "./db/node-postgres": "./dist/db/node-postgres.mjs",
     "./db/postgres-js": "./dist/db/postgres-js.mjs",
     "./migrations": "./dist/migrations.mjs",
+    "./testing": "./dist/testing.mjs",
     "./worker": "./dist/worker.mjs",
     "./package.json": "./package.json"
   },

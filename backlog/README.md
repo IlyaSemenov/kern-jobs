@@ -7,7 +7,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 
 - [Worker events](worker-events.md): public events of the worker beside `onError`.
 - [Enqueue from SQL](enqueue-from-sql.md): a SQL function for migrations of the application.
-- [Testing helpers](testing-helpers.md): capturing enqueues and running handlers in tests.
+- [Testing helpers](testing-helpers.md): reading and running the pending jobs of a test in its transaction.
 - [Administration](administration.md): check a key, act on many jobs at once, and count jobs.
 - [Values in error messages](values-in-error-messages.md): a value that `String` cannot convert turns the documented error of a check into `TypeError`.
 

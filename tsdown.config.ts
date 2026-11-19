@@ -5,6 +5,7 @@ export default defineConfig({
     "src/index.ts",
     "src/migrations.ts",
     "src/worker.ts",
+    "src/testing.ts",
     "src/db/postgres-js.ts",
     "src/db/node-postgres.ts",
   ],

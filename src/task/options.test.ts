@@ -58,7 +58,7 @@ describe("toEnqueueParams", () => {
       payload: { id: 1 },
       key: "k",
       queue: "q",
-      mode: "replace",
+      mode: undefined,
       runAt: undefined,
       delay: 5,
       maxWait: null,

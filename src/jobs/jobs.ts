@@ -3,11 +3,13 @@ import {
   deleteFailedJobs,
   deleteJob,
   deletePendingJobs,
+  type FailedJobsFilter,
+  type PendingJobsFilter,
   retryFailedJob,
   type RetryResult,
 } from "../core/administration"
 import { checkStorableText, utf8Length } from "../core/db"
-import { enqueue, type EnqueueResult } from "../core/enqueue"
+import { enqueue, type EnqueueParams, type EnqueueResult } from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
 import { delayRange, isDelay } from "../task/delay"
@@ -116,6 +118,35 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
   const target = toJobsTarget(client)
   const { schemaName = DEFAULT_SCHEMA, scope } = options
   const table = createJobTable(schemaName)
+  return createJobsApi(
+    {
+      enqueue: params => enqueue(target(), table, params),
+      retry: params => retryFailedJob(target(), table, params),
+      delete: params => deleteJob(target(), table, params),
+      deletePending: filter => deletePendingJobs(target(), table, filter),
+      deleteFailed: filter => deleteFailedJobs(target(), table, filter),
+    },
+    scope,
+  )
+}
+
+/**
+ * Store of jobs under the jobs API: the SQL of the core for `createJobs`, or the memory of the test double of `kern-jobs/testing`.
+ * It takes parameters that the jobs API checked and whose scope it resolved: a string, the empty one for unscoped jobs, or `null` for every scope.
+ */
+export interface JobStore {
+  enqueue(params: EnqueueParams & { scope: string }): Promise<EnqueueResult>
+  retry(params: { id: string; scope: string | null }): Promise<RetryResult | null>
+  delete(params: { id: string; scope: string | null }): Promise<boolean>
+  deletePending(filter: PendingJobsFilter & { scope: string | null }): Promise<number>
+  deleteFailed(filter: FailedJobsFilter & { scope: string | null }): Promise<number>
+}
+
+/**
+ * Creates the jobs API over a store: it merges and checks the options of an enqueue, checks the arguments of administration, and resolves the scope of each call, before it calls the store.
+ * It throws the errors of `createJobs` for a scope of another kind.
+ */
+export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Jobs {
   if (typeof scope === "string") checkScope(scope)
   else if (scope != null && typeof scope !== "function" && scope !== ALL_SCOPES) {
     throw new TypeError("scope must be a string, a function that returns one, or ALL_SCOPES")
@@ -133,28 +164,21 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
           `Task ${task.name} is scoped: pass createJobs the scope of its jobs rather than ALL_SCOPES`,
         )
       }
-      params.scope = taskScope
-      return enqueue(target(), table, params)
+      return store.enqueue({ ...params, scope: taskScope })
     },
     async retry(id: string): Promise<RetryResult | null> {
       checkJobId(id)
-      const jobScope = getJobsScope(scope)
-      return retryFailedJob(target(), table, { id, scope: jobScope })
+      return store.retry({ id, scope: getJobsScope(scope) })
     },
     async delete(id: string): Promise<boolean> {
       checkJobId(id)
-      const jobScope = getJobsScope(scope)
-      return deleteJob(target(), table, { id, scope: jobScope })
+      return store.delete({ id, scope: getJobsScope(scope) })
     },
     async deletePending(...args: [] | [filter: DeletePendingFilter]): Promise<number> {
       // Only a call without an argument deletes the pending jobs of every task, so that an argument that names no task, such as `undefined`, does not.
-      if (args.length === 0) {
-        const jobScope = getJobsScope(scope)
-        return deletePendingJobs(target(), table, { scope: jobScope })
-      }
+      if (args.length === 0) return store.deletePending({ scope: getJobsScope(scope) })
       const { task, key } = parseDeletePendingFilter(args[0])
-      const jobScope = getTaskScope(task, scope)
-      return deletePendingJobs(target(), table, { scope: jobScope, task: task.name, key })
+      return store.deletePending({ scope: getTaskScope(task, scope), task: task.name, key })
     },
     async deleteFailed(...args: [] | [filter: DeleteFailedFilter]): Promise<number> {
       // Only a call without an argument deletes the failed jobs of every task at any age, so that an argument that names neither, such as `undefined`, does not.
@@ -163,7 +187,7 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
           ? { task: undefined, olderThan: undefined }
           : parseDeleteFailedFilter(args[0])
       const jobScope = task ? getTaskScope(task, scope) : getJobsScope(scope)
-      return deleteFailedJobs(target(), table, { scope: jobScope, task: task?.name, olderThan })
+      return store.deleteFailed({ scope: jobScope, task: task?.name, olderThan })
     },
   }
 }
@@ -262,7 +286,7 @@ function parseDeleteFailedFilter(filter: unknown): {
 /**
  * Returns the scope of the jobs of a task that the jobs API reaches: for a scoped task, that of `getJobsScope`, and throws `TypeError` when `createJobs` has no scope; for another task, the empty scope, without calling the function of the scope.
  */
-function getTaskScope(
+export function getTaskScope(
   task: { name: string; scoped?: boolean | undefined },
   scope: JobsOptions["scope"],
 ): string | null {
@@ -291,7 +315,7 @@ const maxScopeBytes = 128
 /**
  * Throws `TypeError` for a scope that is not storable text, and `RangeError` for an empty one, which the table stores for jobs without a scope, or one longer than 128 bytes in UTF-8.
  */
-function checkScope(scope: unknown): asserts scope is string {
+export function checkScope(scope: unknown): asserts scope is string {
   checkStorableText("scope", scope)
   if (scope === "" || utf8Length(scope) > maxScopeBytes) {
     throw new RangeError(`scope must be 1 to ${maxScopeBytes} bytes in UTF-8, got "${scope}"`)

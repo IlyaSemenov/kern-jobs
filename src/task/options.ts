@@ -200,7 +200,8 @@ export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions
     payload,
     key: o.key,
     queue: o.queue,
-    mode: keyMode,
+    // The mode stays absent when no layer gave it, like the other options; the core enqueues it as `replace`.
+    mode: o.keyMode,
     runAt: o.runAt,
     delay: o.delay,
     maxWait,

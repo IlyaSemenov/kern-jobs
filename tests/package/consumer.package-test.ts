@@ -111,6 +111,27 @@ describe.each(["node", "bun"])("%s", runtime => {
     })
   }, 60_000)
 
+  test("records an enqueue and runs a handler through kern-jobs/testing without loading kern-db, kern-migrations, or a client", () => {
+    expect(JSON.parse(run([runtime, "testing.ts"], producer, { timeout: 30_000 }))).toEqual({
+      calls: [
+        {
+          task: "search.indexProduct",
+          scope: "tenant",
+          payload: { productId: "1" },
+          options: { key: "product:1" },
+        },
+      ],
+      job: {
+        id: "1",
+        scope: "tenant",
+        attempt: 1,
+        maxAttempts: 25,
+        key: "product:1",
+        queue: null,
+      },
+    })
+  }, 60_000)
+
   test("enqueues a job through node-postgres and postgres.js, and runs the manifest and a handler of the worker", () => {
     expect(JSON.parse(run([runtime, "consumer.ts"], consumer, { timeout: 30_000 }))).toEqual({
       created: [true, false],

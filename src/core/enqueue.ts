@@ -1,8 +1,11 @@
 // Enqueue: one upsert by the partial unique index of pending keys.
 import { NOW } from "./db"
-import type { KeyMode } from "./job"
+import { encodePayload, type KeyMode } from "./job"
 import type { JobTable } from "./schema"
 import { queryValues, type ValuesTarget } from "./statement"
+
+/** Attempts of a job whose enqueue gives no `maxAttempts`. */
+export const DEFAULT_MAX_ATTEMPTS = 25
 
 /** Parameters of an enqueue. */
 export interface EnqueueParams {
@@ -12,7 +15,8 @@ export interface EnqueueParams {
   queue?: string | null
   /** Payload as JSON; an absent payload is stored as SQL NULL, which reads back as `undefined`. */
   payload?: unknown
-  mode?: KeyMode
+  /** Key mode; `replace` when omitted. */
+  mode?: KeyMode | undefined
   /** Run time in `replace` and `keep` modes, which takes precedence over `delay`. */
   runAt?: Date | null
   /**
@@ -86,12 +90,12 @@ export async function enqueue(
       o.scope ?? "",
       o.queue ?? null,
       o.key ?? null,
-      o.payload === undefined ? null : JSON.stringify(o.payload),
+      encodePayload(o.payload),
       mode,
       o.runAt ?? null,
       o.delay ?? 0,
       o.maxWait ?? null,
-      o.maxAttempts ?? 25,
+      o.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
       o.resetAttempts ?? false,
     ],
   )

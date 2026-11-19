@@ -1,6 +1,7 @@
 # Producer
 
 An application defines its tasks with `defineTask` and enqueues their jobs with `jobs.enqueue` of `createJobs`, through its own database client, through which `jobs` also retries and deletes jobs ([Administration](administration.md)).
+`createJobs` builds the jobs API with `createJobsApi` of `jobs/jobs.ts`, which merges and checks the options, checks the arguments, and resolves the scope of each call, over a store of the statements of the core; the [test double](testing.md) builds it over a store in memory.
 
 ## Task definitions
 
