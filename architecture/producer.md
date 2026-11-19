@@ -66,14 +66,14 @@ The user documentation connects these clients, which tests cover with commit and
 
 ## Scope
 
-The jobs of a task defined with `scoped: true` take their [scope](README.md#terms) from the `scope` of `createJobs`, a string or a function that returns one.
-The jobs of other tasks have the empty scope ([decision](../decisions/enqueue/scope-of-jobs-api.md)):
+The jobs of a task defined with `scoped: true` take their [scope](README.md#terms) from the `scope` of `createJobs`, a string or a function that returns one; its value `ALL_SCOPES` serves [administration](administration.md#scope) only.
+An enqueue of another task gives its job the empty scope ([decision](../decisions/enqueue/scope-of-jobs-api.md)):
 
 - Whether a task is scoped is its setting, beside `lease` and `backoff`, since the jobs of a task either each belong to a scope, such as of a tenant, or serve every scope, and the jobs API gives only the value, so that one jobs API of an application serves both kinds.
 - Each enqueue of a scoped task calls the function of the scope, such as one that reads the tenant of the current request, as each enqueue calls a function of the client.
   An enqueue of another task neither calls the function of the scope nor checks the scope.
-- `createJobs` throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, or a string that is not [storable text](README.md#terms), and `RangeError` for the empty string, which would enqueue into the empty scope, such as for a tenant whose id is empty, and for one longer than 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
-- An enqueue of a scoped task rejects with `TypeError` without a scope, and with the errors of `createJobs` for a value that the function returns, before it calls the client.
+- `createJobs` throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or a string that is not [storable text](README.md#terms), and `RangeError` for the empty string, which would enqueue into the empty scope, such as for a tenant whose id is empty, and for one longer than 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
+- An enqueue of a scoped task rejects with `TypeError` without a scope or with `ALL_SCOPES`, since a job belongs to one scope, and with the errors of `createJobs` for a value that the function returns, before it calls the client.
 - A handler gets the scope of its job as `job.scope`, and `null` for the empty scope ([Worker](worker.md#tasks)), so `createJobs` with `scope: job.scope` enqueues the scoped tasks into the scope of the job; the jobs of other tasks keep the empty scope.
 - The type parameter `Scope` of a task, of its implementation, and of the context of its handler is `string` for a task of `scoped: true`, which an overload of `defineTask` selects for the literal `true`, and `string | null` for other tasks, whose jobs may keep the scope of an earlier definition that was scoped.
 

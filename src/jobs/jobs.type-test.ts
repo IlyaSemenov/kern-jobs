@@ -9,7 +9,7 @@ import type { RetryResult } from "../core/administration"
 import type { EnqueueResult } from "../core/enqueue"
 import { defineTask } from "../task/task"
 
-import { createJobs } from "./jobs"
+import { ALL_SCOPES, createJobs } from "./jobs"
 
 declare const jobs: ReturnType<typeof createJobs>
 
@@ -33,12 +33,17 @@ describe("createJobs", () => {
     createJobs("postgres://localhost")
   })
 
-  test("takes a scope, a function that returns one, null, or undefined", () => {
+  test("takes a scope, a function that returns one, ALL_SCOPES, null, or undefined", () => {
     const pool = {} as pg.Pool
     createJobs(pool, { scope: "tenant" })
     createJobs(pool, { scope: () => "tenant" })
+    createJobs(pool, { scope: ALL_SCOPES })
     // @ts-expect-error The function returns a string.
     createJobs(pool, { scope: () => null })
+    // @ts-expect-error The function returns a string.
+    createJobs(pool, { scope: () => ALL_SCOPES })
+    // @ts-expect-error Only ALL_SCOPES is a symbol of a scope.
+    createJobs(pool, { scope: Symbol("kern-jobs.ALL_SCOPES") })
     createJobs(pool, { scope: null })
     createJobs(pool, { scope: undefined })
     // @ts-expect-error A scope is a string.

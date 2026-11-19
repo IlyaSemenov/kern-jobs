@@ -34,10 +34,10 @@ Delete deletes a `pending` or `failed` job, and returns whether it deleted it.
 
 `deletePending()`, `deletePending({ task })`, and `deletePending({ task, key })` delete the pending jobs of a scope, of a task, or of a key, and return their count, so that the application cancels jobs waiting to run, including retries, such as a reminder of a key, the jobs of a retired task, or the jobs of a deleted tenant, without reading their ids from the table.
 
-- With a task, the scope is that of an [enqueue](producer.md#scope) of the task: the scope of `jobs` for a scoped task, with its checks and errors, and the empty scope for another task, also when `jobs` has a scope.
+- With a scoped task, the scope is that of `jobs`, with the checks and errors of an [enqueue](producer.md#scope), or every scope with `ALL_SCOPES`, which an enqueue rejects, also with a key; with another task, it is the empty scope, also when `jobs` has a scope.
 - Without a filter, the scope is that of [retry and delete](#scope).
 - Only a call without an argument deletes the jobs of every task, and a filter must be an object of a task and, optionally, a key that is a string, without other own properties, so that a mistaken argument, such as `undefined`, a promise of a filter, a task, a misspelled field, or a key that is `undefined`, is rejected rather than widen the delete.
-- It deletes only pending rows, and with a key only the one that the unique index of pending keys keeps single; active and failed jobs stay.
+- It deletes only pending rows, and with a key at most one in each scope, which the unique index of pending keys keeps single per scope, task, and key; active and failed jobs stay.
 - The statement has a condition only for each given column, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
 - A pending job that a claim holds is deleted only if it is still pending after the claim ends, as with [delete](#delete), so a job that starts first is not deleted.
 - A pending job that a producer adds after the snapshot of the statement stays, as an enqueue after the delete does, and so does the job that a fail transaction returns to pending in place of the pending job of mode `keep` that it deletes while the statement waits for it ([Settlement](settlement.md#fail)): the count tells only the rows that the statement deleted.
@@ -45,6 +45,8 @@ Delete deletes a `pending` or `failed` job, and returns whether it deleted it.
 
 ## Scope
 
-With a `scope` of `createJobs`, retry, delete, and `deletePending` without a filter act only on the jobs of that scope, and resolve it at each call with the checks of an enqueue, so a function that throws or returns an invalid scope rejects the call before the client is called; without one, they act on the jobs of every scope ([decision](../decisions/administration/scope-limits-administration.md)).
+With a `scope` of `createJobs`, retry, delete, and `deletePending` without a filter act only on the jobs of that scope, and resolve it at each call with the checks of an enqueue, so a function that throws or returns an invalid scope rejects the call before the client is called.
+Without one, they act only on unscoped jobs, whose stored scope is empty, and with `ALL_SCOPES`, an exported symbol, on the jobs of every scope, so that a jobs API that misses its scope never reaches the jobs of a tenant ([decision](../decisions/administration/scope-limits-administration.md)).
 A job of another scope gives the result of no job.
-The jobs of tasks that are not scoped, whose scope is empty, are reached by id only through `jobs` without a scope, and by task or key also through `deletePending` of `jobs` with a scope.
+Retry, delete, and `deletePending` without a filter match the stored scope of a job, not the definition of its task, so a job without a scope of a task that became scoped is reached through `jobs` without a scope, and a job of a scope of a task that is no longer scoped, through `jobs` of that scope or with `ALL_SCOPES`.
+`ALL_SCOPES` is `Symbol.for("kern-jobs.ALL_SCOPES")`, so that two copies of the package in one process share it.

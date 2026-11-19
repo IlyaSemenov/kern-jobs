@@ -12,7 +12,7 @@ So change a task in steps that both releases handle, and take the next step only
   The keys of the new task are its own: its enqueues do not merge into the pending jobs of the old task, so a job of each can run for one key.
 - To remove a task, stop enqueuing it, and remove its implementation in a later release, once its jobs are gone.
   Instead of waiting, delete the jobs that remain: the [pending ones](../workers/failed-jobs#delete-pending-jobs) by the task, and the failed ones [by id](../workers/failed-jobs#delete-a-job).
-  For a scoped task, delete its pending jobs in each scope that has them.
+  For a scoped task, delete them through `jobs` with [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope), which reaches the jobs of every scope.
 
 To see which jobs of a task remain, query them by its name:
 

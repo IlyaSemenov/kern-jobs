@@ -62,6 +62,8 @@ To keep the pending jobs of a task from running, such as of a task that no worke
 await jobs.deletePending({ task: syncLegacyCrmTask })
 ```
 
+For a scoped task, this deletes its jobs in the scope of `jobs`; to delete them in every scope, call it through `jobs` with [`ALL_SCOPES`](#jobs-of-a-scope).
+
 To delete the pending jobs of every task of a [scope](../tasks/scopes), such as when you delete the data of a tenant, call it without a filter through `jobs` with that scope, in the [transaction](../database-clients#transactions-without-an-orm) that deletes the data:
 
 ```ts
@@ -71,7 +73,7 @@ await sql.begin(async tx => {
 })
 ```
 
-Through `jobs` without a scope, it deletes the pending jobs of every scope.
+Through `jobs` with [`ALL_SCOPES`](#jobs-of-a-scope), it deletes the pending jobs of every scope, and through `jobs` without a scope, only unscoped jobs.
 
 To delete the pending job of a key, pass the task and the key, as in [Cancel a pending job](../tasks/keys#cancel-a-pending-job).
 
@@ -91,6 +93,17 @@ It is the only statement on the table that may change it besides kern-jobs: keep
 ## Jobs of a scope
 
 Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and `deletePending` without a filter act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
-Through `jobs` without a scope, they act on the jobs of every scope: use such `jobs` for the jobs of the tasks that are not scoped, and in scripts that manage the jobs of every scope.
+Through `jobs` without a scope, they act only on [unscoped](../tasks/scopes) jobs.
 
-`deletePending` of a task deletes the jobs that an enqueue of the task through the same `jobs` would add: of the scope of `jobs` for a scoped task, and without a scope for another task.
+To manage the jobs of every scope, such as in a script of an operator, pass `ALL_SCOPES` as the scope:
+
+```ts
+import { ALL_SCOPES, createJobs } from "kern-jobs"
+
+const allJobs = createJobs(sql, { scope: ALL_SCOPES })
+
+await allJobs.retry(id)
+```
+
+`deletePending` of a scoped task deletes its jobs of the scope of `jobs`, or of every scope with `ALL_SCOPES`, and `deletePending` of another task deletes its unscoped jobs through any `jobs`.
+`jobs` with `ALL_SCOPES` deletes the jobs of a scoped task, but cannot enqueue them.

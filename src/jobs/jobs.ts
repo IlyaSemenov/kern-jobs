@@ -12,19 +12,25 @@ import { type JobsClient, toJobsTarget } from "../core/statement"
 import { type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
 import type { Task } from "../task/task"
 
+/**
+ * Value of the `scope` option of `createJobs` for code that manages the jobs of every scope, such as a script of an operator: `retry`, `delete`, and `deletePending` without a filter or of a scoped task act on the jobs of every scope, while `deletePending` of another task acts on its unscoped jobs, and an enqueue of a scoped task rejects, since a job belongs to one scope.
+ */
+export const ALL_SCOPES: unique symbol = Symbol.for("kern-jobs.ALL_SCOPES")
+
 /** Options of `createJobs`. */
 export interface JobsOptions {
   /** PostgreSQL schema of the tables of kern-jobs, which `migrateJobs` created; `kern_jobs` by default. */
   schemaName?: string | undefined
   /**
    * Scope of the jobs of the tasks defined with `scoped: true`, such as the id of a tenant, or a function that returns it, which each enqueue of such a task and each delete of its pending jobs calls, such as to read the tenant of the current request: a key merges and a queue serializes only the jobs of its scope.
-   * The jobs of other tasks have no scope, whatever this option.
-   * `retry`, `delete`, and `deletePending` without a filter act only on the jobs of this scope, and call its function each time; without a scope, they act on the jobs of every scope.
+   * An enqueue of another task adds an unscoped job, whatever this option.
+   * `retry`, `delete`, and `deletePending` without a filter act only on the jobs of this scope, and call its function each time; without a scope, they act only on unscoped jobs, whose scope is empty.
+   * With `ALL_SCOPES`, they and `deletePending` of a scoped task act on the jobs of every scope.
    */
-  scope?: string | (() => string) | null | undefined
+  scope?: string | (() => string) | typeof ALL_SCOPES | null | undefined
 }
 
-/** Pending jobs of a task that `deletePending` deletes: all of them, or the pending job of a key. */
+/** Pending jobs of a task that `deletePending` deletes: all of them, or those of a key, at most one in each scope. */
 export interface DeletePendingFilter {
   task: Task<string, unknown>
   key?: string
@@ -55,13 +61,14 @@ export interface Jobs {
    */
   delete(id: string): Promise<boolean>
   /**
-   * Deletes the pending jobs of every task of the scope of `createJobs`, or of every scope without one, each with the events that the enqueues of its key merged into it, and resolves to their count.
+   * Deletes the pending jobs of every task of the scope of `createJobs`, or of every scope with `ALL_SCOPES`, each with the events that the enqueues of its key merged into it, and resolves to their count.
+   * When `createJobs` has no scope, it deletes only unscoped jobs.
    * Jobs that run or failed stay, and so does a pending job that becomes visible after the statement of the delete takes its snapshot, such as from an enqueue or a failed attempt of a running job.
    */
   deletePending(): Promise<number>
   /**
-   * Deletes the pending jobs of a task, or the pending job of its key, each with the events that the enqueues of its key merged into it, and resolves to their count.
-   * The jobs of a task are those of the scope of `createJobs` for a scoped task, and those without a scope for another task.
+   * Deletes the pending jobs of a task, or those of its key, at most one in each scope, each with the events that the enqueues of its key merged into it, and resolves to their count.
+   * The jobs of a task are those of the scope of `createJobs` for a scoped task, or of every scope with `ALL_SCOPES`, and those without a scope for another task.
    * Jobs that run or failed stay, and so does a pending job that becomes visible after the statement of the delete takes its snapshot, such as from an enqueue or a failed attempt of a running job.
    */
   deletePending(filter: DeletePendingFilter): Promise<number>
@@ -75,8 +82,8 @@ export interface Jobs {
  * - a function that returns one of them, called at each call of the jobs API so that it runs in the transaction that the application holds at the call;
  * - a `Database` of kern-db or a `Db` of kern-orm, whose calls of the jobs API join its current transaction.
  * It throws `TypeError` for a client of another kind, and a call of the jobs API rejects with it for a function that returns one.
- * It throws `TypeError` for a scope other than a string, a function, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
- * `enqueue` and `deletePending` of a scoped task reject with `TypeError` without a scope.
+ * It throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
+ * `enqueue` and `deletePending` of a scoped task reject with `TypeError` without a scope, and `enqueue` of a scoped task also with `ALL_SCOPES`.
  * Each call that calls the function of the scope, `enqueue` and `deletePending` of a scoped task, `deletePending` without a filter, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
  * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, and for a task name or a key that is not a string, or has U+0000 or a lone surrogate, before it calls the client.
@@ -86,8 +93,8 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
   const { schemaName = DEFAULT_SCHEMA, scope } = options
   const table = createJobTable(schemaName)
   if (typeof scope === "string") checkScope(scope)
-  else if (scope != null && typeof scope !== "function") {
-    throw new TypeError("scope must be a string or a function that returns one")
+  else if (scope != null && typeof scope !== "function" && scope !== ALL_SCOPES) {
+    throw new TypeError("scope must be a string, a function that returns one, or ALL_SCOPES")
   }
   return {
     async enqueue(
@@ -96,23 +103,29 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult> {
       const params = getTaskEnqueueParams(task, payload, overrides)
-      params.scope = getTaskScope(task, scope)
+      const taskScope = getTaskScope(task, scope)
+      if (taskScope === null) {
+        throw new TypeError(
+          `Task ${task.name} is scoped: pass createJobs the scope of its jobs rather than ALL_SCOPES`,
+        )
+      }
+      params.scope = taskScope
       return enqueue(target(), table, params)
     },
     async retry(id: string): Promise<RetryResult | null> {
       checkJobId(id)
-      const jobScope = resolveScope(scope)
+      const jobScope = getJobsScope(scope)
       return retryFailedJob(target(), table, { id, scope: jobScope })
     },
     async delete(id: string): Promise<boolean> {
       checkJobId(id)
-      const jobScope = resolveScope(scope)
+      const jobScope = getJobsScope(scope)
       return deleteJob(target(), table, { id, scope: jobScope })
     },
     async deletePending(...args: [] | [filter: DeletePendingFilter]): Promise<number> {
       // Only a call without an argument deletes the pending jobs of every task, so that an argument that names no task, such as `undefined`, does not.
       if (args.length === 0) {
-        const jobScope = resolveScope(scope)
+        const jobScope = getJobsScope(scope)
         return deletePendingJobs(target(), table, { scope: jobScope })
       }
       const { name, scoped, key } = parseDeletePendingFilter(args[0])
@@ -170,22 +183,25 @@ function parseDeletePendingFilter(filter: unknown): {
 }
 
 /**
- * Returns the scope of the jobs of a task: for a scoped task, the scope of `createJobs`, which it resolves and checks, and throws `TypeError` when `createJobs` has none; for another task, the empty scope, without calling the function of the scope.
+ * Returns the scope of the jobs of a task that the jobs API reaches: for a scoped task, that of `getJobsScope`, and throws `TypeError` when `createJobs` has no scope; for another task, the empty scope, without calling the function of the scope.
  */
 function getTaskScope(
   task: { name: string; scoped?: boolean | undefined },
   scope: JobsOptions["scope"],
-): string {
+): string | null {
   if (task.scoped !== true) return ""
-  const value = resolveScope(scope)
-  if (value === null)
+  if (scope == null)
     throw new TypeError(`Task ${task.name} is scoped: pass its scope to createJobs`)
-  return value
+  return getJobsScope(scope)
 }
 
-/** Returns the scope of `createJobs`, or the result of its function, which it checks, or `null` without a scope. */
-function resolveScope(scope: JobsOptions["scope"]): string | null {
-  if (scope == null) return null
+/**
+ * Returns the scope of the jobs that the jobs API reaches: the scope of `createJobs`, or the result of its function, which it checks; the empty scope, of unscoped jobs, when `createJobs` has none; and `null`, every scope, for `ALL_SCOPES`.
+ */
+function getJobsScope(scope: JobsOptions["scope"]): string | null {
+  if (scope === ALL_SCOPES) return null
+  // Without a scope, only unscoped jobs, so that a jobs API that misses its scope never reaches the jobs of a tenant.
+  if (scope == null) return ""
   if (typeof scope === "string") return scope
   const value = scope()
   checkScope(value)

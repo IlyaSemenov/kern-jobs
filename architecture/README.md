@@ -20,7 +20,8 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - A task is a kind of work defined in code, such as sending an email; a job is one row of the table that a worker executes as a task.
 - A scope is a namespace of keys and queues, such as of a tenant: a key merges and a queue serializes only the jobs of its scope.
   It separates jobs logically within one table and one set of workers; it is neither a partition of the table, nor a quota, nor access control.
-  The jobs of a task defined with `scoped: true` take their scope from the producer, and the jobs of other tasks have the empty scope.
+  An enqueue of a task defined with `scoped: true` takes the scope from the producer, and an enqueue of another task gives its job the empty scope.
+  An unscoped job is a job whose scope is empty.
 - A key identifies the pending job of a task within a scope, such as `product:42`.
 - A queue serializes the jobs of a scope that name it.
 - A claim is the ownership of an active job by a worker, identified by a claim id.

@@ -67,7 +67,7 @@ Measurements come from single runs on one local machine without network, so they
 - [A retry keeps both jobs when a pending job of its key exists](administration/retry-keeps-both-jobs.md), in every key mode.
 - [A retry gives a full budget of attempts](administration/retry-resets-attempts.md), and no backoff.
 - [A retry updates the row in one statement on the client of the application](administration/retry-updates-the-row.md): an enqueue that adds a new pending job of the key at the same time can make it fail with `23505`.
-- [The scope of the jobs API limits retry and delete](administration/scope-limits-administration.md).
+- [The scope of the jobs API limits administration](administration/scope-limits-administration.md): without a scope, to unscoped jobs; `ALL_SCOPES` reaches every scope.
 
 ## Writing a decision
 

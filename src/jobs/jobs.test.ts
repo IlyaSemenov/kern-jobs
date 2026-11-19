@@ -18,7 +18,7 @@ import {
 } from "../core/testing"
 import { defineTask } from "../task/task"
 
-import { createJobs, type DeletePendingFilter, type JobsOptions } from "./jobs"
+import { ALL_SCOPES, createJobs, type DeletePendingFilter, type JobsOptions } from "./jobs"
 
 /** Client of an application whose enqueues follow the transaction that `transaction` holds. */
 interface Client {
@@ -411,13 +411,13 @@ describe("scope", () => {
       calls++
       return "a"
     }
-    for (const scope of ["a", tenant, null, undefined]) {
+    for (const scope of ["a", tenant, ALL_SCOPES, null, undefined] as JobsOptions["scope"][]) {
       await createJobs(pool, { schemaName: schema.name, scope }).enqueue(sendEmail, { to: "a" })
     }
-    expect([await scopes(), calls]).toEqual([["", "", "", ""], 0])
+    expect([await scopes(), calls]).toEqual([["", "", "", "", ""], 0])
   })
 
-  test("rejects an enqueue of a scoped task without a scope or with an invalid one that its function returns, before it calls the client", async () => {
+  test("rejects an enqueue of a scoped task without a scope, with ALL_SCOPES, or with an invalid one that its function returns, before it calls the client", async () => {
     let calls = 0
     const enqueueIn = (scope: JobsOptions["scope"]) => {
       const client = () => {
@@ -431,6 +431,11 @@ describe("scope", () => {
         new TypeError("Task search.indexProduct is scoped: pass its scope to createJobs"),
       )
     }
+    await expect(enqueueIn(ALL_SCOPES)).rejects.toThrow(
+      new TypeError(
+        "Task search.indexProduct is scoped: pass createJobs the scope of its jobs rather than ALL_SCOPES",
+      ),
+    )
     // As a JavaScript function returns it, past the types.
     await expect(enqueueIn(() => undefined as unknown as string)).rejects.toThrow("scope must be")
     await expect(enqueueIn(() => "")).rejects.toThrow(
@@ -439,12 +444,18 @@ describe("scope", () => {
     expect(calls).toBe(0)
   })
 
-  test("retries and deletes only the jobs of the scope of createJobs, a string or what its function returns at the call, and the jobs of every scope without one", async () => {
+  test("retries and deletes only the jobs of the scope of createJobs, a string or what its function returns at the call, the jobs of every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
     const enqueueIn = (scope: string) =>
       createJobs(pool, { schemaName: schema.name, scope }).enqueue(indexProduct)
     const { id: failed } = await enqueueIn("a")
     const { id: pending } = await enqueueIn("b")
     await markFailed(failed)
+    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    const { id: unscoped } = await withoutScope.enqueue(sendEmail, { to: "a" })
+    expect([await withoutScope.retry(failed), await withoutScope.delete(pending)]).toEqual([
+      null,
+      false,
+    ])
     let tenant = "b"
     const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
     expect([await jobs.retry(failed), await jobs.delete(failed)]).toEqual([null, false])
@@ -453,14 +464,20 @@ describe("scope", () => {
     expect(await createJobs(pool, { schemaName: schema.name, scope: "a" }).delete(pending)).toBe(
       false,
     )
-    const everyScope = createJobs(pool, { schemaName: schema.name })
+    expect([await jobs.delete(unscoped), await withoutScope.delete(unscoped)]).toEqual([
+      false,
+      true,
+    ])
+    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    await markFailed(failed)
+    expect(await everyScope.retry(failed)).toEqual({ retried: true })
     expect([await everyScope.delete(failed), await everyScope.delete(pending)]).toEqual([
       true,
       true,
     ])
   })
 
-  test("rejects a retry, a delete, and a delete of pending jobs without a task whose scope function throws or returns an invalid scope, before it calls the client", async () => {
+  test("rejects a retry, a delete, and a delete of pending jobs without a filter whose scope function throws or returns an invalid scope, also ALL_SCOPES, before it calls the client", async () => {
     let calls = 0
     const jobsIn = (scope: () => string) =>
       createJobs(
@@ -479,6 +496,10 @@ describe("scope", () => {
     await expect(outsideRequest.deletePending()).rejects.toBe(error)
     await expect(jobsIn(() => "").delete("1")).rejects.toThrow(
       new RangeError('scope must be 1 to 128 bytes in UTF-8, got ""'),
+    )
+    // As a JavaScript function returns it, past the types: ALL_SCOPES is an option of createJobs only.
+    await expect(jobsIn(() => ALL_SCOPES as unknown as string).delete("1")).rejects.toThrow(
+      "scope must be a string that has",
     )
     expect(calls).toBe(0)
   })
@@ -502,9 +523,9 @@ describe("scope", () => {
   })
 
   test("deletes the pending jobs of a task that is not scoped without calling the function of the scope", async () => {
-    const everyScope = createJobs(pool, { schemaName: schema.name })
-    await everyScope.enqueue(sendEmail, { to: "a" }, { key: "k" })
-    await everyScope.enqueue(sendEmail, { to: "a" })
+    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    await withoutScope.enqueue(sendEmail, { to: "a" }, { key: "k" })
+    await withoutScope.enqueue(sendEmail, { to: "a" })
     const outsideRequest = createJobs(pool, {
       schemaName: schema.name,
       scope: () => {
@@ -515,22 +536,44 @@ describe("scope", () => {
     expect(await outsideRequest.deletePending({ task: sendEmail })).toBe(1)
   })
 
-  test("deletes the pending jobs of every task in the scope of createJobs, a string or what its function returns at the call, and in every scope without one", async () => {
+  test("deletes the pending jobs of every task in the scope of createJobs, a string or what its function returns at the call, in every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
     const enqueueIn = (scope: string) =>
       createJobs(pool, { schemaName: schema.name, scope }).enqueue(indexProduct)
     await enqueueIn("a")
     await enqueueIn("b")
     await enqueueIn("b")
-    const everyScope = createJobs(pool, { schemaName: schema.name })
-    await everyScope.enqueue(sendEmail, { to: "a" })
+    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    await withoutScope.enqueue(sendEmail, { to: "a" })
+    await enqueueIn("c")
     let tenant = "b"
     const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
     expect(await jobs.deletePending()).toBe(2)
-    expect(await scopes()).toEqual(["a", ""])
-    tenant = "c"
+    expect(await scopes()).toEqual(["a", "", "c"])
+    tenant = "d"
     expect(await jobs.deletePending()).toBe(0)
+    expect(await withoutScope.deletePending()).toBe(1)
+    expect(await scopes()).toEqual(["a", "c"])
+    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
     expect(await everyScope.deletePending()).toBe(2)
     expect(await scopes()).toEqual([])
+  })
+
+  test("deletes the pending jobs of a scoped task, or of a key of it, in every scope with ALL_SCOPES, and of a task that is not scoped in the empty scope", async () => {
+    for (const scope of ["a", "b"]) {
+      const jobs = createJobs(pool, { schemaName: schema.name, scope })
+      await jobs.enqueue(indexProduct, undefined, { key: "k" })
+      await jobs.enqueue(indexProduct, undefined, { key: "other" })
+    }
+    await createJobs(pool, { schemaName: schema.name }).enqueue(sendEmail, { to: "a" })
+    // A job of an earlier definition of the task that was scoped.
+    await createJobs(pool, { schemaName: schema.name, scope: "a" }).enqueue(
+      defineTask("email.send", { scoped: true }),
+    )
+    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    expect(await everyScope.deletePending({ task: indexProduct, key: "k" })).toBe(2)
+    expect(await everyScope.deletePending({ task: indexProduct })).toBe(2)
+    expect(await everyScope.deletePending({ task: sendEmail })).toBe(1)
+    expect(await scopes()).toEqual(["a"])
   })
 
   test("rejects a delete of the pending jobs of a scoped task without a scope, before it calls the client", async () => {
@@ -550,13 +593,19 @@ describe("scope", () => {
     expect(calls).toBe(0)
   })
 
+  test("ALL_SCOPES is the registered symbol kern-jobs.ALL_SCOPES, so that every copy of the package takes it", () => {
+    expect<symbol>(ALL_SCOPES).toBe(Symbol.for("kern-jobs.ALL_SCOPES"))
+  })
+
   test("createJobs rejects a scope of a wrong type, one that is not storable text, an empty one, or one longer than 128 bytes in UTF-8", () => {
     const executor = { query: () => Promise.reject(new Error("a statement ran")) }
     const create = (scope: unknown) => () =>
       createJobs(executor, { scope } as unknown as JobsOptions)
-    expect(create(42)).toThrow(
-      new TypeError("scope must be a string or a function that returns one"),
-    )
+    for (const scope of [42, Symbol("kern-jobs.ALL_SCOPES")]) {
+      expect(create(scope)).toThrow(
+        new TypeError("scope must be a string, a function that returns one, or ALL_SCOPES"),
+      )
+    }
     expect(create("tenant\ud800")).toThrow("scope must be")
     expect(create("tenant\0")).toThrow("scope must be")
     for (const scope of ["", "é".repeat(64) + "a"]) {
