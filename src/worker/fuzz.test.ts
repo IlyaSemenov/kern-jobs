@@ -26,10 +26,14 @@ import { startRuntime, type Worker, type WorkerTask } from "./runtime"
 import { terminateBackends } from "./testing"
 
 let schema: TestSchema
+/** Stops the faults and the workers of the test and closes their connections before its schema is dropped, also after a test that failed or timed out. */
+let cleanUp: (() => Promise<void>) | undefined
 beforeEach(async () => {
   schema = await createTestSchema()
 })
 afterEach(async () => {
+  await cleanUp?.()
+  cleanUp = undefined
   await schema.dispose()
 })
 
@@ -37,6 +41,8 @@ const SEED = Number(process.env.FUZZ_SEED ?? 1)
 const ROUNDS = Number(process.env.FUZZ_ROUNDS ?? 20)
 const ROUND_MS = Number(process.env.FUZZ_ROUND_MS ?? 200)
 const LEASE = 0.5
+// A round fails with a report of its state when its drain takes longer.
+const DRAIN_MS = 30_000
 
 const KEYS = Array.from({ length: 9 }, (_, i) => `k${i}`)
 const modeOf = (key: string): KeyMode =>
@@ -80,6 +86,7 @@ test(`fuzz seed ${SEED}`, async () => {
     settleErrors: 0,
     heartbeatErrors: 0,
     reaped: 0,
+    lateClaims: 0,
     zombies: 0,
     jobOverlaps: 0,
     doubleCompletions: 0,
@@ -92,7 +99,8 @@ test(`fuzz seed ${SEED}`, async () => {
   const observed = new Map<string, { key: string | null; version: number; queue: string | null }>()
   const completedIds = new Set<string>()
   const doneQueueIds = new Set<string>()
-  let inFlight = 0
+  // Claims whose handler started and whose settlement has not ended; a late claim settles without a start, so a counter would go below zero.
+  const inFlight = new Set<string>()
   let unexpected: unknown
   let producing = false
   let faults = false
@@ -184,10 +192,10 @@ test(`fuzz seed ${SEED}`, async () => {
   const onEvent = (e: WorkerEvent) => {
     switch (e.type) {
       case "start":
-        inFlight++
+        inFlight.add(e.claim.claimId)
         return
       case "settled": {
-        inFlight--
+        inFlight.delete(e.claim.claimId)
         count(stats.outcomes, e.outcome)
         const o = observed.get(e.claim.claimId)
         if (e.outcome === "completed") {
@@ -214,6 +222,9 @@ test(`fuzz seed ${SEED}`, async () => {
         return
       case "reap":
         stats.reaped += e.jobs.length
+        return
+      case "late-claim":
+        stats.lateClaims++
         return
       case "error":
         // The worker ignores an error that onEvent throws, so the drain loop rethrows it.
@@ -286,6 +297,30 @@ test(`fuzz seed ${SEED}`, async () => {
       )
     )[0]!.n === "0"
 
+  /** Returns a JSON snapshot of the claims in flight, the states of the workers, and the unfinished jobs. */
+  const describeDrain = async () => {
+    const jobs = await query(
+      schema.admin,
+      `select id, state, task, queue, key, attempts, claim_id, locked_by,
+         run_at - now() as run_in, not_before - now() as not_before_in, lease_until - now() as lease_left
+       from ${schema.table.name} where state in ('pending', 'active') order by id`,
+    )
+    return JSON.stringify({ inFlight: [...inFlight], workers: workers.map(w => w.state), jobs })
+  }
+
+  // The workers get 3 seconds to stop and their connections to close, since a pool with a hung statement does not close, and the schema must still be dropped; the closing may then go on in the background.
+  cleanUp = async () => {
+    done = true
+    faults = false
+    await Promise.race([
+      (async () => {
+        await Promise.allSettled(workers.map(w => w.stop({ abortAfter: 0, timeout: 1 })))
+        await Promise.allSettled([...drivers.map(d => d.close()), ...proxies.map(p => p.close())])
+      })(),
+      sleep(3000),
+    ])
+  }
+
   // Each round: a burst of events with faults, then a drain without faults, then the check.
   // The last event of each key in a round has no later event to mask a lost trigger.
   for (let round = 0; round < ROUNDS; round++) {
@@ -296,8 +331,15 @@ test(`fuzz seed ${SEED}`, async () => {
     producing = false
     await Promise.all(producers)
     faults = false
-    while (!(inFlight === 0 && (await idle()))) {
+    const drainBy = performance.now() + DRAIN_MS
+    // The query runs before the look at `inFlight`: with no unfinished job, no further handler starts, so an empty `inFlight` then means that every `settled` has arrived.
+    while (!((await idle()) && inFlight.size === 0)) {
       if (unexpected) throw unexpected
+      if (performance.now() > drainBy) {
+        throw new Error(
+          `fuzz seed ${SEED}: round ${round} did not drain in ${DRAIN_MS} ms: ${await describeDrain()}`,
+        )
+      }
       await sleep(10)
     }
     const finals = await query(
@@ -312,9 +354,8 @@ test(`fuzz seed ${SEED}`, async () => {
   }
   done = true
   await injector
+  // The connections of the workers are closed by `cleanUp`.
   await Promise.all(workers.map(w => w.stop()))
-  await Promise.all(drivers.map(d => d.close()))
-  await Promise.all(proxies.map(p => p.close()))
   stats.queueDone = doneQueueIds.size
 
   console.log(`fuzz seed ${SEED}:`, JSON.stringify(stats))
