@@ -37,7 +37,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - `kern-jobs`, `index.ts`, gives what producers and workers share: the definitions of tasks and the enqueue.
 - `kern-jobs/testing`, `testing.ts`, gives what tests of an application run without a database or a worker: `createTestJobs` and `runJob`.
 - `kern-jobs/migrations`, `migrations.ts`, gives what creates and updates the schema before producers and workers start: `migrateJobs`.
-- `kern-jobs/worker`, `worker.ts`, gives what only a worker process runs: `startWorker`, `stopOnSignals`, the manifest and its check, the errors of handlers, the reason of an abort, and the type of a driver.
+- `kern-jobs/worker`, `worker.ts`, gives what only a worker process runs: `startWorker`, `waitForSignalAndStop` and `stopOnSignals`, the manifest and its check, the errors of handlers, the reason of an abort, and the type of a driver.
 - `kern-jobs/db/postgres-js` and `kern-jobs/db/node-postgres`, `db/postgres-js.ts` and `db/node-postgres.ts`, give the driver of kern-db over each client, which the worker and `migrateJobs` take.
 
 Importing `kern-jobs` or `kern-jobs/testing` loads neither kern-db, kern-migrations, nor a client library: these entries do not import them at runtime, and the statements of the main entry build their objects without `createStatement` of kern-db.

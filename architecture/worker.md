@@ -150,8 +150,17 @@ After it gives up:
 - A heartbeat sent before it gave up may still extend the leases of its claims once; nothing extends them after it.
 - A handler that still runs keeps running: the worker neither settles nor requeues its job, which returns after its lease, with its attempt spent, as after a crash.
 
-`stopOnSignals` of `worker/shutdown.ts` stops a worker at the first SIGTERM or SIGINT of the process, calls `close` of the application, and exits with 0, or with 1 after a failed stop or close, or once its `timeout`, 25 seconds by default, passes from the signal, since the worker cancels no query and cannot end a handler that ignores its abort.
-The other of the two signals joins the stop, and the same signal again ends the process by its default action, as `process.once` leaves it.
+`worker/shutdown.ts` stops a worker at the first SIGTERM or SIGINT of the process with its helpers:
+
+- `waitForSignalAndStop` stops it with its `abortAfter` and `timeout` and returns the outcome of `stop`; the application must run its own shutdown after it and exit the process.
+- `stopOnSignals` stops it with its `abortAfter`, then calls `close` of the application, and exits with 0, or with 1 after a failed stop or close, or once its `timeout`, 25 seconds by default, passes from the signal, since the worker cancels no query and cannot end a handler that ignores its abort.
+
+Both listen with `process.on` and treat a later signal of either kind by its time since the first ([decision](../decisions/worker/signal-window.md)):
+
+- Within 2 seconds by a monotonic clock, it is ignored, so that one Ctrl+C delivered twice, by the terminal and by a runner that forwards it, does not force the stop.
+- Later, while the stop runs, it calls `stop` with `force` and removes the listeners.
+- Once the stop has settled and the 2 seconds have passed, the listeners are removed, at the settlement or by a timer of the window, so that the next signal gets its default action unless the application listens for it; the timer is unreferenced, so that it keeps no process alive, and it waits again when it runs before the clock reaches the end of the window.
+- A `stop` that throws counts as a stop that rejects, and the caller gets the error of a force that throws or rejects, so that `stopOnSignals` still calls `close` and `waitForSignalAndStop` still settles.
 
 ## Errors
 
@@ -183,6 +192,8 @@ The events are not public: an application observes the worker through `onError`,
   A pause plus two round trips longer than S/2 can therefore abort handlers with `deadline`, and a lease of milliseconds makes the worker heartbeat without a pause.
   The documentation asks for a shortest lease more than twice the sum of the longest pause and two round trips.
 - Without `timeout`, `stop` waits for the handlers and the statements in flight, also for ones that never end.
+- The helpers of signals measure the window when the process handles a signal, not when it was sent, so synchronous work that blocks the event loop can move a repeat of one Ctrl+C past the window, where it forces a stop that still runs or ends the process.
+  A signal handled after the window once the stop has settled, before the timer of the window has run, only removes the listeners, and the next signal gets the default action.
 - A claim statement in flight when `stop` gives up may still commit its claims; their jobs spend an attempt and return after their leases.
 - An ordinary error that a handler throws after the abort `stop` counts as an interruption, also when it is a real failure: it is not reported, and the job runs again without spending its attempt, on every stop that interrupts it before it gives up, beyond `maxAttempts`.
 - After a claim statement whose connection broke, the server may have committed the claim; the job spends an attempt and returns after its lease.

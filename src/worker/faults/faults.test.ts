@@ -1,4 +1,4 @@
-// Process-level fault injection on worker processes of the runtime: SIGKILL at chosen points, connection cuts around COMMIT, heartbeat loss, zombie handlers, slots taken until settlement, stuck heartbeats, a long producer transaction, and the stop on SIGTERM and SIGINT.
+// Process-level fault injection on worker processes of the runtime: SIGKILL at chosen points, connection cuts around COMMIT, heartbeat loss, zombie handlers, slots taken until settlement, stuck heartbeats, a long producer transaction, and the stop on SIGTERM and SIGINT, forced by a later signal.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -18,6 +18,7 @@ import {
   sleep,
   type TestSchema,
 } from "../../core/testing"
+import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
 import type { WorkerConfig } from "./worker"
@@ -432,6 +433,28 @@ describe("stopOnSignals", () => {
     ])
     const r = (await row(job.id))!
     expect([r.state, r.attempts]).toEqual(["pending", 0])
+  }, 30_000)
+
+  test("a signal once 2 s have passed since the first forces the stop: the process calls close and exits with 1, and the job on its last attempt fails once its lease expires", async () => {
+    const job = await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const a = spawnWorker("a", {
+      handlerMs: 60_000,
+      shutdown: { abortAfter: 60, timeout: 10 },
+    })
+    await a.waitFor(e => e.ev === "start")
+    a.proc.kill("SIGTERM")
+    await a.waitFor(e => e.ev === "signal")
+    await sleep(signalWindow + 100)
+    a.proc.kill("SIGINT")
+    expect(await a.proc.exited).toBe(1)
+    expect(a.events().filter(e => ["signal", "close"].includes(e.ev))).toEqual([
+      expect.objectContaining({ ev: "signal", signal: "SIGTERM" }),
+      expect.objectContaining({ ev: "signal", signal: "SIGINT" }),
+      expect.objectContaining({ ev: "close" }),
+    ])
+    const r = (await row(job.id))!
+    expect([r.state, r.attempts]).toEqual(["active", 1])
+    expect((await reapUntil(job.id, r => r.state === "failed")).state).toBe("failed")
   }, 30_000)
 
   test("a handler that ignores the abort: the process exits with 1 at the timeout, and the job returns after its lease with the attempt spent", async () => {

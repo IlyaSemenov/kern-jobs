@@ -8,7 +8,7 @@ import postgres from "postgres"
 
 import { createPgJobs, enqueueIndex } from "./jobs.ts"
 import { purgeExpiredSessionsTask } from "./tasks.ts"
-import { startConsumerWorker } from "./worker/start.ts"
+import { startConsumerWorker, stopConsumerWorkerAtSignal } from "./worker/start.ts"
 
 const url = process.env.DATABASE_URL
 if (!url) throw new Error("Set DATABASE_URL to a PostgreSQL database")
@@ -25,7 +25,7 @@ function waitFor<T>(what: string, subscribe: (resolve: (value: T) => void) => vo
 }
 
 /**
- * Runs the worker on a driver until it completed one job and failed another, which waits for its retry, and then in a schema that is not migrated until it reports that.
+ * Runs the worker on a driver until it completed one job and failed another, which waits for its retry, stops it at a SIGTERM that the process sends itself, and then runs it in a schema that is not migrated until it reports that.
  */
 async function runOn(driver: Driver) {
   const schemaName = `package_${Math.random().toString(36).slice(2, 10)}`
@@ -50,7 +50,9 @@ async function runOn(driver: Driver) {
     while ((await rows()).length > 1 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 20))
     }
-    await worker.stop()
+    const stopped = stopConsumerWorkerAtSignal(worker)
+    process.kill(process.pid, "SIGTERM")
+    await stopped
 
     const missing = startConsumerWorker(driver, `${schemaName}_missing`, undefined, (error, info) =>
       report(info.source === "schema" ? error : info.source),

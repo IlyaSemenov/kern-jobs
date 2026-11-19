@@ -12,5 +12,10 @@ A job whose handler throws after the abort, other than a `TerminalError` or a `R
 
 At `timeout`, or at once with `force`, `stop` rejects and stops heartbeating; a handler that still runs keeps running, and its job returns after its lease with its attempt spent.
 
-- Graphile Worker, differs: it ignores further termination signals for 5 seconds, and a signal after that starts a forceful shutdown, which fails the jobs of the handlers that still run and kills the process ([source](https://github.com/graphile/worker/blob/4cda192c5df254392a1dff350e5d73f7d2c18a85/src/main.ts)).
 - pg-boss, differs: at its `timeout`, `stop` fails the jobs of the handlers that still run ([docs](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/ops.md#stopoptions)).
+
+## A second termination signal
+
+`waitForSignalAndStop` and `stopOnSignals` ignore another SIGTERM or SIGINT within 2 seconds of the first, and force the stop at a later one while the worker is still stopping: the handlers are aborted at once, the stop rejects, and a job whose handler ends after that returns after its lease with its attempt spent, or fails if that was its last attempt.
+
+- Graphile Worker, differs: it ignores further termination signals for 5 seconds, and a signal after that fails the jobs of the handlers that still run and kills the process ([source](https://github.com/graphile/worker/blob/4cda192c5df254392a1dff350e5d73f7d2c18a85/src/main.ts)).

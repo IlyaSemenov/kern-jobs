@@ -15,7 +15,12 @@ import {
   unimplementedTasks,
   weeklyCleanup,
 } from "../declarations/worker/manifest.js"
-import { describeAbort, describeJob, startConsumerWorker } from "../declarations/worker/start.js"
+import {
+  describeAbort,
+  describeJob,
+  startConsumerWorker,
+  stopConsumerWorkerAtSignal,
+} from "../declarations/worker/start.js"
 import indexProduct from "../declarations/worker/tasks/index-product.js"
 import purgeExpiredSessions from "../declarations/worker/tasks/purge-expired-sessions.js"
 
@@ -36,8 +41,9 @@ describe("emitted declarations of the worker", () => {
     expectTypeOf(describeJob).returns.toEqualTypeOf<JobInfo>()
   })
 
-  test("keep the worker, the reason of an abort, and the check of the manifest", () => {
+  test("keep the worker, the outcome of its stop at a signal, the reason of an abort, and the check of the manifest", () => {
     expectTypeOf(startConsumerWorker).returns.toEqualTypeOf<Worker>()
+    expectTypeOf(stopConsumerWorkerAtSignal).returns.toEqualTypeOf<Promise<void>>()
     expectTypeOf(describeAbort).returns.toEqualTypeOf<AbortReason | null>()
     expectTypeOf(unimplementedTasks).toEqualTypeOf<string[]>()
   })
