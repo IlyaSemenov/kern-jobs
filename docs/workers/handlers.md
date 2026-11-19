@@ -18,10 +18,12 @@ Keep the implementations and the manifest in modules that only the worker import
 A job normally runs once: its handler returns, and the worker deletes the job.
 A job runs again only after a failure or a stop:
 
-- Its handler threw: the [retry](./retries) runs the whole handler, also the steps that succeeded before the error.
-- Its worker [stopped](./stopping) and aborted the handler, which threw: the job runs again from the start.
+- Its handler threw, and the job [retries](./retries): the retry runs the whole handler, also the steps that succeeded before the error.
+- Its worker [stopped](./stopping) and aborted the handler, which threw, and the job returned to pending: the next run starts the handler from the beginning.
 - Its worker died, stopped without waiting for the handler, or lost the database for longer than the [lease](./leases), after the handler did its work and before the worker recorded the completion.
   No setting rules it out.
+
+After a failure or a stop, a job of a [key](../tasks/keys#while-a-job-of-the-key-runs) can instead merge with the pending job of its key, and the mode of the key decides which payload runs.
 
 So decide for each handler what a second run does.
 A handler that computes a result from the current state, such as one that indexes a product or renders a preview, can run again, but two of its runs can overlap or end out of order, such as the jobs of one [key](../tasks/keys), and the older run can then overwrite the result of the newer one.
@@ -29,7 +31,8 @@ Store such a result only if it comes from a newer version of the state than the 
 
 For a step that must not repeat:
 
-- A write to your database: commit it in one transaction with a record that the job did it, and check the record first.
+- A write to your database: in one transaction, first insert a record of the operation under a unique key, such as `payment:${paymentId}` from the payload, with `insert ... on conflict (key) do nothing returning 1`.
+  Make the write in the same transaction only if the insert returned a row, so that two runs that overlap cannot both make it.
 - A call of an external service, such as sending an email or charging a card: pass the service an idempotency key of the operation, such as `payment:${paymentId}` from the payload.
   Do not use `job.id` for it: a job keeps its id when an enqueue with its key replaces the payload between attempts, so the service would take the changed request for a repeat of the earlier one, and the ids of jobs repeat across databases.
   Without such a key, nothing rules out a repeat: a record written after the call is missing when the worker dies between them.
