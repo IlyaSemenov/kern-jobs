@@ -1,6 +1,6 @@
 # The scope of the jobs API limits administration
 
-With a `scope` of `createJobs`, retry, delete, and `deletePending` without a filter act only on the jobs of that scope, and call its function at each call.
+With a `scope` of `createJobs`, retry, delete, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of that scope, and call its function at each call.
 Without one, they act only on unscoped jobs, and with `ALL_SCOPES`, on the jobs of every scope:
 
 ```ts

@@ -1,9 +1,9 @@
-// Administration of jobs: a retry of a failed job with and without a pending job of its key, in a scope, and its races with producers, claims, other retries, fail, and the reaper; a delete of a pending or failed job in a scope, and its races with claims, producers, and fail; and a delete of the pending jobs of a scope, a task, or a key, and its races with claims and fail.
+// Administration of jobs: a retry of a failed job, and a delete of pending or failed jobs by id or by a filter, in a scope, and their races with producers, claims, retries, fail, and the reaper.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { waitForLock } from "kern-db/testing"
 
-import { deleteJob, deletePendingJobs, retryFailedJob } from "./administration"
+import { deleteFailedJobs, deleteJob, deletePendingJobs, retryFailedJob } from "./administration"
 import { claimCycle, claimPlain } from "./claim"
 import { enqueue, type EnqueueParams } from "./enqueue"
 import type { KeyMode } from "./job"
@@ -27,21 +27,27 @@ const W = { worker: "w1", tasks: ["t"] }
 const modeOptions = (mode: KeyMode): Partial<EnqueueParams> =>
   mode === "debounce" ? { mode, delay: 5, maxWait: 50 } : { mode }
 
-/** Enqueues a job of task `t` at T(0), claims it at T(10), fails it for good at T(11), and returns its id. */
-async function createFailedJob(o: Partial<EnqueueParams> = {}): Promise<string> {
+/**
+ * Enqueues a job, of task `t` unless `o` gives another, 11 seconds before `failedAt`, claims it a second before `failedAt`, fails it for good at `failedAt`, and returns its id.
+ * With the default `failedAt`, the job is enqueued at T(0), claimed at T(10), and fails at T(11).
+ */
+async function createFailedJob(o: Partial<EnqueueParams> = {}, failedAt = 11): Promise<string> {
   const { id } = await enqueue(schema.admin, schema.table, {
     task: "t",
     payload: "failed",
-    now: T(0),
+    now: T(failedAt - 11),
     ...o,
   })
-  const claim = only(await claimCycle(schema.admin, schema.table, { ...W, slots: 1, now: T(10) }))
+  const tasks = [o.task ?? "t"]
+  const claim = only(
+    await claimCycle(schema.admin, schema.table, { ...W, tasks, slots: 1, now: T(failedAt - 1) }),
+  )
   expect(
     await fail(schema.database, schema.table, claim, {
       error: "boom",
       terminal: true,
       backoff: 0,
-      now: T(11),
+      now: T(failedAt),
     }),
   ).toBe("failed")
   return id
@@ -529,4 +535,49 @@ describe("delete pending", () => {
       expect(race).toEqual({ outcome, deleted: count, left: getFailRaceRows(mode, claimedJobId) })
     })
   }
+})
+
+describe("delete failed", () => {
+  const deleteFailed = (filter: Parameters<typeof deleteFailedJobs>[2]) =>
+    deleteFailedJobs(schema.admin, schema.table, filter)
+
+  test("deletes the failed jobs of a scope, of a task, older than a threshold of age, or of every scope, and leaves pending and active jobs", async () => {
+    const oldOfTask = await createFailedJob({ scope: "a" })
+    const recentOfTask = await createFailedJob({ scope: "a" }, 100)
+    await createFailedJob({ scope: "a", task: "u" })
+    await createFailedJob({ scope: "b" })
+    await createFailedJob({ scope: "" })
+    await enqueue(schema.admin, schema.table, { task: "t", scope: "a", now: T(101) })
+    only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(102) }))
+    await enqueue(schema.admin, schema.table, { task: "t", scope: "a", now: T(103) })
+    const failedIds = async () => (await jobs(schema, `state = 'failed'`)).map(r => r.id)
+    const before = await failedIds()
+    // The bound of a delay: T(110) less 1e12 seconds would be before the earliest timestamp of PostgreSQL.
+    expect(await deleteFailed({ olderThan: 1e12, now: T(110) })).toBe(0)
+    // The job of the task that failed at T(11) is 89 seconds old at T(100), not older.
+    const byAge = { scope: "a", task: "t", now: T(100) }
+    expect(await deleteFailed({ ...byAge, olderThan: 89 })).toBe(0)
+    expect(await failedIds()).toEqual(before)
+    expect(await deleteFailed({ ...byAge, olderThan: 88 })).toBe(1)
+    expect(await failedIds()).toEqual(before.filter(id => id !== oldOfTask))
+    expect(await deleteFailed({ scope: "a", task: "t" })).toBe(1)
+    expect(await failedIds()).not.toContain(recentOfTask)
+    expect(await deleteFailed({ scope: "a" })).toBe(1)
+    expect(await deleteFailed({ scope: "" })).toBe(1)
+    expect(await deleteFailed({})).toBe(1)
+    expect((await jobs(schema)).map(r => r.state)).toEqual(["active", "pending"])
+  })
+
+  test("waits for an uncommitted retry of the failed job, and then returns 0", async () => {
+    const failed = await createFailedJob()
+    const operator1 = await schema.connect()
+    const operator2 = await schema.connect()
+    await query(operator1, "begin")
+    expect(await retryFailedJob(operator1, schema.table, { id: failed })).toEqual({ retried: true })
+    const deleted = deleteFailedJobs(operator2, schema.table, { task: "t" })
+    await waitForLock(schema.admin, operator2.pid)
+    await query(operator1, "commit")
+    expect(await deleted).toBe(0)
+    expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[failed, "pending"]])
+  })
 })

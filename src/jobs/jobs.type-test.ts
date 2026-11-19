@@ -114,3 +114,23 @@ describe("deletePending", () => {
     void jobs.deletePending({ key: "k" })
   })
 })
+
+describe("deleteFailed", () => {
+  test("takes no filter, or a task of any payload, scoped or not, olderThan, or both, and resolves to a count", () => {
+    expectTypeOf(jobs.deleteFailed()).toEqualTypeOf<Promise<number>>()
+    // @ts-expect-error A filter names a task, olderThan, or both.
+    void jobs.deleteFailed({})
+    // @ts-expect-error Only a call without an argument deletes the jobs of every task at any age.
+    void jobs.deleteFailed(undefined)
+    void jobs.deleteFailed({ task: sendEmail })
+    void jobs.deleteFailed({ olderThan: 60 })
+    void jobs.deleteFailed({
+      task: defineTask("search.indexProduct", { scoped: true }),
+      olderThan: 60,
+    })
+    // @ts-expect-error olderThan is a number of seconds.
+    void jobs.deleteFailed({ olderThan: "30 days" })
+    // @ts-expect-error A key belongs to deletePending.
+    void jobs.deleteFailed({ task: sendEmail, key: "k" })
+  })
+})

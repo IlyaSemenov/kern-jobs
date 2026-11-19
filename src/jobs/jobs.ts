@@ -1,5 +1,6 @@
 // Jobs API of an application: enqueues of its tasks, and retries and deletes of its jobs, through the database client of the application.
 import {
+  deleteFailedJobs,
   deleteJob,
   deletePendingJobs,
   retryFailedJob,
@@ -9,11 +10,14 @@ import { checkStorableText, utf8Length } from "../core/db"
 import { enqueue, type EnqueueResult } from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
+import { delayRange, isDelay } from "../task/delay"
 import { type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
 import type { Task } from "../task/task"
 
 /**
- * Value of the `scope` option of `createJobs` for code that manages the jobs of every scope, such as a script of an operator: `retry`, `delete`, and `deletePending` without a filter or of a scoped task act on the jobs of every scope, while `deletePending` of another task acts on its unscoped jobs, and an enqueue of a scoped task rejects, since a job belongs to one scope.
+ * Value of the `scope` option of `createJobs` for code that manages the jobs of every scope, such as a script of an operator.
+ * `retry` and `delete` act on the jobs of every scope, and so do `deletePending` and `deleteFailed` without a task or with a scoped task, while with another task they act on its unscoped jobs.
+ * An enqueue of a scoped task rejects, since a job belongs to one scope.
  */
 export const ALL_SCOPES: unique symbol = Symbol.for("kern-jobs.ALL_SCOPES")
 
@@ -22,10 +26,10 @@ export interface JobsOptions {
   /** PostgreSQL schema of the tables of kern-jobs, which `migrateJobs` created; `kern_jobs` by default. */
   schemaName?: string | undefined
   /**
-   * Scope of the jobs of the tasks defined with `scoped: true`, such as the id of a tenant, or a function that returns it, which each enqueue of such a task and each delete of its pending jobs calls, such as to read the tenant of the current request: a key merges and a queue serializes only the jobs of its scope.
+   * Scope of the jobs of the tasks defined with `scoped: true`, such as the id of a tenant, or a function that returns it, which each enqueue of such a task and each delete of its pending or failed jobs calls, such as to read the tenant of the current request: a key merges and a queue serializes only the jobs of its scope.
    * An enqueue of another task adds an unscoped job, whatever this option.
-   * `retry`, `delete`, and `deletePending` without a filter act only on the jobs of this scope, and call its function each time; without a scope, they act only on unscoped jobs, whose scope is empty.
-   * With `ALL_SCOPES`, they and `deletePending` of a scoped task act on the jobs of every scope.
+   * `retry`, `delete`, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of this scope, and call its function each time; without a scope, they act only on unscoped jobs, whose scope is empty.
+   * With `ALL_SCOPES`, they and `deletePending` and `deleteFailed` of a scoped task act on the jobs of every scope.
    */
   scope?: string | (() => string) | typeof ALL_SCOPES | null | undefined
 }
@@ -35,6 +39,13 @@ export interface DeletePendingFilter {
   task: Task<string, unknown>
   key?: string
 }
+
+/**
+ * Filter of the failed jobs that `deleteFailed` deletes, by task, by age, or both: with `olderThan`, it deletes only the jobs that failed more than that many seconds ago by the clock of the database.
+ */
+export type DeleteFailedFilter =
+  | { task: Task<string, unknown>; olderThan?: number }
+  | { task?: Task<string, unknown>; olderThan: number }
 
 /** Jobs API of an application, created with `createJobs`. */
 export interface Jobs {
@@ -72,6 +83,18 @@ export interface Jobs {
    * Jobs that run or failed stay, and so does a pending job that becomes visible after the statement of the delete takes its snapshot, such as from an enqueue or a failed attempt of a running job.
    */
   deletePending(filter: DeletePendingFilter): Promise<number>
+  /**
+   * Deletes the failed jobs of every task of the scope of `createJobs`, or of every scope with `ALL_SCOPES`, and resolves to their count.
+   * When `createJobs` has no scope, it deletes only unscoped jobs.
+   * Pending and running jobs stay, and so does a failed job that a retry returns to pending while the delete runs.
+   */
+  deleteFailed(): Promise<number>
+  /**
+   * Deletes the failed jobs that match the filter, by task, by age, or both, and resolves to their count; with `olderThan`, only the jobs that failed more than that many seconds ago by the clock of the database.
+   * The jobs of a task are those of the scope of `createJobs` for a scoped task, or of every scope with `ALL_SCOPES`, and those without a scope for another task; without a task, those of the scope of `createJobs`, as without a filter.
+   * Pending and running jobs stay, and so does a failed job that a retry returns to pending while the delete runs.
+   */
+  deleteFailed(filter: DeleteFailedFilter): Promise<number>
 }
 
 /**
@@ -83,10 +106,11 @@ export interface Jobs {
  * - a `Database` of kern-db or a `Db` of kern-orm, whose calls of the jobs API join its current transaction.
  * It throws `TypeError` for a client of another kind, and a call of the jobs API rejects with it for a function that returns one.
  * It throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
- * `enqueue` and `deletePending` of a scoped task reject with `TypeError` without a scope, and `enqueue` of a scoped task also with `ALL_SCOPES`.
- * Each call that calls the function of the scope, `enqueue` and `deletePending` of a scoped task, `deletePending` without a filter, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
+ * `enqueue`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and `enqueue` of a scoped task also with `ALL_SCOPES`.
+ * Each call that calls the function of the scope, `enqueue`, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
  * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, and for a task name or a key that is not a string, or has U+0000 or a lone surrogate, before it calls the client.
+ * `deleteFailed` rejects with `TypeError` for an argument that is not an object of a task, `olderThan`, or both, and for a task name that is not storable text, and with `RangeError` for `olderThan` that is not a number of seconds from 0 to 1e12, before it calls the client.
  */
 export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs {
   const target = toJobsTarget(client)
@@ -128,9 +152,18 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
         const jobScope = getJobsScope(scope)
         return deletePendingJobs(target(), table, { scope: jobScope })
       }
-      const { name, scoped, key } = parseDeletePendingFilter(args[0])
-      const jobScope = getTaskScope({ name, scoped }, scope)
-      return deletePendingJobs(target(), table, { scope: jobScope, task: name, key })
+      const { task, key } = parseDeletePendingFilter(args[0])
+      const jobScope = getTaskScope(task, scope)
+      return deletePendingJobs(target(), table, { scope: jobScope, task: task.name, key })
+    },
+    async deleteFailed(...args: [] | [filter: DeleteFailedFilter]): Promise<number> {
+      // Only a call without an argument deletes the failed jobs of every task at any age, so that an argument that names neither, such as `undefined`, does not.
+      const { task, olderThan } =
+        args.length === 0
+          ? { task: undefined, olderThan: undefined }
+          : parseDeleteFailedFilter(args[0])
+      const jobScope = task ? getTaskScope(task, scope) : getJobsScope(scope)
+      return deleteFailedJobs(target(), table, { scope: jobScope, task: task?.name, olderThan })
     },
   }
 }
@@ -148,38 +181,82 @@ function checkJobId(id: unknown): asserts id is string {
   }
 }
 
-/** Fields of a filter of `deletePending`. */
-const deletePendingFields: ReadonlySet<string> = new Set(["task", "key"])
-
-/**
- * Returns the name and `scoped` of the task of a filter of `deletePending`, and its key, each read once, so that the statement gets the values that were checked.
- * Throws `TypeError` for a filter that is not an object of a task and, optionally, its key, such as a task passed as the filter, a promise of a filter, or a misspelled field, since the delete would ignore what it does not know and widen to more jobs, and for a task name or a key that is not storable text.
- */
-function parseDeletePendingFilter(filter: unknown): {
+/** Task of a filter of a delete: its name and `scoped`, each read once. */
+interface FilterTask {
   name: string
   scoped: boolean | undefined
-  key: string | undefined
-} {
-  const error = new TypeError("deletePending takes a filter of a task and, optionally, its key")
+}
+
+/**
+ * Throws `error` for a filter of a delete that is not an object or has an own property other than `fields`, such as a task passed as the filter or a misspelled field, since the delete would ignore what it does not know and widen to more jobs.
+ * Each parser then reads the fields from the filter itself in its own order, each once, so that the statement gets the values that were checked.
+ */
+function checkFilterFields(
+  filter: unknown,
+  fields: readonly string[],
+  error: TypeError,
+): asserts filter is Record<string, unknown> {
   // Own keys of every kind, so that a symbol or a non-enumerable property is not ignored either.
   if (
     typeof filter !== "object" ||
     filter === null ||
-    Reflect.ownKeys(filter).some(
-      field => typeof field !== "string" || !deletePendingFields.has(field),
-    )
+    Reflect.ownKeys(filter).some(field => typeof field !== "string" || !fields.includes(field))
   ) {
     throw error
   }
-  const { task } = filter as { task?: unknown }
+}
+
+/**
+ * Returns the name and `scoped` of the task of a filter of a delete, each read once, and throws `error` for a task that is not an object, and `TypeError` for a name that is not storable text.
+ */
+function toFilterTask(task: unknown, error: TypeError): FilterTask {
   if (typeof task !== "object" || task === null) throw error
   const { name, scoped } = task as Task<string, unknown>
   checkStorableText("The name of a task", name)
+  return { name, scoped }
+}
+
+/**
+ * Returns the task of a filter of `deletePending` and its key, read in this order.
+ * Throws `TypeError` for a filter that is not an object of a task and, optionally, its key, and for a task name or a key that is not storable text.
+ */
+function parseDeletePendingFilter(filter: unknown): {
+  task: FilterTask
+  key: string | undefined
+} {
+  const error = new TypeError("deletePending takes a filter of a task and, optionally, its key")
+  checkFilterFields(filter, ["task", "key"], error)
+  const task = toFilterTask(filter.task, error)
   // A key that is given, also by a getter of a class, must be one, so that a missing value does not widen the delete to every key.
-  if (!("key" in filter)) return { name, scoped, key: undefined }
-  const { key } = filter as { key?: unknown }
+  if (!("key" in filter)) return { task, key: undefined }
+  const { key } = filter
   checkStorableText("key", key)
-  return { name, scoped, key }
+  return { task, key }
+}
+
+/**
+ * Returns the task of a filter of `deleteFailed` and its `olderThan`, read in this order.
+ * Throws `TypeError` for a filter that is not an object of a task, `olderThan`, or both, and for a task name that is not storable text, and `RangeError` for `olderThan` that is not a number of seconds from 0 to 1e12.
+ */
+function parseDeleteFailedFilter(filter: unknown): {
+  task: FilterTask | undefined
+  olderThan: number | undefined
+} {
+  const error = new TypeError("deleteFailed takes a filter of a task, olderThan, or both")
+  checkFilterFields(filter, ["task", "olderThan"], error)
+  // A field that is given, also by a getter of a class, must be valid, so that a missing value does not widen the delete; its presence is checked when the fields before it are read, as for `key` of `deletePending`.
+  const task = "task" in filter ? toFilterTask(filter.task, error) : undefined
+  if (!("olderThan" in filter)) {
+    // A filter names what it deletes, so that `{}` does not widen to every failed job as a call without an argument does.
+    if (task === undefined) throw error
+    return { task, olderThan: undefined }
+  }
+  const { olderThan } = filter
+  // The bound of a delay keeps the age within the intervals and timestamps of PostgreSQL.
+  if (!isDelay(olderThan)) {
+    throw new RangeError(`olderThan must be ${delayRange}, got ${String(olderThan)}`)
+  }
+  return { task, olderThan }
 }
 
 /**

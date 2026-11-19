@@ -18,7 +18,13 @@ import {
 } from "../core/testing"
 import { defineTask } from "../task/task"
 
-import { ALL_SCOPES, createJobs, type DeletePendingFilter, type JobsOptions } from "./jobs"
+import {
+  ALL_SCOPES,
+  createJobs,
+  type DeleteFailedFilter,
+  type DeletePendingFilter,
+  type JobsOptions,
+} from "./jobs"
 
 /** Client of an application whose enqueues follow the transaction that `transaction` holds. */
 interface Client {
@@ -139,13 +145,14 @@ afterEach(async () => {
   await schema.dispose()
 })
 
-/** Marks a pending job of the test schema failed, as a worker does after the last attempt of the job. */
-const markFailed = (id: string) =>
+/** Marks a pending job of the test schema failed `age` seconds ago, as a worker does after the last attempt of the job. */
+const markFailed = (id: string, age = 0) =>
   query(
     schema.admin,
-    `update ${schema.table.name} set state = 'failed', attempts = 1, last_error = 'boom', failed_at = now()
+    `update ${schema.table.name} set state = 'failed', attempts = 1, last_error = 'boom',
+       failed_at = now() - make_interval(secs => $2::text::float8)
      where id = $1::text::bigint`,
-    [id],
+    [id, age],
   )
 
 for (const [name, createClient] of clients) {
@@ -224,8 +231,10 @@ for (const [name, createClient] of clients) {
       const jobs = createTestJobs()
       const { id: retried } = await jobs.enqueue(sendEmail, { to: "a@example.com" })
       const { id: deleted } = await jobs.enqueue(sendEmail, { to: "b@example.com" })
+      const { id: old } = await jobs.enqueue(sendEmail, { to: "c@example.com" })
       await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(retried)
+      await markFailed(old, 60)
       const before = await jobRows(schema)
       const error = new Error("rollback")
       await expect(
@@ -233,6 +242,7 @@ for (const [name, createClient] of clients) {
           expect(await jobs.retry(retried)).toEqual({ retried: true })
           expect(await jobs.delete(deleted)).toBe(true)
           expect(await jobs.deletePending({ task: indexProduct })).toBe(1)
+          expect(await jobs.deleteFailed({ task: sendEmail, olderThan: 30 })).toBe(1)
           throw error
         }),
       ).rejects.toBe(error)
@@ -379,6 +389,136 @@ test("deletePending reads the name of the task once, so that the statement gets 
   expect(values).toEqual([["a", "search.indexProduct", "k"]])
 })
 
+test("deletePending reads the task and its name before the key", async () => {
+  const values: unknown[][] = []
+  const jobs = createJobs({
+    query: async (_text: string, params: unknown[]) => {
+      values.push(params)
+      return { rows: [["0"]] }
+    },
+  })
+  const filter: Record<string, unknown> = {
+    task: {
+      get name() {
+        filter.key = "k"
+        return "t"
+      },
+    },
+  }
+  await jobs.deletePending(filter as unknown as DeletePendingFilter)
+  expect(values).toEqual([["", "t", "k"]])
+  const invalidTask = {
+    task: null,
+    get key(): string {
+      throw new Error("the key was read")
+    },
+  }
+  await expect(jobs.deletePending(invalidTask as unknown as DeletePendingFilter)).rejects.toThrow(
+    new TypeError("deletePending takes a filter of a task and, optionally, its key"),
+  )
+})
+
+test("deleteFailed reads the task before it checks for olderThan", async () => {
+  const values: unknown[][] = []
+  const jobs = createJobs({
+    query: async (_text: string, params: unknown[]) => {
+      values.push(params)
+      return { rows: [["0"]] }
+    },
+  })
+  const filter: { task: typeof sendEmail; olderThan?: number } = {
+    get task() {
+      filter.olderThan = 3600
+      return sendEmail
+    },
+  }
+  await jobs.deleteFailed(filter)
+  expect(values).toEqual([[null, "3600", "", "email.send"]])
+})
+
+test("deleteFailed rejects an argument that is not an object of a task, olderThan, or both, and a task name that is not storable text, with TypeError, and olderThan that is not a number of seconds from 0 to 1e12 with RangeError, before it calls the client", async () => {
+  let calls = 0
+  const jobs = createJobs(() => {
+    calls++
+    return { query: () => Promise.reject(new Error("a statement ran")) }
+  })
+  await expect(jobs.deleteFailed({ task: { ...sendEmail, name: "t\ud800" } })).rejects.toThrow(
+    "The name of a task must be a string that has",
+  )
+  // An explicit undefined too, which would otherwise widen the delete to every age.
+  for (const olderThan of [undefined, null, "60", -1, NaN, Infinity, 1e12 + 1]) {
+    await expect(
+      jobs.deleteFailed({ task: sendEmail, olderThan: olderThan as number }),
+    ).rejects.toThrow(
+      new RangeError(
+        `olderThan must be a number of seconds from 0 to 1e12, got ${String(olderThan)}`,
+      ),
+    )
+  }
+  // As JavaScript passes them, past the types: each would otherwise delete more jobs than it names.
+  for (const filter of [
+    undefined,
+    sendEmail,
+    60,
+    null,
+    [],
+    {},
+    { task: undefined },
+    { task: "email.send" },
+    { scope: "a" },
+    { olderThan: 60, before: 60 },
+    Object.create({ scope: "a" }),
+    { [Symbol("olderThan")]: 60 },
+    Object.defineProperty({ olderThan: 60 }, "scope", { value: "a" }),
+    Promise.resolve({ olderThan: 60 }),
+  ]) {
+    await expect(jobs.deleteFailed(filter as DeleteFailedFilter)).rejects.toThrow(
+      new TypeError("deleteFailed takes a filter of a task, olderThan, or both"),
+    )
+  }
+  // A field that only the prototype of every object has is not a field of a filter without a prototype.
+  Object.defineProperty(Object.prototype, "olderThan", { value: 0, configurable: true })
+  try {
+    await expect(jobs.deleteFailed(Object.create(null))).rejects.toThrow(
+      new TypeError("deleteFailed takes a filter of a task, olderThan, or both"),
+    )
+  } finally {
+    delete (Object.prototype as { olderThan?: unknown }).olderThan
+  }
+  expect(calls).toBe(0)
+})
+
+test("deleteFailed takes a filter of another realm, with a null prototype, or with inherited getters, each read once", async () => {
+  const values: unknown[][] = []
+  const jobs = createJobs({
+    query: async (_text: string, params: unknown[]) => {
+      values.push(params)
+      return { rows: [["0"]] }
+    },
+  })
+  await jobs.deleteFailed(runInNewContext("({ olderThan: 60 })"))
+  await jobs.deleteFailed(Object.assign(Object.create(null), { task: sendEmail }))
+  const reads = { task: 0, olderThan: 0 }
+  await jobs.deleteFailed(
+    new (class {
+      get task() {
+        reads.task++
+        return sendEmail
+      }
+      get olderThan() {
+        reads.olderThan++
+        return 0.5
+      }
+    })(),
+  )
+  expect(values).toEqual([
+    [null, "60", ""],
+    ["", "email.send"],
+    [null, "0.5", "", "email.send"],
+  ])
+  expect(reads).toEqual({ task: 1, olderThan: 1 })
+})
+
 describe("scope", () => {
   let pool: pg.Pool
   beforeEach(() => {
@@ -477,7 +617,7 @@ describe("scope", () => {
     ])
   })
 
-  test("rejects a retry, a delete, and a delete of pending jobs without a filter whose scope function throws or returns an invalid scope, also ALL_SCOPES, before it calls the client", async () => {
+  test("rejects a retry, a delete, and a delete of pending or failed jobs without a task whose scope function throws or returns an invalid scope, also ALL_SCOPES, before it calls the client", async () => {
     let calls = 0
     const jobsIn = (scope: () => string) =>
       createJobs(
@@ -494,6 +634,8 @@ describe("scope", () => {
     await expect(outsideRequest.retry("1")).rejects.toBe(error)
     await expect(outsideRequest.delete("1")).rejects.toBe(error)
     await expect(outsideRequest.deletePending()).rejects.toBe(error)
+    await expect(outsideRequest.deleteFailed()).rejects.toBe(error)
+    await expect(outsideRequest.deleteFailed({ olderThan: 0 })).rejects.toBe(error)
     await expect(jobsIn(() => "").delete("1")).rejects.toThrow(
       new RangeError('scope must be 1 to 128 bytes in UTF-8, got ""'),
     )
@@ -576,7 +718,52 @@ describe("scope", () => {
     expect(await scopes()).toEqual(["a"])
   })
 
-  test("rejects a delete of the pending jobs of a scoped task without a scope, before it calls the client", async () => {
+  test("deletes the failed jobs of every task in the scope of createJobs, a string or what its function returns at the call, in every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
+    const failIn = async (scope: string, age = 0) => {
+      const { id } = await createJobs(pool, { schemaName: schema.name, scope }).enqueue(
+        indexProduct,
+      )
+      await markFailed(id, age)
+    }
+    await failIn("a")
+    await failIn("b", 60)
+    await failIn("b")
+    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    await markFailed((await withoutScope.enqueue(sendEmail, { to: "a" })).id)
+    await failIn("c")
+    let tenant = "b"
+    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    expect(await jobs.deleteFailed({ olderThan: 30 })).toBe(1)
+    expect(await jobs.deleteFailed()).toBe(1)
+    expect(await scopes()).toEqual(["a", "", "c"])
+    tenant = "d"
+    expect(await jobs.deleteFailed()).toBe(0)
+    expect(await withoutScope.deleteFailed()).toBe(1)
+    expect(await scopes()).toEqual(["a", "c"])
+    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    expect(await everyScope.deleteFailed()).toBe(2)
+    expect(await scopes()).toEqual([])
+  })
+
+  test("deletes the failed jobs of a scoped task in the scope of createJobs or in every scope with ALL_SCOPES, and of a task that is not scoped in the empty scope without calling the function of the scope", async () => {
+    const jobsIn = (scope?: JobsOptions["scope"]) =>
+      createJobs(pool, { schemaName: schema.name, scope })
+    for (const scope of ["a", "b"]) await markFailed((await jobsIn(scope).enqueue(indexProduct)).id)
+    await markFailed((await jobsIn().enqueue(sendEmail, { to: "a" })).id)
+    // A job of an earlier definition of the task that was scoped.
+    await markFailed((await jobsIn("a").enqueue(defineTask("email.send", { scoped: true }))).id)
+    const outsideRequest = jobsIn(() => {
+      throw new Error("no request")
+    })
+    expect(await outsideRequest.deleteFailed({ task: sendEmail })).toBe(1)
+    expect(await jobsIn("b").deleteFailed({ task: indexProduct })).toBe(1)
+    const everyScope = jobsIn(ALL_SCOPES)
+    expect(await everyScope.deleteFailed({ task: indexProduct })).toBe(1)
+    expect(await everyScope.deleteFailed({ task: sendEmail })).toBe(0)
+    expect(await scopes()).toEqual(["a"])
+  })
+
+  test("rejects a delete of the pending or failed jobs of a scoped task without a scope, before it calls the client", async () => {
     let calls = 0
     const jobs = createJobs(
       () => {
@@ -585,10 +772,12 @@ describe("scope", () => {
       },
       { schemaName: schema.name },
     )
+    const error = new TypeError("Task search.indexProduct is scoped: pass its scope to createJobs")
     for (const filter of [{ task: indexProduct }, { task: indexProduct, key: "k" }]) {
-      await expect(jobs.deletePending(filter)).rejects.toThrow(
-        new TypeError("Task search.indexProduct is scoped: pass its scope to createJobs"),
-      )
+      await expect(jobs.deletePending(filter)).rejects.toThrow(error)
+    }
+    for (const filter of [{ task: indexProduct }, { task: indexProduct, olderThan: 0 }]) {
+      await expect(jobs.deleteFailed(filter)).rejects.toThrow(error)
     }
     expect(calls).toBe(0)
   })

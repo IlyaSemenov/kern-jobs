@@ -83,4 +83,4 @@ A job of a [queue](../tasks/queues) also waits for the jobs before it in its que
 A worker deletes a job when it completes, so the table does not count completed jobs.
 To count the errors of handlers as they happen, count the `handler` reports of [`onError`](#report-errors).
 
-Read the table by your queries, retry and delete jobs through [`jobs`](./failed-jobs), and delete [old failed jobs](./failed-jobs#delete-old-failed-jobs) only by the statement that it shows: the worker relies on the rows that it and the enqueue write.
+Read the table by your queries, but retry and delete jobs, also [old failed jobs](./failed-jobs#delete-failed-jobs), only through [`jobs`](./failed-jobs): the worker relies on the rows that it and the enqueue write.

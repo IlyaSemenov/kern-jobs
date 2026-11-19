@@ -27,7 +27,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - A claim is the ownership of an active job by a worker, identified by a claim id.
 - A lease is the time until which the reaper leaves a claimed job to its worker.
 - Settlement ends a claim: complete deletes the job, and fail retries it, merges it with the pending job of its key, or records it as failed.
-- Administration is what the application does with existing jobs: it retries a failed job and deletes a pending or failed one by its id, and deletes the pending jobs of a scope, a task, or a key.
+- Administration is what the application does with existing jobs: it retries a failed job, and deletes pending or failed jobs by id or by a filter.
 - Storable text is a string that has neither U+0000 nor a lone surrogate.
   PostgreSQL rejects U+0000 in text, and encoding as UTF-8 replaces a lone surrogate with U+FFFD, so two different strings would become one value, such as two keys that share a pending job.
   The API rejects a name, scope, key, queue, or ID of the application that is not storable text before a statement uses it.
@@ -51,7 +51,7 @@ Module paths are relative to `src/`.
 - [Enqueue](enqueue.md): key modes and debounce; `core/enqueue.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `jobs/`.
 - [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/`.
-- [Administration](administration.md): retry of failed jobs, delete of pending or failed ones, and delete of the pending jobs of a scope, a task, or a key by the application; `core/administration.ts`.
+- [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `core/administration.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `core/claim.ts`.
 - [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `core/settlement.ts`.
 - [Leases](leases.md): heartbeat, the reaper, and fencing; `core/lease.ts`.

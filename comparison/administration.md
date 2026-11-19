@@ -25,6 +25,15 @@ The retry changes neither job and reports the pending job, so that the operator 
 - Graphile Worker, differs: `remove_job` deletes the job of a key that no worker holds or whose lock is older than four hours, also one that failed for good, and a job locked more recently loses its key and its remaining attempts while its handler runs on ([source](https://github.com/graphile/worker/blob/v0.18.0/sql/000018.sql#L177-L206)).
 - graphile-worker-orchid, differs: `removeJob` calls `remove_job` of Graphile Worker with the key ([source](https://github.com/IlyaSemenov/graphile-worker-orchid/blob/v2.5.1/src/utils/removeJob.ts#L9-L23)).
 
+## Deleting failed jobs in bulk
+
+`deleteFailed` deletes the failed jobs of a scope, filtered by task, by age, or both, when the application calls it; kern-jobs deletes no failed job on its own.
+
+- Graphile Worker, differs: its cleanup with the task `DELETE_PERMAFAILED_JOBS` deletes every job that failed for good, whatever its age ([source](https://github.com/graphile/worker/blob/v0.18.0/src/cleanup.ts#L35-L41)).
+- pg-boss, differs: its maintenance deletes a failed job `deleteAfterSeconds` after it failed, when that option is positive ([source](https://github.com/timgit/pg-boss/blob/12.38.1/src/plans.ts#L4015-L4023)).
+- BullMQ, same: `clean` deletes the failed jobs older than a grace period when the application calls it ([source](https://github.com/taskforcesh/bullmq/blob/v6.7.5/src/classes/queue.ts#L780-L843)).
+- Sidekiq, differs: each time a job of a worker dies for good and enters the dead set, it drops the dead jobs beyond `dead_max_jobs` or older than `dead_timeout_in_seconds`, by default 10,000 and 180 days ([source](https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/job_retry.rb#L284-L292), [source](https://github.com/sidekiq/sidekiq/blob/v8.1.7/lib/sidekiq/config.rb#L35-L36)).
+
 ## Deleting a running job
 
 A delete leaves a running job as it is, and its handler runs on.

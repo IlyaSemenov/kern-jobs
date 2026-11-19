@@ -11,7 +11,7 @@ So change a task in steps that both releases handle, and take the next step only
   Keep the implementation of the old task in the manifest until its jobs are gone: a worker takes only the jobs of the tasks of its manifest, so the jobs of a task that no worker implements stay pending without an error.
   The keys of the new task are its own: its enqueues do not merge into the pending jobs of the old task, so a job of each can run for one key.
 - To remove a task, stop enqueuing it, and remove its implementation in a later release, once its jobs are gone.
-  Instead of waiting, delete the jobs that remain: the [pending ones](../workers/failed-jobs#delete-pending-jobs) by the task, and the failed ones [by id](../workers/failed-jobs#delete-a-job).
+  Instead of waiting, delete the jobs that remain by the task: the [pending ones](../workers/failed-jobs#delete-pending-jobs) and the [failed ones](../workers/failed-jobs#delete-failed-jobs).
   For a scoped task, delete them through `jobs` with [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope), which reaches the jobs of every scope.
 
 To see which jobs of a task remain, query them by its name:

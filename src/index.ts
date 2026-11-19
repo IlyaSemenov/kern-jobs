@@ -11,6 +11,7 @@ export type {
 export {
   ALL_SCOPES,
   createJobs,
+  type DeleteFailedFilter,
   type DeletePendingFilter,
   type Jobs,
   type JobsOptions,

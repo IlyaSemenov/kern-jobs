@@ -22,7 +22,7 @@ export const sql = postgres(process.env.DATABASE_URL!)
 export const jobs = createJobs(sql, { scope: () => currentTenantId() })
 ```
 
-For a scoped task, both `jobs.enqueue` and [`jobs.deletePending`](../workers/failed-jobs#delete-pending-jobs) resolve the scope on every call.
+For a scoped task, `jobs.enqueue`, [`jobs.deletePending`](../workers/failed-jobs#delete-pending-jobs), and [`jobs.deleteFailed`](../workers/failed-jobs#delete-failed-jobs) resolve the scope on every call.
 During a request of a tenant, enqueue the task as usual:
 
 ```ts

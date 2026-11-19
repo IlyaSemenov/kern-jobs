@@ -1,7 +1,7 @@
-// Administration of jobs by the application: retry of a failed job, delete of a pending or failed one, and delete of the pending jobs of a scope, a task, or a key, each in one statement on the client of the application.
+// Administration of jobs by the application: retry of a failed job, and delete of pending or failed jobs by id or by a filter, each in one statement on the client of the application.
 import { hook, NOW } from "./db"
 import type { JobTable } from "./schema"
-import { queryValues, type ValuesTarget } from "./statement"
+import { type Param, queryValues, type ValuesTarget } from "./statement"
 
 /** Result of a retry of a failed job: it returned to pending, or a pending job of its key kept it from returning. */
 export type RetryResult = { retried: true } | { retried: false; pendingId: string }
@@ -91,15 +91,68 @@ export async function deletePendingJobs(
   table: JobTable,
   filter: PendingJobsFilter,
 ): Promise<number> {
-  const values: string[] = []
+  const values: Param[] = []
   const conditions = ["state = 'pending'"]
-  // Only the given columns get a condition, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
+  addEqualityConditions(conditions, values, filter)
+  return deleteJobsWhere(db, table, conditions, values)
+}
+
+/** Filter of the failed jobs that `deleteFailedJobs` deletes: each given condition must hold. */
+export interface FailedJobsFilter {
+  /** Scope of the jobs; every scope when omitted. */
+  scope?: string | null
+  task?: string | null
+  /** Threshold of age in seconds: only the jobs that failed more than this many seconds before the time of the statement are deleted. */
+  olderThan?: number | null
+  /** Time of the statement; `statement_timestamp()` when omitted. */
+  now?: Date | null
+}
+
+/**
+ * Deletes the failed jobs that match a filter, and returns their count.
+ * A row that another transaction holds, such as a retry, is deleted only if it is still failed and old enough after that transaction ends; pending and active jobs stay.
+ */
+export async function deleteFailedJobs(
+  db: ValuesTarget,
+  table: JobTable,
+  filter: FailedJobsFilter,
+): Promise<number> {
+  const values: Param[] = []
+  const conditions = ["state = 'failed'"]
+  if (filter.olderThan != null) {
+    // The time comes first, since `NOW` reads it as `$1`.
+    values.push(filter.now ?? null, filter.olderThan)
+    // The age is added to `failed_at` rather than subtracted from the time, which a long age would move before the earliest timestamp of PostgreSQL.
+    conditions.push(`failed_at + make_interval(secs => $2::text::float8) < ${NOW}`)
+  }
+  addEqualityConditions(conditions, values, filter)
+  return deleteJobsWhere(db, table, conditions, values)
+}
+
+/**
+ * Adds a condition that a column equals its value for each of `scope`, `task`, and `key` that a filter gives, binding the values after those already in `values`.
+ * Only the given columns get a condition, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
+ */
+function addEqualityConditions(
+  conditions: string[],
+  values: Param[],
+  filter: { scope?: string | null; task?: string | null; key?: string | null },
+): void {
   for (const column of ["scope", "task", "key"] as const) {
     const value = filter[column]
     if (value == null) continue
     values.push(value)
     conditions.push(`${column} = $${values.length}::text`)
   }
+}
+
+/** Deletes the jobs that match all conditions in one statement, and returns their count. */
+async function deleteJobsWhere(
+  db: ValuesTarget,
+  table: JobTable,
+  conditions: readonly string[],
+  values: readonly Param[],
+): Promise<number> {
   const rows = await queryValues(
     db,
     `with d as (delete from ${table.name} where ${conditions.join(" and ")} returning 1)

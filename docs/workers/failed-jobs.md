@@ -64,12 +64,14 @@ await jobs.deletePending({ task: syncLegacyCrmTask })
 
 For a scoped task, this deletes its jobs in the scope of `jobs`; to delete them in every scope, call it through `jobs` with [`ALL_SCOPES`](#jobs-of-a-scope).
 
-To delete the pending jobs of every task of a [scope](../tasks/scopes), such as when you delete the data of a tenant, call it without a filter through `jobs` with that scope, in the [transaction](../database-clients#transactions-without-an-orm) that deletes the data:
+To delete the pending jobs of every task of a [scope](../tasks/scopes), such as when you delete the data of a tenant, call it without a filter through `jobs` with that scope, in the [transaction](../database-clients#transactions-without-an-orm) that deletes the data, and delete the [failed jobs](#delete-failed-jobs) of the scope with it:
 
 ```ts
 await sql.begin(async tx => {
   await tx`delete from product where tenant_id = ${tenant.id}`
-  await createJobs(tx, { scope: tenant.id }).deletePending()
+  const tenantJobs = createJobs(tx, { scope: tenant.id })
+  await tenantJobs.deletePending()
+  await tenantJobs.deleteFailed()
 })
 ```
 
@@ -80,19 +82,32 @@ To delete the pending job of a key, pass the task and the key, as in [Cancel a p
 `deletePending` resolves to the number of the jobs it deleted, and leaves the jobs that run or failed.
 Each job takes with it the events that the enqueues of its key merged into it.
 
-## Delete old failed jobs
+## Delete failed jobs
 
-Failed jobs stay until you delete them, so delete the old ones regularly, such as every night, with a statement on the table:
+Failed jobs stay until you delete them, so delete the old ones regularly, such as every night, by the seconds since they failed:
 
-```sql
-delete from kern_jobs.job where state = 'failed' and failed_at < now() - interval '30 days'
+```ts
+import { ALL_SCOPES, createJobs } from "kern-jobs"
+
+await createJobs(sql, { scope: ALL_SCOPES }).deleteFailed({ olderThan: 30 * 24 * 60 * 60 })
 ```
 
-It is the only statement on the table that may change it besides kern-jobs: keep `state = 'failed'` in it, since workers and enqueues rely on the rows of the other jobs.
+`olderThan` counts the seconds by the clock of the database, as `failed_at` does.
+
+To delete the failed jobs of a task, such as of a task that you remove, pass the task, and add `olderThan` to delete only those of the task that failed more than that many seconds ago:
+
+```ts
+await jobs.deleteFailed({ task: syncLegacyCrmTask })
+await jobs.deleteFailed({ task: sendNewsletterTask, olderThan: 7 * 24 * 60 * 60 })
+```
+
+Without a filter, `deleteFailed` deletes the failed jobs of every task of the scope of `jobs`, as `deletePending` does, such as when you [delete the data of a tenant](#delete-pending-jobs).
+
+`deleteFailed` resolves to the number of the jobs it deleted, and leaves the pending jobs and the jobs that run, also a failed job that a `retry` returns to pending at the same time.
 
 ## Jobs of a scope
 
-Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and `deletePending` without a filter act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
+Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
 Through `jobs` without a scope, they act only on [unscoped](../tasks/scopes) jobs.
 
 To manage the jobs of every scope, such as in a script of an operator, pass `ALL_SCOPES` as the scope:
@@ -105,5 +120,5 @@ const allJobs = createJobs(sql, { scope: ALL_SCOPES })
 await allJobs.retry(id)
 ```
 
-`deletePending` of a scoped task deletes its jobs of the scope of `jobs`, or of every scope with `ALL_SCOPES`, and `deletePending` of another task deletes its unscoped jobs through any `jobs`.
+`deletePending` and `deleteFailed` of a scoped task delete its jobs of the scope of `jobs`, or of every scope with `ALL_SCOPES`, and of another task, its unscoped jobs through any `jobs`.
 `jobs` with `ALL_SCOPES` deletes the jobs of a scoped task, but cannot enqueue them.

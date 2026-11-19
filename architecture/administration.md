@@ -1,9 +1,9 @@
 # Administration
 
-An application retries failed jobs and deletes pending or failed ones by id through `retry` and `delete` of `jobs`, and deletes the pending jobs of a scope, a task, or a key through `deletePending`, which run on its own client as the [enqueue](enqueue.md) does: each is one statement, since the client, such as a `pg.Pool`, gives kern-jobs no transaction of its own, and it joins the transaction of the application that the client holds.
+An application retries failed jobs and deletes pending or failed ones by id through `retry` and `delete` of `jobs`, deletes the pending jobs of a scope, a task, or a key through `deletePending`, and deletes the failed jobs of a scope or a task, or by age, through `deleteFailed`, which run on its own client as the [enqueue](enqueue.md) does: each is one statement, since the client, such as a `pg.Pool`, gives kern-jobs no transaction of its own, and it joins the transaction of the application that the client holds.
 None of them changes an active row, since the database cannot stop the handler of a running job.
 
-The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)) and deletes the old ones by a statement of its own, `delete … where state = 'failed' and failed_at < …`, which the user documentation gives as the only write of the application to the table.
+The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)), and must change the table only through `jobs`, since workers and enqueues rely on the rows that they write.
 
 ## Retry
 
@@ -43,10 +43,21 @@ Delete deletes a `pending` or `failed` job, and returns whether it deleted it.
 - A pending job that a producer adds after the snapshot of the statement stays, as an enqueue after the delete does, and so does the job that a fail transaction returns to pending in place of the pending job of mode `keep` that it deletes while the statement waits for it ([Settlement](settlement.md#fail)): the count tells only the rows that the statement deleted.
 - It reads the task, its name, and the key once and checks the name and the key as an enqueue does, before the client is called, so the statement gets the checked name also from a task whose `name` is a getter.
 
+## Delete failed jobs
+
+`deleteFailed()`, `deleteFailed({ task })`, `deleteFailed({ olderThan })`, and `deleteFailed({ task, olderThan })` delete the failed jobs of a scope, filtered by task, by age, or both, and return their count, so that the application deletes old dead letters regularly, or those of a retired task or of a deleted tenant, without reading their ids from the table.
+With `olderThan`, it deletes only the jobs that failed more than that many seconds ago.
+
+- The scope is that of [`deletePending`](#delete-pending-jobs): with a task, that of the task, and without one, that of [retry and delete](#scope), also with `olderThan` alone.
+- Only a call without an argument deletes the failed jobs of every task at any age, and a filter must name a task, `olderThan`, or both, without other own properties, and is read and checked as the filter of `deletePending` is, so that a mistaken argument, such as `undefined`, `{}`, or a task or `olderThan` that is `undefined`, is rejected rather than widen the delete.
+- `olderThan` takes the range of a delay, seconds from 0 to 1e12, checked before the client is called; the statement compares `failed_at` plus `olderThan` with its own time, by the clock of the database, since its time less 1e12 seconds is before the earliest timestamp of PostgreSQL.
+- It deletes only failed rows; pending and active jobs stay.
+- A failed job that a retry holds is deleted only if it is still failed after the retry ends, at `READ COMMITTED` ([PostgreSQL](postgresql.md#isolation)), so a job that a retry returns to pending is not deleted.
+
 ## Scope
 
-With a `scope` of `createJobs`, retry, delete, and `deletePending` without a filter act only on the jobs of that scope, and resolve it at each call with the checks of an enqueue, so a function that throws or returns an invalid scope rejects the call before the client is called.
+With a `scope` of `createJobs`, retry, delete, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of that scope, and resolve it at each call with the checks of an enqueue, so a function that throws or returns an invalid scope rejects the call before the client is called.
 Without one, they act only on unscoped jobs, whose stored scope is empty, and with `ALL_SCOPES`, an exported symbol, on the jobs of every scope, so that a jobs API that misses its scope never reaches the jobs of a tenant ([decision](../decisions/administration/scope-limits-administration.md)).
 A job of another scope gives the result of no job.
-Retry, delete, and `deletePending` without a filter match the stored scope of a job, not the definition of its task, so a job without a scope of a task that became scoped is reached through `jobs` without a scope, and a job of a scope of a task that is no longer scoped, through `jobs` of that scope or with `ALL_SCOPES`.
+Retry, delete, and, without a task, `deletePending` and `deleteFailed` match the stored scope of a job, not the definition of its task, so a job without a scope of a task that became scoped is reached through `jobs` without a scope, and a job of a scope of a task that is no longer scoped, through `jobs` of that scope or with `ALL_SCOPES`.
 `ALL_SCOPES` is `Symbol.for("kern-jobs.ALL_SCOPES")`, so that two copies of the package in one process share it.
