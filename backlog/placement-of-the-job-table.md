@@ -3,7 +3,7 @@
 Other placements of the job table besides a PostgreSQL schema of its own:
 
 - a table in a schema of the application, beside its own tables;
-- a table in the schema of each tenant with the jobs of that tenant only, with one worker for all tenants, such as by sharding;
+- a table in the schema of each tenant with the jobs of that tenant only, served by [workers across tenant schemas](workers-across-tenant-schemas.md);
 - partitions of one job table by scope, also in the schema of each tenant, so that a dump of that schema carries its jobs and dropping the schema drops them.
 
 Partitioning by scope needs `scope` in every unique index: the unique indexes of keys and queues have it, but the primary key on `id` alone must become `(scope, id)`, and statements that find a job by `id` should also pass its scope.

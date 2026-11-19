@@ -18,6 +18,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Shared heartbeat connection](shared-heartbeat-connection.md): one heartbeat connection for the workers of a process.
 - [Enqueue in an explicit transaction](enqueue-in-an-explicit-transaction.md): `jobs.using(client).enqueue(…)`.
 - [Placement of the job table](placement-of-the-job-table.md): a table in a schema of the application or of each tenant, and partitions by scope.
+- [Workers across tenant schemas](workers-across-tenant-schemas.md): durable discovery of tenant-local jobs and restoring one tenant while others run.
 - [Wakeup without polling](wakeup-without-polling.md): LISTEN/NOTIFY and a timer at the nearest `run_at`.
 - [Transactional handlers](transactional-handlers.md): writes of a handler commit with the completion of its job.
 - [Strict FIFO queues](strict-fifo-queues.md): a failed head blocks its queue.
