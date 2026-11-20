@@ -9,6 +9,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Enqueue from SQL](enqueue-from-sql.md): a SQL function for migrations of the application.
 - [Testing helpers](testing-helpers.md): reading and running the pending jobs of a test in its transaction.
 - [Administration](administration.md): check a key, act on many jobs at once, and count jobs.
+- [Terminal failure hook](terminal-failure-hook.md): a hook of a task that runs at least once for each of its jobs that fails for good.
 - [Values in error messages](values-in-error-messages.md): a value that `String` cannot convert turns the documented error of a check into `TypeError`.
 
 ## Later
@@ -35,7 +36,6 @@ Ideas that wait for an application that needs them, or that are not planned.
 - [Group concurrency and batches](group-concurrency-and-batches.md): several active jobs per scope or queue, and batch handlers.
 - [Job dependencies and workflows](job-dependencies-and-workflows.md): jobs that wait for other jobs.
 - [Dashboard](dashboard.md): a user interface over administration.
-- [Terminal failure hook](terminal-failure-hook.md): application writes in the transaction that fails a job for good.
 - [Schedule extensions](schedule-extensions.md): time zones, recurrence rules, bounded multi-occurrence recovery, cheaper checks, and lag monitoring.
 
 ## Keeping the backlog
