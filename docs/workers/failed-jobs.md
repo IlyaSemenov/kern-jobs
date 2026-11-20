@@ -105,6 +105,27 @@ Without a filter, `deleteFailed` deletes the failed jobs of every task of the sc
 
 `deleteFailed` resolves to the number of the jobs it deleted, and leaves the pending jobs and the jobs that run, also a failed job that a `retry` returns to pending at the same time.
 
+### Delete old failed jobs every night
+
+To have your workers delete them, call `deleteFailed` from a task that a [schedule](./schedules) enqueues:
+
+```ts
+import { ALL_SCOPES, createJobs, defineTask } from "kern-jobs"
+import { defineManifest, defineSchedule } from "kern-jobs/worker"
+
+const deleteOldFailedJobsTask = defineTask("deleteOldFailedJobs")
+const deleteOldFailedJobs = deleteOldFailedJobsTask.implement(async () => {
+  await createJobs(sql, { scope: ALL_SCOPES }).deleteFailed({ olderThan: 30 * 24 * 60 * 60 })
+})
+
+export const manifest = defineManifest({
+  tasks: [deleteOldFailedJobs],
+  schedules: [defineSchedule(deleteOldFailedJobsTask, { cron: { minute: 0, hour: 3 } })],
+})
+```
+
+The schedule enqueues at most one job a night however many workers list it.
+
 ## Jobs of a scope
 
 Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
