@@ -27,14 +27,17 @@ interface Call {
   reject(error: unknown): void
 }
 
-/** Converts rows by column name into a result of a driver, with the columns of the first row. */
+/** OID of the PostgreSQL type `text`. */
+const textOid = 25
+
+/** Converts rows by column name into a result of a driver, with the columns of the first row as `text`. */
 function toResult(rows: TextRow[]): DriverResult {
-  const columns = rows[0] ? Object.keys(rows[0]) : []
+  const names = rows[0] ? Object.keys(rows[0]) : []
   return {
     command: "SELECT",
     count: rows.length,
-    columns,
-    rows: rows.map(row => columns.map(column => row[column] ?? null)),
+    columns: names.map(name => ({ name, type: textOid })),
+    rows: rows.map(row => names.map(name => row[name] ?? null)),
   }
 }
 

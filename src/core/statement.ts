@@ -136,7 +136,7 @@ export async function query(
   const { columns, rows } = await target.execute(toStatement(text, params))
   return rows.map(values => {
     const row: TextRow = {}
-    columns.forEach((column, i) => (row[column] = values[i] ?? null))
+    columns.forEach(({ name }, i) => (row[name] = values[i] ?? null))
     return row
   })
 }
