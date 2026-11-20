@@ -97,9 +97,9 @@ The worker becomes ready once such a statement has returned and the heartbeat is
 
 The worker keeps the requirements of [Leases](leases.md#heartbeat):
 
-- The heartbeat runs on a connection that the worker reserves for its life ([Drivers](drivers.md#connections-of-the-worker)).
+- The heartbeat runs in a session of kern-db on a connection that the worker reserves for its life ([Drivers](drivers.md#connections-of-the-worker)).
 - It sends one heartbeat at a time, every heartbeat interval, with every claim of the worker that is not known lost, and `select 1` without one, so that a broken connection is noticed before the worker claims.
-- After a connection error, it releases the connection, which the driver does not return to the pool while it may be broken, and reserves another one for the next heartbeat; a statement that PostgreSQL rejected keeps the connection.
+- After a connection error, it closes the session, which does not return a connection that may be broken to the pool, and opens another one for the next heartbeat; a statement that PostgreSQL rejected keeps the session.
 - The lease of a claim is confirmed until the send time of the latest statement that confirmed it, its claim statement or a heartbeat, plus the lease, on a monotonic clock, since the server extends the lease after the statement was sent; each claim statement of a cycle counts from its own send time.
 - The heartbeat interval plus the abort margin must be shorter than the shortest lease, or a handler would be aborted between two heartbeats.
 - The worker reaches a deadline beyond the longest delay of a timer, 2^31 − 1 milliseconds, by timers in steps, since a longer timer fires at once.
@@ -136,7 +136,7 @@ It runs these phases:
 
 1. At once, the worker starts no claim cycle and no check of a schedule, and the cycle in flight sends no further claim statement; the heartbeat keeps the leases of the running jobs, and handlers that end are settled as usual.
 2. At `abortAfter`, or at `timeout` if it comes first, the worker aborts the signals of the handlers that still run with `stop`.
-3. Once the claim cycle, the check of the schema, and the check of a schedule in flight have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, releases the heartbeat connection, and resolves.
+3. Once the claim cycle, the check of the schema, and the check of a schedule in flight have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, closes the session of the heartbeat, and resolves.
 
 The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
 
@@ -145,8 +145,8 @@ At `timeout`, or at once at a call with `force`, if `stop` has not resolved, the
 After it gives up:
 
 - It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, no first write of a check of a schedule, and no round of the reaper.
-- It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, a check of a schedule that has begun to write, which may still enqueue its job, and a round of the reaper end in the background, and the heartbeat releases its connection after its statement in flight.
-- A connection that `acquire` of the heartbeat returns after the stop is released without a statement.
+- It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, a check of a schedule that has begun to write, which may still enqueue its job, and a round of the reaper end in the background, and the heartbeat closes its session after its statement in flight.
+- A session that the heartbeat opens after the stop is closed without a statement.
 - A heartbeat sent before it gave up may still extend the leases of its claims once; nothing extends them after it.
 - A handler that still runs keeps running: the worker neither settles nor requeues its job, which returns after its lease, with its attempt spent, as after a crash.
 
@@ -185,7 +185,7 @@ The events are not public: an application observes the worker through `onError`,
 
 - A handler that ignores the abort keeps its slot and delays `stop` until it returns or `stop` gives up; after its claim is lost or `stop` gives up, it can overlap the next execution of its job ([Leases](leases.md#accepted-limitations)).
 - Every worker reserves one connection of its pool for its heartbeats, so a pool of N connections stops N workers, and a pool of one connection stops its only worker: the check of the schema or the claims wait for a connection without an error, and the worker stays `starting`.
-  Its `stop` then waits until its timeout, since it awaits the round in flight before it releases the heartbeat connection.
+  Its `stop` then waits until its timeout, since it awaits the round in flight before it closes the session of the heartbeat.
   The driver does not tell the size of its pool, so `startWorker` cannot check it.
 - A lease has no minimum, since the pauses that it must outlast depend on the application.
   With S the shortest of the lease of a worker and the leases of its tasks, the heartbeat interval is S/3 and the abort margin S/6, so a job of lease L keeps its handler only while the previous heartbeat, the interval, a pause of the event loop, and the next heartbeat take less than L − S/6, and its claim statement must return within L − S/6, or the worker fails the job without running the handler.

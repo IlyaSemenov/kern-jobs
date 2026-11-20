@@ -1,9 +1,10 @@
-// Heartbeat of a worker on a fake connection: one heartbeat at a time, health, reconnection, stopping, lost and busy claims, and local deadlines.
+// Heartbeat of a worker on a fake connection: one heartbeat at a time, health, reopening its session, stopping, lost and busy claims, and local deadlines.
 import { afterEach, expect, jest, test } from "bun:test"
 
 import {
   type Connection,
   ConnectionError,
+  createDatabase,
   type DriverResult,
   QueryError,
   type TextValue,
@@ -16,6 +17,7 @@ import type { TextRow } from "../core/statement"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"
+import { createAcquireOnlyDriver } from "./testing"
 
 interface Call {
   text: string
@@ -115,7 +117,10 @@ function start(
   onSuccess = () => {},
 ) {
   heartbeat = startHeartbeat({
-    source,
+    database: createDatabase({
+      driver: createAcquireOnlyDriver(() => source.acquire()),
+      onReleaseError: error => events.push({ type: "release-error", error }),
+    }),
     table: createJobTable("fake"),
     interval: 0.02,
     margin: 0.1,
@@ -166,7 +171,7 @@ test("is healthy when it reports the success of a heartbeat that took longer tha
   expect(seen).toEqual([true])
 })
 
-test("a connection error releases the connection and acquires another; a rejected statement keeps it", async () => {
+test("a connection error replaces the heartbeat connection; a rejected statement keeps it", async () => {
   const fake = createFakeSource()
   const events: WorkerEvent[] = []
   const hb = start(fake.source, events)
@@ -219,7 +224,7 @@ test("stop waits for the release of the connection", async () => {
   heartbeat = undefined
 })
 
-test("a connection that arrives after the stop began sends no statement and is released once", async () => {
+test("a session that opens after the stop began sends no statement, and its connection is released once", async () => {
   const fake = createFakeSource()
   const acquiring = Promise.withResolvers<void>()
   const arrived = Promise.withResolvers<void>()

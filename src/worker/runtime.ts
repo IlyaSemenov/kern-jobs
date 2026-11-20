@@ -51,7 +51,7 @@ export interface RuntimeOptions {
   /**
    * Pool from which the heartbeat reserves its connection for the life of the worker; `driver` when omitted, which then needs at least two connections.
    */
-  heartbeatSource?: Pick<Driver, "acquire">
+  heartbeatSource?: Driver
   tasks: Record<string, WorkerTask>
   /** Jobs that run at once; a job takes its slot from its claim until its settlement ends. */
   concurrency: number
@@ -193,12 +193,10 @@ export function startRuntime(o: RuntimeOptions): Worker {
     }
   }
 
-  // Database for independent worker transactions, outside the application transaction context.
+  // Database for independent worker transactions, outside the application transaction context, and for the session of the heartbeat when it has no pool of its own.
   // The worker never closes it, since that would close the driver.
-  const database = createDatabase({
-    driver: o.driver,
-    onReleaseError: error => emit({ type: "release-error", error }),
-  })
+  const onReleaseError = (error: unknown) => emit({ type: "release-error", error })
+  const database = createDatabase({ driver: o.driver, onReleaseError })
 
   interface Execution {
     lease: KeptLease
@@ -221,7 +219,9 @@ export function startRuntime(o: RuntimeOptions): Worker {
   ready.promise.catch(() => {})
 
   const heartbeat = startHeartbeat({
-    source: o.heartbeatSource ?? o.driver,
+    database: o.heartbeatSource
+      ? createDatabase({ driver: o.heartbeatSource, onReleaseError })
+      : database,
     table: o.table,
     interval,
     margin,

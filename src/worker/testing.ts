@@ -1,4 +1,6 @@
-// Test helpers of the worker runtime: recorded events, a worker of a test schema with short timings, and terminating the backends of a pool.
+// Test helpers of the worker runtime: recorded events, a worker of a test schema with short timings, a driver that only reserves connections, and terminating the backends of a pool.
+import type { Connection, Driver } from "kern-db"
+
 import { reap } from "../core/lease"
 import { query, type StatementTarget } from "../core/statement"
 import type { TestSchema } from "../core/testing"
@@ -100,6 +102,14 @@ export async function stopTestWorkers(): Promise<void> {
   workers.clear()
   // A stop rejects only at a timeout that the test passed to it, which the test has checked.
   await Promise.all(stopping.map(w => w.stop({ abortAfter: 0 }).catch(() => {})))
+}
+
+/** Creates a driver that reserves connections with `acquire` and rejects statements and scripts on its pool. */
+export function createAcquireOnlyDriver(acquire: () => Promise<Connection>): Driver {
+  const unexpected = async () => {
+    throw new Error("the driver runs no statement on its pool")
+  }
+  return { acquire, execute: unexpected, executeScript: unexpected, close: async () => {} }
 }
 
 /** Terminates the backends of the connections with an `application_name`; returns how many it terminated. */

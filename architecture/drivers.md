@@ -36,9 +36,9 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Fail and requeue run in a transaction of a `Database` of kern-db that the worker creates over its driver, which reserves a connection from `BEGIN` to the end of the transaction, so a statement of another handler never runs inside it ([decision](../decisions/drivers/transaction-connection.md)).
   Scheduled enqueues start independent transactions in the same database; no application code runs transactions in it, so such a transaction never nests in another one, and the worker never closes it, since that would close the driver.
 - Fail and requeue start their transaction at `READ COMMITTED`, whatever the default isolation of the connection.
-- Heartbeats run on a connection that the worker reserves for its life from the pool of its driver, which therefore needs at least two connections, and one more for each other worker on it ([Worker](worker.md#accepted-limitations)); the runtime can take the connection from another pool, which tests use to break it alone.
+- Heartbeats run in a session that the worker opens with `openSession` of its `Database`, which reserves a connection for the life of the worker from the pool of its driver, which therefore needs at least two connections, and one more for each other worker on it ([Worker](worker.md#accepted-limitations)); the runtime can take the connection from another pool, which tests use to break it alone.
   [Leases](leases.md#heartbeat) describes why they need a connection of their own.
-  A heartbeat that PostgreSQL rejected keeps the connection, and after a connection error, the worker releases it and reserves another one.
+  A heartbeat that PostgreSQL rejected keeps the session, and after a connection error, the worker closes it and opens another one.
 - The worker cancels no statement: the drivers of kern-db cannot, so a statement in flight when `stop` gives up ends in the background, bounded only by the timeouts of the client and the server ([Worker](worker.md#stopping)).
 - The worker waits for the release of a connection, which a driver may finish asynchronously, and a failed release does not change the outcome of the statements on the connection: fail and requeue still return their outcome or throw their error, and the worker reports the failure as `release-error`.
 

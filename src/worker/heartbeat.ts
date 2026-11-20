@@ -1,5 +1,5 @@
-// Leases of the claims of a worker: heartbeats on a connection of their own, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
-import { type Connection, type Driver, QueryError } from "kern-db"
+// Leases of the claims of a worker: heartbeats in a session of their own, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
+import { type Database, type OpenedSession, QueryError } from "kern-db"
 
 import type { ClaimRef } from "../core/job"
 import { heartbeat } from "../core/lease"
@@ -42,8 +42,8 @@ export interface KeptLease {
 
 /** Options of the heartbeat of a worker. */
 export interface HeartbeatOptions {
-  /** Pool from which the heartbeat reserves its connection. */
-  source: Pick<Driver, "acquire">
+  /** Database of the worker in which the heartbeat opens its session; its `onReleaseError` receives the failures to release the connection of the session. */
+  database: Database
   table: JobTable
   /** Seconds between heartbeats. */
   interval: number
@@ -63,7 +63,7 @@ export interface Heartbeat {
    */
   healthy(): boolean
   /**
-   * Stops the heartbeats and the keeping of every lease, and resolves once the heartbeat in flight ends and the connection is released; a later call returns the same promise.
+   * Stops the heartbeats and the keeping of every lease, and resolves once the heartbeat in flight ends and the session is closed; a later call returns the same promise.
    */
   stop(): Promise<void>
 }
@@ -78,38 +78,31 @@ interface Entry extends KeptLease {
 /**
  * Starts the heartbeat of a worker.
  * It sends one heartbeat at a time for every kept lease that is not lost, or `select 1` without one, so that a broken connection is noticed before the worker claims.
- * After a connection error it releases the connection, which the driver does not return to the pool while it may be broken, and reserves another one for the next heartbeat; a rejected statement keeps the connection.
+ * It sends them in a session that it opens with `openSession` of its database, which keeps one connection across the rounds.
+ * When a round fails with an open session, a rejected statement keeps the session, and any other error, such as of a lost connection, closes it, which does not return a connection that may be broken to the pool; the next round opens a session when it has none.
  */
 export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
   const entries = new Set<Entry>()
-  let connection: Connection | null = null
+  let session: OpenedSession | null = null
   let succeeded = false
   let failed = false
   let inFlightSince: number | null = null
   let stopping: Promise<void> | undefined
-  /** Releases a connection and reports a release that fails as `release-error`. */
-  async function releaseConnection(released: Connection) {
-    try {
-      await released.release()
-    } catch (error) {
-      o.onEvent({ type: "release-error", error })
-    }
-  }
+  const { database } = o
 
   async function beat() {
     const sentAt = monotonicNow()
     inFlightSince = sentAt
     try {
-      connection ??= await o.source.acquire()
-      // A connection that arrives after the stop is released by the stop, which waits for this round.
+      session ??= await database.openSession()
+      // A session that opens after the stop is closed by the stop, which waits for this round.
       if (stopping) return
       const kept = [...entries].filter(e => !e.lost)
-      if (kept.length === 0) await query(connection, "select 1")
+      if (kept.length === 0) await session.run(() => query(database, "select 1"))
       else {
         o.onEvent({ type: "heartbeat", claims: kept.map(e => e.claim.claimId) })
-        const result = await heartbeat(connection, o.table, {
-          claims: kept.map(e => ({ id: e.claim.id, claimId: e.claim.claimId, lease: e.lease })),
-        })
+        const claims = kept.map(e => ({ id: e.claim.id, claimId: e.claim.claimId, lease: e.lease }))
+        const result = await session.run(() => heartbeat(database, o.table, { claims }))
         const confirmed = new Set(result.confirmed)
         const busy = new Set(result.busy)
         for (const e of kept) {
@@ -134,10 +127,10 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
       succeeded = false
       failed = true
       o.onEvent({ type: "heartbeat-error", error })
-      if (!(error instanceof QueryError) && connection) {
-        const lost = connection
-        connection = null
-        await releaseConnection(lost)
+      if (!(error instanceof QueryError) && session) {
+        const lost = session
+        session = null
+        await lost.close()
       }
     } finally {
       inFlightSince = null
@@ -201,10 +194,10 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
         // Leases are no longer kept from the call, also when the heartbeat in flight returns later.
         for (const e of entries) e.release()
         await loop.stop()
-        if (connection) {
-          const held = connection
-          connection = null
-          await releaseConnection(held)
+        if (session) {
+          const held = session
+          session = null
+          await held.close()
         }
       })()
       return stopping

@@ -28,6 +28,7 @@ import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
 import {
+  createAcquireOnlyDriver,
   reapNow,
   recordEvents,
   startTestWorker,
@@ -1071,12 +1072,11 @@ describe("stop", () => {
     expect(worker.state).toBe("stopped")
   })
 
-  test("a connection that the heartbeat acquires right after a force sends no statement and is released", async () => {
+  test("a session that the heartbeat opens right after a force sends no statement, and a failed release of its connection is reported", async () => {
     const acquiring = Promise.withResolvers<void>()
     const arrived = Promise.withResolvers<Connection>()
     const statements: string[] = []
     let releases = 0
-    const released = Promise.withResolvers<void>()
     const connection: Connection = {
       async execute({ text }) {
         statements.push(text)
@@ -1085,24 +1085,26 @@ describe("stop", () => {
       async executeScript() {},
       async release() {
         releases++
-        released.resolve()
+        throw releaseError
       },
     }
+    const releaseError = new Error("release failed")
+    const log = recordEvents()
     const worker = startTestWorker(schema, {
       tasks: {},
-      heartbeatSource: {
-        acquire() {
-          acquiring.resolve()
-          return arrived.promise
-        },
-      },
+      onEvent: log.onEvent,
+      heartbeatSource: createAcquireOnlyDriver(() => {
+        acquiring.resolve()
+        return arrived.promise
+      }),
     })
     await acquiring.promise
     const stopped = worker.stop({ force: true })
     arrived.resolve(connection)
     await expect(stopped).rejects.toThrow("The worker stop was forced")
-    await released.promise
+    await log.waitFor("release-error")
     expect([statements, releases]).toEqual([[], 1])
+    expect(log.all("release-error")).toEqual([{ type: "release-error", error: releaseError }])
   })
 
   test("a claim that returns after the timeout of stop sends nothing, and its job stays claimed until its lease expires", async () => {
