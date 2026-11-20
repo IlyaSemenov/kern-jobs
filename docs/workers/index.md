@@ -25,6 +25,19 @@ export const manifest = defineManifest({ tasks: [indexProduct, purgeExpiredSessi
 
 Register [schedules](./schedules) in the manifest to enqueue recurring jobs.
 
+To run the tasks and schedules of several modules of your application in one worker, give each module a manifest of its own and merge them:
+
+```ts [src/worker/manifest.ts]
+import { mergeManifests } from "kern-jobs/worker"
+
+import { billingManifest } from "../billing/worker"
+import { searchManifest } from "../search/worker"
+
+export const manifest = mergeManifests(billingManifest, searchManifest)
+```
+
+Implement each task in one of the merged manifests only, and give each schedule an ID that no other schedule of them uses.
+
 Start a worker with the manifest and a driver of your database client:
 
 ```ts [src/worker/start.ts]

@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
-import { defineManifest, type Manifest } from "./manifest"
+import { defineManifest, type Manifest, mergeManifests } from "./manifest"
 import { defineTask } from "./task"
 
 const indexProduct = defineTask("search.indexProduct").withPayload<{ productId: string }>()
@@ -17,5 +17,15 @@ describe("defineManifest", () => {
   test("rejects a task without its implementation", () => {
     // @ts-expect-error A manifest takes implementations, not definitions.
     defineManifest({ tasks: [indexProduct] })
+  })
+})
+
+describe("mergeManifests", () => {
+  test("takes manifests and rejects a missing one", () => {
+    const manifest = defineManifest({ tasks: [indexProduct.implement(() => {})] })
+    const extra: Manifest | undefined = undefined
+    expectTypeOf(mergeManifests(manifest, { tasks: [] })).toEqualTypeOf<Manifest>()
+    // @ts-expect-error An explicit undefined is not a manifest.
+    mergeManifests(manifest, extra)
   })
 })

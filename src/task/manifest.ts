@@ -26,6 +26,19 @@ export function defineManifest(manifest: Manifest): Manifest {
 }
 
 /**
+ * Defines a worker manifest with the tasks and schedules of the given manifests, in their order, such as of several modules of an application.
+ * It checks each manifest as `defineManifest` does, and rejects a task name or schedule ID that two of them share.
+ */
+export function mergeManifests(...manifests: Manifest[]): Manifest {
+  // Check each manifest first: flattening would accept a single task or schedule in place of its array and drop the holes of a sparse one.
+  const defined = manifests.map(defineManifest)
+  return defineManifest({
+    tasks: defined.flatMap(manifest => manifest.tasks),
+    schedules: defined.flatMap(manifest => manifest.schedules ?? []),
+  })
+}
+
+/**
  * Returns the implementations by task name, in their order.
  * Throws `TypeError` for tasks that are not an array or for an element that is not an implementation, such as a task without `implement`, and `Error` for task names of several implementations.
  */

@@ -4,7 +4,12 @@ export type { Driver } from "kern-db"
 export type { CronDefinition, CronField, CronRange, Weekday } from "./schedule/cron"
 export { defineSchedule, type Schedule, type ScheduleOptions } from "./schedule/schedule"
 export { RetryError, type RetryErrorOptions, TerminalError } from "./task/errors"
-export { defineManifest, findUnimplementedTasks, type Manifest } from "./task/manifest"
+export {
+  defineManifest,
+  findUnimplementedTasks,
+  type Manifest,
+  mergeManifests,
+} from "./task/manifest"
 export type { AbortReason } from "./worker/events"
 export { HandlerAbort } from "./worker/heartbeat"
 export type { StopOptions, Worker, WorkerState } from "./worker/runtime"

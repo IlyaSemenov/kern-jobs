@@ -37,6 +37,8 @@ A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns
   It throws `TypeError` for an invalid array or entry.
   It checks each schedule as `defineSchedule` does ([Schedules](schedules.md)).
   Reusing a task name or schedule ID throws `Error`, including when the same entry is listed twice.
+- `mergeManifests(...manifests)` defines a manifest with the tasks and schedules of the given manifests, in their order.
+  It checks each manifest as `defineManifest` does, and throws `Error` for a task name or schedule ID that two of them share, also when the same manifest is given twice.
 - A scheduling-only worker may pass `tasks: []`.
   Another worker in the same schema may provide the scheduled task's handler.
   The worker evaluates its schedules after the schema check and reports errors with their IDs ([Schedules](schedules.md)).

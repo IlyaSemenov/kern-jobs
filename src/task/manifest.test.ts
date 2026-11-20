@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { defineSchedule } from "../schedule/schedule"
 
-import { defineManifest, findUnimplementedTasks, toTaskMap } from "./manifest"
+import { defineManifest, findUnimplementedTasks, mergeManifests, toTaskMap } from "./manifest"
 import { defineTask, type TaskImplementation } from "./task"
 
 const indexProduct = defineTask("search.indexProduct").withPayload<{ productId: string }>()
@@ -99,6 +99,60 @@ describe("defineManifest", () => {
     expect(() => defineManifest({ tasks: [], schedules: sparseSchedules })).toThrow(
       new TypeError("A manifest takes schedules defined with defineSchedule"),
     )
+  })
+})
+
+describe("mergeManifests", () => {
+  const index = indexProduct.implement(() => {})
+  const purge = purgeExpiredSessions.implement(() => {})
+  const nightly = defineSchedule(indexProduct, {
+    id: "search.nightly",
+    payload: { productId: "all" },
+    cron: { hour: 0, minute: 0 },
+  })
+  const hourly = defineSchedule(purgeExpiredSessions, { cron: { minute: 0 } })
+
+  test("keeps the order of the manifests and freezes the manifest and both lists", () => {
+    const search = defineManifest({ tasks: [index], schedules: [nightly] })
+    const sessions = defineManifest({ tasks: [purge], schedules: [hourly] })
+    const manifest = mergeManifests(search, defineManifest({ tasks: [] }), sessions)
+    expect(manifest).toEqual({ tasks: [index, purge], schedules: [nightly, hourly] })
+    expect(Object.isFrozen(manifest)).toBe(true)
+    expect(Object.isFrozen(manifest.tasks)).toBe(true)
+    expect(Object.isFrozen(manifest.schedules)).toBe(true)
+    expect(mergeManifests()).toEqual({ tasks: [], schedules: [] })
+  })
+
+  test("rejects a task name or schedule ID that two manifests share, also of one manifest given twice", () => {
+    const sessions = defineManifest({ tasks: [purge], schedules: [hourly] })
+    expect(() =>
+      mergeManifests(sessions, { tasks: [purgeExpiredSessions.implement(() => {})] }),
+    ).toThrow("duplicate tasks: sessions.purgeExpired")
+    expect(() => mergeManifests(sessions, { tasks: [], schedules: [hourly] })).toThrow(
+      `Duplicate schedule ID in a manifest: ${hourly.id}`,
+    )
+    expect(() => mergeManifests(sessions, sessions)).toThrow(
+      "duplicate tasks: sessions.purgeExpired",
+    )
+  })
+
+  test("rejects a malformed manifest, as defineManifest does", () => {
+    // As a JavaScript caller passes them, past the types: also the values that flattening would accept, a single task or schedule in place of its array, and a sparse array.
+    const sparse: never[] = []
+    sparse.length = 1
+    for (const manifest of [
+      undefined,
+      {},
+      { tasks: "search.indexProduct" },
+      { tasks: index },
+      { tasks: sparse },
+      { tasks: [index], schedules: "nightly" },
+      { tasks: [index], schedules: nightly },
+      { tasks: [index], schedules: null },
+      { tasks: [index], schedules: sparse },
+    ]) {
+      expect(() => mergeManifests(manifest as never)).toThrow(TypeError)
+    }
   })
 })
 
