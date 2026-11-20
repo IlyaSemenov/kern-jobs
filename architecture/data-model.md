@@ -53,6 +53,27 @@ Check constraints enforce these invariants for every write:
 
 The unique indexes, not the statements that check them, enforce the invariants of keys and queues, so a statement that acts on a stale snapshot fails with a unique violation (`23505`) instead of breaking an invariant, and the operation retries it ([decision](../decisions/claiming/queue-mutex-index.md)).
 
+## Summary view
+
+The view `job_summary`, which the migrations create beside the table, summarizes the jobs for the metrics of an application, so that the application reads neither the columns of the table nor its rows ([decision](../decisions/administration/summary-view.md)).
+
+- It has a row for each `(scope, task)` that has jobs; `scope` and `task`, `text`, are the stored values, and `scope` is the empty string for an unscoped job.
+- Its conditions and ages take `statement_timestamp()` of the statement that reads it, as the statements of the core do ([PostgreSQL](postgresql.md#time)).
+- The counts, `bigint`, are:
+  - `due`: the pending jobs whose `run_at` has come;
+  - `scheduled`: the pending jobs whose `run_at` is ahead and whose `not_before` is null or has come;
+  - `retrying`: the pending jobs whose retry backoff has not ended, `not_before` being ahead;
+  - `running`: the active jobs;
+  - `failed`: the failed jobs.
+
+  Since `run_at` is not below `not_before`, `due`, `scheduled`, and `retrying` split the pending jobs.
+
+- `oldest_due_seconds`, `longest_running_seconds`, and `oldest_failed_seconds`, `double precision` in seconds, give the time since the earliest `run_at` of the due jobs, `locked_at` of the active jobs, and `failed_at` of the failed jobs, or null without such a job; `longest_running_seconds` counts from the claim, so it includes the wait of an active job for its settlement or for the reaper.
+- `most_attempts`, `integer`, is the greatest `attempts` of the pending and active jobs, which counts the claim of an active job, or null without such a job; failed jobs keep the attempts they spent until the application retries or deletes them, so they do not take part.
+- Its columns, their types, units, and meanings, and the grouping of its rows are a public contract: a migration changes the view only by the rule of [Migrations](migrations.md#history).
+- PostgreSQL checks the access to the table by the privileges of the owner of the view, the role that ran `migrateJobs`, so a role of the application needs only `USAGE` on the schema and `SELECT` on the view or on its columns.
+- The summary of every task aggregates every row of the table.
+
 ## Invariants
 
 Keys:

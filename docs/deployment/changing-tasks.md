@@ -14,8 +14,12 @@ So change a task in steps that both releases handle, and take the next step only
   Instead of waiting, delete the jobs that remain by the task: the [pending ones](../workers/failed-jobs#delete-pending-jobs) and the [failed ones](../workers/failed-jobs#delete-failed-jobs).
   For a scoped task, delete them through `jobs` with [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope), which reaches the jobs of every scope.
 
-To see which jobs of a task remain, query them by its name:
+To see how many jobs of a task remain in each state, query the [summary of the jobs](../workers/monitoring#watch-the-backlog) by its name:
 
 ```sql
-select state, count(*) from kern_jobs.job where task = 'email.send' group by state
+select sum(due + scheduled + retrying) as pending, sum(running) as running, sum(failed) as failed
+from kern_jobs.job_summary
+where task = 'email.send'
 ```
+
+The counts are null once no job of the task remains.

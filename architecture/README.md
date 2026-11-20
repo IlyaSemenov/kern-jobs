@@ -48,7 +48,7 @@ The package test enqueues through the main entry, and records an enqueue and run
 
 Module paths are relative to `src/`.
 
-- [Data model](data-model.md): the table, its states, indexes, and invariants; `core/schema.ts` and `core/job.ts`.
+- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `core/schema.ts`, `core/job.ts`, and `migration/migrations/0003_job_summary.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
 - [Enqueue](enqueue.md): key modes and debounce; `core/enqueue.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `jobs/`.

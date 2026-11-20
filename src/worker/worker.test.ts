@@ -328,7 +328,7 @@ describe("a running worker", () => {
       // Neither a claim nor the reaper has run in the schema, which would fail without the table.
       expect(reports.map(([, info]) => info)).toEqual([{ source: "schema" }, { source: "schema" }])
       expect(String(reports[0]![0])).toBe(
-        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule)`,
+        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary)`,
       )
 
       await migrateJobs(schema.driver, { schemaName: table.schemaName })
@@ -443,7 +443,7 @@ describe("a running worker", () => {
     })
     // The worker has checked its schema once it runs a job.
     await ran.promise
-    await schema.admin.executeScript(`drop table ${schema.table.name}`)
+    await schema.admin.executeScript(`drop table ${schema.table.name} cascade`)
     await reportedTwice.promise
     expect(claims.map(error => error instanceof QueryError)).toEqual([true, true])
   })

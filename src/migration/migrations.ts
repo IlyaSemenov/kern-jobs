@@ -15,6 +15,7 @@ export const jobMigrations = defineMigrations(
   {
     "0001_create_job": () => import("./migrations/0001_create_job"),
     "0002_schedule": () => import("./migrations/0002_schedule"),
+    "0003_job_summary": () => import("./migrations/0003_job_summary"),
   },
   { tableName: MIGRATION_TABLE },
 )

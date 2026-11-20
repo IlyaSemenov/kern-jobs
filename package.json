@@ -45,7 +45,7 @@
   },
   "dependencies": {
     "kern-db": "^0.7.0",
-    "kern-migrations": "^0.6.1"
+    "kern-migrations": "^0.7.0"
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",

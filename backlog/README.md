@@ -8,7 +8,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Worker events](worker-events.md): public events of the worker beside `onError`.
 - [Enqueue from SQL](enqueue-from-sql.md): a SQL function for migrations of the application.
 - [Testing helpers](testing-helpers.md): reading and running the pending jobs of a test in its transaction.
-- [Administration](administration.md): check a key, act on many jobs at once, and count jobs.
+- [Administration](administration.md): check a key, and act on many jobs at once.
 - [Terminal failure hook](terminal-failure-hook.md): a hook of a task that runs at least once for each of its jobs that fails for good.
 - [Values in error messages](values-in-error-messages.md): a value that `String` cannot convert turns the documented error of a check into `TypeError`.
 

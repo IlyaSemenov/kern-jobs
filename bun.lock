@@ -6,7 +6,7 @@
       "name": "kern-jobs",
       "dependencies": {
         "kern-db": "^0.7.0",
-        "kern-migrations": "^0.6.1",
+        "kern-migrations": "^0.7.0",
       },
       "devDependencies": {
         "@arethetypeswrong/core": "^0.18.5",
@@ -694,7 +694,7 @@
 
     "kern-db": ["kern-db@0.7.0", "", { "peerDependencies": { "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/pg", "pg", "postgres"] }, "sha512-HoCSDoMwYjlnO+eJ9GzV3zpaablSszCKgOj9+sZtaHRAdKEOHAudDhNSAGLwtdA21ZdUx+F1pv9Yrys1tCK5Jg=="],
 
-    "kern-migrations": ["kern-migrations@0.6.1", "", { "peerDependencies": { "kern-db": "^0.7.0" } }, "sha512-Uf6h156qGMl1HFQNrsWjK2H22zWATBX94Ne+pGuhGwSqWUaGQ9/Xcg2met3WpEcfMH/4T2vO2mkmQ25PsJxXtg=="],
+    "kern-migrations": ["kern-migrations@0.7.0", "", { "peerDependencies": { "kern-db": "^0.7.0" } }, "sha512-t/NfCKfhKpaKoa2qcv3TC/VWbTWJQ3ERymO+xgqqPpNmoAyzFUkrnsv5/y2Dgcz+gFivhwfC61YvPUO9Z5YnaA=="],
 
     "kern-orm": ["kern-orm@0.19.0", "", { "dependencies": { "kern-db": "^0.7.0" } }, "sha512-bp6LGoLb60HhPyCNC9NJLSgtW0ipH9esj+ZepYJMrkk3SVWRrDV/x2dxKzAXsVSIDh6yhV+97EM+5WAjEn2RnQ=="],
 

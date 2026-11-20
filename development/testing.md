@@ -7,6 +7,7 @@ How to place and write the tests of kern-jobs.
 - Keep focused module tests beside their source: `foo.test.ts` and `foo.type-test.ts` test `foo.ts`.
 - Test each behavior at the lowest level that can check it: a helper directly, a module that combines helpers by its own unit tests.
 - Keep a test of how several modules work together beside the module that combines them, or beside the modules it covers until such a module exists, such as the randomized and process-level tests of the worker in `src/worker/`, which combines the SQL core and the drivers.
+- Test an object of the schema that has no module of its own, such as the job table or a view, in `src/core/<object>.test.ts`, such as `job.test.ts`, on the schema of the whole history, not beside the migration that created it, since a later migration may change it.
 - Keep a test helper that builds or reads internals beside them in `src/<module>/testing.ts`, such as `src/core/testing.ts`, so that nothing outside `src/` imports from `src/`.
 - Keep integration and package-boundary tests in `tests/`, importing the package by name: they see only the public API.
   Keep the harness that they share in `testing/`, importing the package by name too.

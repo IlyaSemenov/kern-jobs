@@ -10,6 +10,7 @@ kern-jobs keeps their history and applies it itself, on a driver of kern-db, rat
 - The history keeps its applied migrations in a table of its own name, `kern_jobs_migration`, in the schema of the jobs, so that it applies beside the history of an application in one PostgreSQL schema, whose table has the default name of kern-migrations.
 - A migration names the table, the sequence, and the indexes without a PostgreSQL schema, which the search path of its transaction gives, so that the history applies to a schema of any name.
 - A released migration never changes: a change of the schema is a new migration.
+- A migration that changes the [summary view](data-model.md#summary-view) must in its `up` keep each column with its type, unit, and meaning, and only append columns by `replaceView` of kern-migrations, which keeps the grants of the application on the view; its `down` restores the previous view, with `rollback: "recreate"` when `up` appends columns.
 - A migration must keep the producers and the workers of the previous version of kern-jobs working, their enqueues, claims, heartbeats, settlements, and reaper, since they run on the migrated schema during a rolling deploy.
 - A migration that builds or drops an index of a table that an earlier migration created must do it with `concurrently` of `createIndex` and `dropIndex` of kern-migrations, since a plain `CREATE INDEX` blocks the writes of every enqueue, claim, and settlement while it builds; a migration creates the indexes of its own new table with the table.
 - Each migration has a `down` that restores the structure before it, for the verification of the history; kern-jobs has no API that rolls a schema back.
@@ -21,7 +22,7 @@ kern-jobs keeps their history and applies it itself, on a driver of kern-db, rat
 - An application must call it before its producers enqueue and its workers start, at every deploy, since a worker does not migrate ([decision](../decisions/migrations/explicit-call.md)).
 - Its target is a driver of kern-db, as `startWorker` takes, a `Database` of kern-db of the application, or a `Db` of kern-orm, whose own schema it ignores for `schemaName`.
   Inside a transaction of the database, the migrations commit or roll back with it.
-- `migrate` gives the rest: the lock for processes that migrate at once, the transactions at `READ COMMITTED`, and a schema with migrations of a newer version of kern-jobs counted as up to date, so a process of the previous version that starts during a rolling deploy changes nothing.
+- `migrate` gives the rest: the lock for processes that migrate at once, the transactions at `READ COMMITTED`, a search path that lists the temporary schema last, so that a temporary table of the session of the application, such as one named `job`, does not take the place of a table of the schema, and a schema with migrations of a newer version of kern-jobs counted as up to date, so a process of the previous version that starts during a rolling deploy changes nothing.
 - `migrateJobs` rejects with `TypeError` before it runs a statement if [`checkSchemaName`](producer.md#schema) rejects the schema name or the target is not a driver, a database, or a `Db`.
 - A migration that fails rejects with the `MigrationError` of kern-migrations.
 
