@@ -13,7 +13,7 @@ import { enqueue, type EnqueueParams, type EnqueueResult } from "../core/enqueue
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
 import { delayRange, isDelay } from "../task/delay"
-import { type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
+import { checkKey, type EnqueueOverrides, getTaskEnqueueParams, toStoredKey } from "../task/options"
 import type { Task } from "../task/task"
 
 /**
@@ -39,7 +39,8 @@ export interface JobsOptions {
 /** Pending jobs of a task that `deletePending` deletes: all of them, or those of a key, at most one in each scope. */
 export interface DeletePendingFilter {
   task: Task<string, unknown>
-  key?: string
+  /** Key of the pending jobs; `true` is the empty key, as in an enqueue. */
+  key?: string | true
 }
 
 /**
@@ -111,7 +112,7 @@ export interface Jobs {
  * `enqueue`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and `enqueue` of a scoped task also with `ALL_SCOPES`.
  * Each call that calls the function of the scope, `enqueue`, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
- * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, and for a task name or a key that is not a string, or has U+0000 or a lone surrogate, before it calls the client.
+ * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, for a task name that is not a string, for a key that is neither `true` nor a string, and for a name or a key string that has U+0000 or a lone surrogate, before it calls the client.
  * `deleteFailed` rejects with `TypeError` for an argument that is not an object of a task, `olderThan`, or both, and for a task name that is not storable text, and with `RangeError` for `olderThan` that is not a number of seconds from 0 to 1e12, before it calls the client.
  */
 export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs {
@@ -242,7 +243,7 @@ function toFilterTask(task: unknown, error: TypeError): FilterTask {
 
 /**
  * Returns the task of a filter of `deletePending` and its key, read in this order.
- * Throws `TypeError` for a filter that is not an object of a task and, optionally, its key, and for a task name or a key that is not storable text.
+ * Throws `TypeError` for a filter that is not an object of a task and, optionally, its key, and for a task name that is not storable text or a key that is neither `true` nor storable text.
  */
 function parseDeletePendingFilter(filter: unknown): {
   task: FilterTask
@@ -254,8 +255,8 @@ function parseDeletePendingFilter(filter: unknown): {
   // A key that is given, also by a getter of a class, must be one, so that a missing value does not widen the delete to every key.
   if (!("key" in filter)) return { task, key: undefined }
   const { key } = filter
-  checkStorableText("key", key)
-  return { task, key }
+  checkKey(key)
+  return { task, key: toStoredKey(key) }
 }
 
 /**

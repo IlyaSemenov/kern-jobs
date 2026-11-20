@@ -31,7 +31,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - Administration is what the application does with existing jobs: it retries a failed job, and deletes pending or failed jobs by id or by a filter.
 - Storable text is a string that has neither U+0000 nor a lone surrogate.
   PostgreSQL rejects U+0000 in text, and encoding as UTF-8 replaces a lone surrogate with U+FFFD, so two different strings would become one value, such as two keys that share a pending job.
-  The API rejects a name, scope, key, queue, or ID of the application that is not storable text before a statement uses it.
+  The API rejects a name, scope, key other than `true`, queue, or ID of the application that is not storable text before a statement uses it.
 
 ## Entry points
 

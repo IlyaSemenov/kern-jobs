@@ -289,7 +289,7 @@ test("retry and delete reject an id that is not a string with TypeError, and one
   await expect(jobs.retry("9223372036854775807")).rejects.toThrow("a statement ran")
 })
 
-test("deletePending rejects an argument that is not an object of a task and, optionally, its key, and a task name or a key that is not storable text, with TypeError, before it calls the client", async () => {
+test("deletePending rejects an argument that is not an object of a task and, optionally, its key, a task name that is not storable text, and a key that is neither true nor storable text, with TypeError, before it calls the client", async () => {
   let calls = 0
   const jobs = createJobs(() => {
     calls++
@@ -299,9 +299,9 @@ test("deletePending rejects an argument that is not an object of a task and, opt
   const olderTask = { ...sendEmail, name: "t\ud800" }
   await expect(jobs.deletePending({ task: olderTask })).rejects.toThrow(TypeError)
   // An explicit undefined too, which would otherwise widen the delete to every key of the task.
-  for (const key of [undefined, 42, null, "k\u0000", "k\udc00"]) {
+  for (const key of [undefined, 42, null, false, "k\u0000", "k\udc00"]) {
     await expect(jobs.deletePending({ task: sendEmail, key: key as string })).rejects.toThrow(
-      "key must be a string that has",
+      "key must be true or a string that has",
     )
   }
   // As JavaScript passes them, past the types: each would otherwise delete more jobs than it names.
@@ -827,6 +827,26 @@ describe("options", () => {
     expect(first!.run_at.getTime() - first!.created_at.getTime()).toBe(5000)
     expect(second).toMatchObject({ key: null, queue: "q", max_attempts: 4 })
     expect(second!.run_at).toEqual(second!.created_at)
+  })
+
+  test("key true merges the enqueues of the task in each scope under the empty key, which deletePending takes too", async () => {
+    const task = defineTask("t", { scoped: true, key: true }).withPayload<number>()
+    const other = defineTask("other", { scoped: true, key: true })
+    const jobs = createJobs(pool, { schemaName: schema.name, scope: "a" })
+    const first = await jobs.enqueue(task, 1)
+    expect(await jobs.enqueue(task, 2)).toEqual({ id: first.id, created: false })
+    await jobs.enqueue(other)
+    await createJobs(pool, { schemaName: schema.name, scope: "b" }).enqueue(task, 3)
+    await jobs.enqueue(task, 4, { key: "k" })
+    const rows = await jobRows(schema)
+    expect(rows.map(({ task, scope, key, payload }) => ({ task, scope, key, payload }))).toEqual([
+      { task: "t", scope: "a", key: "", payload: 2 },
+      { task: "other", scope: "a", key: "", payload: undefined },
+      { task: "t", scope: "b", key: "", payload: 3 },
+      { task: "t", scope: "a", key: "k", payload: 4 },
+    ])
+    expect(await jobs.deletePending({ task, key: true })).toBe(1)
+    expect((await jobRows(schema)).map(row => row.payload)).toEqual([undefined, 3, 4])
   })
 
   test("debounces by the delay and maxWait of the task", async () => {

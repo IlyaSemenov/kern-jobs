@@ -106,9 +106,10 @@ describe("deletePending", () => {
     // @ts-expect-error Only a call without an argument deletes the jobs of every task.
     void jobs.deletePending(undefined)
     void jobs.deletePending({ task: sendEmail, key: "k" })
+    void jobs.deletePending({ task: sendEmail, key: true })
     void jobs.deletePending({ task: purgeExpiredSessions })
     void jobs.deletePending({ task: defineTask("search.indexProduct", { scoped: true }), key: "k" })
-    // @ts-expect-error A key is a string.
+    // @ts-expect-error A key is a string or true.
     void jobs.deletePending({ task: sendEmail, key: null })
     // @ts-expect-error A key needs its task.
     void jobs.deletePending({ key: "k" })

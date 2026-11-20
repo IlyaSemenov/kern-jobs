@@ -13,6 +13,7 @@ export interface TestJobsOptions {
 /**
  * Options of a recorded enqueue: those of `defineTask`, of `withOptions`, and the overrides, merged as an enqueue merges them.
  * An option that no layer gave is absent, and so are `maxWait` outside `keyMode: "debounce"` and `resetAttempts` with `keyMode: "keep"`, which the enqueue ignores.
+ * `key: true` is recorded as the empty key, `""`, which the enqueue stores.
  */
 export interface TestEnqueueOptions {
   key?: string | null

@@ -11,6 +11,7 @@ describe("EnqueueOptions", () => {
       { key: "k", keyMode: "replace", runAt: date },
       { key: "k", keyMode: "keep", runAt: date },
       { key: "k", keyMode: "debounce", delay: 2, maxWait: 10, resetAttempts: true },
+      { key: true, keyMode: "keep" },
       { key: null, queue: null },
     ]
     void options

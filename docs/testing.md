@@ -33,7 +33,7 @@ test("enqueues a welcome email for the new user", async () => {
   Finish the setup of fixtures before you start `capture`, and await it before the next step, so that their jobs stay out.
 - `captured.result` is the value that the action returns, such as the user that `signUp` creates.
 - `captured.callsFor(task)` gives the scope, the payload, and the options of each enqueue of the task.
-  The options are those of `defineTask`, of `withOptions`, and of the enqueue, merged as an enqueue merges them, so check a key or a delay there.
+  The options are those of `defineTask`, of `withOptions`, and of the enqueue, merged as an enqueue merges them, so check a key or a delay there; `key: true` is recorded as the empty key, `""`.
 - `testJobs.calls` lists every recorded enqueue, and `testJobs.clear()` forgets them, such as before each test.
 
 An enqueue through `testJobs` rejects invalid options, a payload that `JSON.stringify` throws for, such as a bigint, and a scoped task without a scope as `createJobs` does, and records nothing then.
@@ -73,7 +73,7 @@ await runJob(sendWelcomeEmail, { userId: "user-1" })
 
 `runJob` resolves to what the handler returns, or rejects with what it throws.
 The handler gets the payload as a worker reads it from the database, through JSON, so a `Date` in the payload reaches it as a string.
-Its `job` has the key, the queue, and `maxAttempts` that the options of the task give for the payload, and the first attempt.
+Its `job` has the key, the queue, and `maxAttempts` that the options of the task give for the payload, with `""` for `key: true`, and the first attempt.
 Replace them in `job`, such as to test the last attempt:
 
 ```ts

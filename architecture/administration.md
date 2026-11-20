@@ -36,7 +36,7 @@ Delete deletes a `pending` or `failed` job, and returns whether it deleted it.
 
 - With a scoped task, the scope is that of `jobs`, with the checks and errors of an [enqueue](producer.md#scope), or every scope with `ALL_SCOPES`, which an enqueue rejects, also with a key; with another task, it is the empty scope, also when `jobs` has a scope.
 - Without a filter, the scope is that of [retry and delete](#scope).
-- Only a call without an argument deletes the jobs of every task, and a filter must be an object of a task and, optionally, a key that is a string, without other own properties, so that a mistaken argument, such as `undefined`, a promise of a filter, a task, a misspelled field, or a key that is `undefined`, is rejected rather than widen the delete.
+- Only a call without an argument deletes the jobs of every task, and a filter must be an object of a task and, optionally, a key that is a string or `true`, the empty key of an [enqueue](producer.md#options), without other own properties, so that a mistaken argument, such as `undefined`, a promise of a filter, a task, a misspelled field, or a key that is `undefined`, is rejected rather than widen the delete.
 - It deletes only pending rows, and with a key at most one in each scope, which the unique index of pending keys keeps single per scope, task, and key; active and failed jobs stay.
 - The statement has a condition only for each given column, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
 - A pending job that a claim holds is deleted only if it is still pending after the claim ends, as with [delete](#delete), so a job that starts first is not deleted.

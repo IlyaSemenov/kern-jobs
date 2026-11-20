@@ -12,6 +12,17 @@ An enqueue with the key of a pending job of the same task and [scope](./scopes) 
 Different tasks and different [scopes](./scopes) can use the same keys without affecting each other.
 A key is at most 1024 bytes long.
 
+## One pending job per scope
+
+To merge the enqueues of a task in each [scope](./scopes) into one pending job, such as one job to recalculate the statistics of a tenant, give the task `key: true`:
+
+```ts
+export const recalculateStatsTask = defineTask("stats.recalculate", { scoped: true, key: true })
+```
+
+Passing `key: true` is equivalent to passing `key: ""`.
+To cancel the pending job, call `jobs.deletePending({ task: recalculateStatsTask, key: true })`.
+
 ## Debounce
 
 For example, to render the preview of a document once a series of edits ends, without postponing it for more than five minutes during a long series:

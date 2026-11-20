@@ -1,13 +1,15 @@
 // Options of an enqueue: what a task definition and an enqueue give, their merge, and the parameters of the core.
-import { checkCount, checkStorableText } from "../core/db"
+import { checkCount, checkStorableText, isStorableText, storableTextRule } from "../core/db"
 import type { EnqueueParams } from "../core/enqueue"
 
 import { delayRange, isDelay } from "./delay"
 import type { Task } from "./task"
 
 interface CommonOptions {
-  /** Key of the pending job within its task, such as `product:42`; `null` enqueues the job without a key. */
-  key?: string | null | undefined
+  /**
+   * Key of the pending job within its task, such as `product:42`; `true` is the empty key, `""`, and `null` enqueues the job without a key.
+   */
+  key?: string | true | null | undefined
   /** Queue that runs one job at a time, such as `account:42`; `null` enqueues the job without a queue. */
   queue?: string | null | undefined
   /** Attempts before the job fails for good. */
@@ -97,7 +99,7 @@ export function getTaskEnqueueParams<P>(
 
 /** Options after merging one or more layers. */
 interface MergedOptions {
-  key?: string | null
+  key?: string | true | null
   queue?: string | null
   maxAttempts?: number
   delay?: number
@@ -182,8 +184,20 @@ function checkOptions(o: MergedOptions, partial: boolean): void {
     throw new RangeError(`runAt must be ${runAtRange}, got ${String(o.runAt)}`)
   }
   if (o.maxAttempts != null) checkCount("maxAttempts", o.maxAttempts)
-  if (o.key != null) checkStorableText("key", o.key)
+  if (o.key != null) checkKey(o.key)
   if (o.queue != null) checkStorableText("queue", o.queue)
+}
+
+/** Checks a key of the API: throws `TypeError` unless it is `true` or storable text. */
+export function checkKey(key: unknown): asserts key is string | true {
+  if (key === true || (typeof key === "string" && isStorableText(key))) return
+  const got = typeof key === "string" ? JSON.stringify(key) : String(key)
+  throw new TypeError(`key must be true or a string that has ${storableTextRule}, got ${got}`)
+}
+
+/** Returns the key that a job stores for a key of the API, in which `true` is the empty key. */
+export function toStoredKey(key: string | true): string {
+  return key === true ? "" : key
 }
 
 /**
@@ -198,7 +212,7 @@ export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions
   return {
     task,
     payload,
-    key: o.key,
+    key: o.key == null ? o.key : toStoredKey(o.key),
     queue: o.queue,
     // The mode stays absent when no layer gave it, like the other options; the core enqueues it as `replace`.
     mode: o.keyMode,
