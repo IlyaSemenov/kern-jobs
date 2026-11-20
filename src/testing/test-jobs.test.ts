@@ -237,6 +237,7 @@ describe("capture", () => {
   test("awaits a thenable that the action returns", async () => {
     const jobs = createTestJobs()
     const captured = await jobs.capture(() => ({
+      // oxlint-disable-next-line unicorn/no-thenable -- The test needs a thenable that is not a promise.
       then: (resolve: (value: number) => void) => {
         void jobs.enqueue(sendEmailTask, { to: "a" })
         resolve(7)

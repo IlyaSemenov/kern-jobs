@@ -93,7 +93,10 @@ describe("defineManifest", () => {
     ] as const) {
       expect(() => defineManifest({ tasks: [], schedules: [invalid as never] })).toThrow(error)
     }
-    expect(() => defineManifest({ tasks: [], schedules: new Array(1) })).toThrow(
+    // A hole of a sparse array is a missing schedule, which `map` would skip.
+    const sparseSchedules: never[] = []
+    sparseSchedules.length = 1
+    expect(() => defineManifest({ tasks: [], schedules: sparseSchedules })).toThrow(
       new TypeError("A manifest takes schedules defined with defineSchedule"),
     )
   })
