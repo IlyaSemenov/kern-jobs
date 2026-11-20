@@ -54,7 +54,7 @@
     "@tsconfig/bun": "^1.0.11",
     "@types/bun": "^1.4.4",
     "@types/pg": "^8.23.1",
-    "changesets-release": "^2.1.0",
+    "changesets-release": "^2.1.1",
     "kern-orm": "^0.19.0",
     "orchid-orm": "^1.78.47",
     "oxfmt": "^0.77.0",
