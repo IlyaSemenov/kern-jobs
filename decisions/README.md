@@ -61,6 +61,7 @@ Measurements come from single runs on one local machine without network, so they
 - [Ownership by the claim, not the lease](leases/ownership-by-claim.md).
 - [The reaper detaches instead of merging](leases/reaper-detaches.md).
 - [The reaper bounds its wait and leaves the blocked row](leases/reaper-bounds-its-wait.md).
+- [A worker returns the jobs of its id under a lock of the id](leases/worker-id-lock.md): a worker that starts with the id of an ended worker returns its jobs without waiting for their leases.
 
 ## Administration
 

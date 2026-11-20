@@ -21,6 +21,10 @@ When changing a project's version, recheck all its comparison items against the 
 - [BullMQ](https://github.com/taskforcesh/bullmq) 6.7.5.
 - [Inngest](https://github.com/inngest/inngest-js) 4.26.2, its SDK for TypeScript.
 - [Sidekiq](https://github.com/sidekiq/sidekiq) 8.1.7.
+- [GoodJob](https://github.com/bensheldon/good_job) 4.24.1.
+- [Que](https://github.com/que-rb/que) 2.4.1.
+- [Solid Queue](https://github.com/rails/solid_queue) 1.7.2.
+- [Oban](https://github.com/oban-bg/oban) 2.24.2.
 
 ## Topics
 

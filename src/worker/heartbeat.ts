@@ -1,10 +1,10 @@
-// Leases of the claims of a worker: heartbeats in a session of their own, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
+// Leases of the claims of a worker: heartbeats in a session of their own, which holds the lock of the worker id, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
 import { type Database, type OpenedSession, QueryError } from "kern-db"
 
 import type { ClaimRef } from "../core/job"
 import { heartbeat } from "../core/lease"
 import type { JobTable } from "../core/schema"
-import { query } from "../core/statement"
+import { query, type StatementTarget } from "../core/statement"
 
 import type { AbortReason, WorkerEvent } from "./events"
 import { type Loop, maxTimerDelay, monotonicNow, startLoop } from "./loop"
@@ -44,6 +44,8 @@ export interface KeptLease {
 export interface HeartbeatOptions {
   /** Database of the worker in which the heartbeat opens its session; its `onReleaseError` receives the failures to release the connection of the session. */
   database: Database
+  /** Advisory lock that the session holds while the worker runs, and the message of the error of a round that cannot take it. */
+  lock: { key: string; busyMessage: string }
   table: JobTable
   /** Seconds between heartbeats. */
   interval: number
@@ -59,9 +61,14 @@ export interface Heartbeat {
   /** Starts keeping the lease of a claim, confirmed until `since` plus `lease` seconds of monotonic time. */
   keep(claim: ClaimRef, lease: number, since: number): KeptLease
   /**
-   * Whether the worker can keep new leases: the latest heartbeat succeeded, and none has been in flight for longer than an interval.
+   * Whether the worker can keep new leases: the latest heartbeat succeeded, so its session held the lock then, and none has been in flight for longer than an interval.
    */
   healthy(): boolean
+  /**
+   * Runs `callback` with a target of the statements of the session of the heartbeat while the session holds the lock, so that the lock is released only after `callback` ends.
+   * Rejects without calling `callback` once the stop began, without a session, or when another session holds the lock.
+   */
+  runLocked<T>(callback: (target: StatementTarget) => Promise<T>): Promise<T>
   /**
    * Stops the heartbeats and the keeping of every lease, and resolves once the heartbeat in flight ends and the session is closed; a later call returns the same promise.
    */
@@ -79,6 +86,7 @@ interface Entry extends KeptLease {
  * Starts the heartbeat of a worker.
  * It sends one heartbeat at a time for every kept lease that is not lost, or `select 1` without one, so that a broken connection is noticed before the worker claims.
  * It sends them in a session that it opens with `openSession` of its database, which keeps one connection across the rounds.
+ * Each round takes the lock of `o.lock` first, which kern-db answers without a statement in a session that holds it, and the session holds it until it is closed; a round whose lock another session holds fails with the message of `o.lock`, closes the session, and sends no heartbeat, so that the worker takes no jobs meanwhile.
  * When a round fails with an open session, a rejected statement keeps the session, and any other error, such as of a lost connection, closes it, which does not return a connection that may be broken to the pool; the next round opens a session when it has none.
  */
 export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
@@ -89,6 +97,10 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
   let inFlightSince: number | null = null
   let stopping: Promise<void> | undefined
   const { database } = o
+  /** Takes the lock in the session of the caller, and throws when another session holds it. */
+  async function takeLock() {
+    if (!(await database.tryLock(o.lock.key))) throw new Error(o.lock.busyMessage)
+  }
 
   async function beat() {
     const sentAt = monotonicNow()
@@ -96,6 +108,9 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
     try {
       session ??= await database.openSession()
       // A session that opens after the stop is closed by the stop, which waits for this round.
+      if (stopping) return
+      await session.run(takeLock)
+      // A stop that began while the lock was taken sends no heartbeat; it waits for this round and then closes the session.
       if (stopping) return
       const kept = [...entries].filter(e => !e.lost)
       if (kept.length === 0) await session.run(() => query(database, "select 1"))
@@ -183,6 +198,14 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
       entries.add(entry)
       schedule()
       return entry
+    },
+    runLocked(callback) {
+      const held = session
+      if (stopping || !held) return Promise.reject(new Error("The heartbeat holds no lock"))
+      return held.run(async () => {
+        await takeLock()
+        return await callback(database)
+      })
     },
     healthy() {
       return (

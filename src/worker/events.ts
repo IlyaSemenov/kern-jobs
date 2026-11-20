@@ -64,9 +64,11 @@ export type WorkerEvent =
   | { type: "schema-error"; error: unknown }
   // Evaluating this schedule failed; the worker continues with the next schedule.
   | { type: "schedule-error"; id: string; error: unknown }
-  // The driver failed to release a connection; the outcome of the statements on it stands.
+  // The driver failed to release a connection, or the lock of the worker id on it; the outcome of the statements on it stands.
   | { type: "release-error"; error: unknown }
   | { type: "reap"; jobs: Reaped[] }
+  // At its start, the worker returned the jobs that a previous worker of its id had claimed.
+  | { type: "recover"; jobs: Reaped[] }
   | { type: "reap-error"; error: unknown }
   // An unexpected failure of the worker, such as a defect; the worker goes on.
   | { type: "error"; error: unknown }

@@ -82,6 +82,7 @@ await sql.end()
 Run it at every deploy as well, as [Updating kern-jobs](./deployment/updating-kern-jobs) describes.
 
 To use a different schema name, pass it as `schemaName` to `migrateJobs`, and to `createJobs` and `startWorker` below.
+Each schema is an installation of kern-jobs of its own: its jobs, the code that enqueues them, and its workers do not see those of another one.
 
 ## Define tasks
 

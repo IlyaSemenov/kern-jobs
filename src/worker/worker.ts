@@ -31,10 +31,10 @@ export interface WorkerReaperOptions {
  * - `settlement`: a statement that records the outcome of a job failed; the worker retries it, and a job whose outcome it cannot record returns to pending once its lease expires, or fails on its last attempt;
  * - `schema`: the schema of kern-jobs is not up to date, such as before `migrateJobs`, or checking it failed; the worker takes no jobs and checks again after the poll interval;
  * - `schedule`: the worker could not check the schedule identified by `info.id` and tries again in its next round;
- * - `claim`: taking jobs failed, which the worker tries again after the poll interval, or a job was taken too late to keep its lease, and the worker failed it without running its handler;
- * - `heartbeat`: extending the leases of the running jobs failed, which the worker tries again;
+ * - `claim`: taking jobs, or returning the jobs of a dead worker of its id at its start, failed, which the worker tries again after the poll interval, or a job was taken too late to keep its lease, and the worker failed it without running its handler;
+ * - `heartbeat`: extending the leases of the running jobs failed, or another running worker holds the id of the worker, which the worker tries again;
  * - `reaper`: returning the jobs of expired leases failed, which the worker tries again;
- * - `release`: the driver failed to release a connection;
+ * - `release`: the driver failed to release a connection, or the lock of the id of the worker on it;
  * - `worker`: the worker itself failed unexpectedly and goes on.
  */
 export type WorkerErrorInfo =
@@ -51,7 +51,12 @@ export interface WorkerOptions {
   schemaName?: string | undefined
   /** Jobs that the worker runs at once; 1 by default. */
   concurrency?: number | undefined
-  /** Name of the worker, which the jobs that it runs store; made of the host and the process by default. */
+  /**
+   * Name of the worker, which the jobs that it runs store; made of the host and the process by default.
+   * A worker that starts with the id of a worker that has died returns the jobs of that worker at once, rather than after their leases: each runs again, or fails if that was its last attempt.
+   * Give each running worker of an installation of kern-jobs, which `schemaName` identifies, its own id.
+   * A worker whose id another running worker of its installation has takes no jobs until that one stops.
+   */
   id?: string | undefined
   /** Lease in seconds of the jobs of tasks without a `lease` of their own; 60 by default. */
   lease?: number | undefined

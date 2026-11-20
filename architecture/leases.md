@@ -1,7 +1,7 @@
 # Leases
 
 A claim gives the job a lease, which heartbeats extend until the job is settled.
-The reaper returns jobs whose lease expired.
+The reaper returns jobs whose lease expired, and a worker that starts with the id of an ended worker returns the jobs of that worker.
 
 ## Heartbeat
 
@@ -46,6 +46,18 @@ A producer that holds a key for longer than the timeout costs the round the time
 Returning a queued job frees its queue.
 A reaper statement applies to its whole batch or to none of it, also when the reaper process dies during the statement.
 
+## Jobs of an ended worker
+
+A worker holds a session-level advisory lock of its id in the session of its heartbeat for its life, so that a worker that starts with the id of an ended worker returns the jobs of that worker without waiting for their leases, such as after a restart of a process that was killed ([decision](../decisions/leases/worker-id-lock.md)).
+PostgreSQL releases the lock when the session ends, so a session that takes it tells that the worker that held it has stopped, its process has died, or its connection was lost.
+
+- Each running worker of an [installation](README.md#terms) must have an id of its own.
+- The heartbeat connection must be a session of PostgreSQL of its own, not a connection that a pooler in transaction mode shares between clients: PostgreSQL keeps a session lock on the server connection that took it, so another client of that connection would take the lock again, and a client of another one would wait for a lock that no worker holds.
+- The key of the lock names kern-jobs, the schema, and the id, so that workers of different installations may share an id.
+- Each heartbeat takes the lock first, which kern-db answers without a statement in a session that holds it; a heartbeat that cannot take it fails, so the worker takes no jobs while another session holds the lock, such as of a running worker of the same id.
+- Once a heartbeat holds the lock and the schema is checked, and before its first claim, the worker returns the active jobs of its id by the statements of the [reaper](#reaper), with `locked_by` of the id instead of an expired lease and `last_error` `worker restarted`: a job on its last attempt fails, and any other returns to pending, also before its lease expires.
+- It runs these statements in the session of its heartbeat, which closes only after the statement in flight, so that a worker of the id that takes the lock next never meets a statement of the return of this one; once the stop begins, it sends no further statement of the return, also within a batch.
+
 ## Fencing
 
 Each claim gets a new claim id from a sequence, and every transition from `active` matches it ([decision](../decisions/leases/claim-id-fencing.md)).
@@ -58,6 +70,9 @@ A complete that meets a row locked by the reaper waits for its transaction and f
 - A handler that ignores the abort keeps running after its lease is lost and can overlap the next execution of its job, including in a queue; only the abort and the fencing of its settlement protect the job.
 - When a worker dies during a claim statement, its server backend can still commit the claim; the job then spends an attempt and returns after its lease.
 - A row whose key a producer transaction holds for long stays active, and every round waits the timeout on it again; many such rows in the oldest `limit` expired rows delay the return of the later ones.
+- A job of an ended worker whose key a producer transaction holds past the timeout of every batch of the return stays active until the reaper returns it after its lease; when producers hold the keys of every row of a batch, the return ends, and the jobs after them wait for their leases too.
+- A worker whose heartbeat session ended while its process runs, such as after the loss of its connection, holds no lock until a heartbeat in its next session takes it again: a worker that starts with its id in between returns its jobs, whose handlers still run until the first worker aborts them at the deadline of their leases, since its heartbeat fails at the lock before it extends them, and the first worker takes no jobs while the second one runs.
+- After `stop` gives up, its handlers may still run without the lock, and a worker that starts with its id returns their jobs at once.
 
 ## Open questions
 

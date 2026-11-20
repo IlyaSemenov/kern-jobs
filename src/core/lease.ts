@@ -1,10 +1,10 @@
-// Leases of claimed jobs: heartbeats that extend them and the reaper that returns expired jobs.
+// Leases of claimed jobs: heartbeats that extend them, and the reaper that returns expired jobs or the jobs of a worker that has ended.
 import { isQueryError } from "kern-db"
 
 import { hook, NOW } from "./db"
 import type { ClaimRef } from "./job"
 import type { JobTable } from "./schema"
-import { query, type StatementTarget } from "./statement"
+import { type Param, query, type StatementTarget } from "./statement"
 import { isUniqueViolation } from "./violation"
 
 /** Claim that a heartbeat extends, with its lease in seconds. */
@@ -72,6 +72,10 @@ export interface Reaped {
 export interface ReapOptions {
   /** Time of the statements; `statement_timestamp()` when omitted. */
   now?: Date | null
+  /**
+   * Worker whose active jobs to return whatever their leases, with `last_error` `worker restarted`, such as at the start of a worker of the same id once the session of the previous one has ended; the jobs of expired leases when omitted.
+   */
+  worker?: string | undefined
   limit?: number
   /** Attempts per row in the per-row fallback before the row is detached unconditionally. */
   maxRetries?: number
@@ -91,14 +95,50 @@ export interface ReapStats {
   forcedDetaches?: number
 }
 
-// The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `expired` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
-// Several expired rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
+/** Active rows that a reap returns, and the `last_error` that it gives them. */
+interface ReapTarget {
+  /** Condition of the rows of the alias `j` in the reap statement, whose `$1` is its time and `$6` the worker. */
+  condition: string
+  /** Parameters of the reap statement after its first five: the worker, if any. */
+  params: string[]
+  error: string
+  /** Statement of the ids of the rows, in the order of their ids, up to the limit. */
+  ids: { text: string; params: Param[] }
+}
+
+/** Returns the condition of the rows that a reap with these options returns, the parameters of its statement, and the statement of their ids. */
+function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
+  const limit = o.limit ?? 100
+  // Each statement of ids names only its own parameters, since PostgreSQL cannot type a parameter that a statement does not use.
+  return o.worker === undefined
+    ? {
+        condition: `j.lease_until < ${NOW}`,
+        params: [],
+        error: "lease expired",
+        ids: {
+          text: `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
+          params: [o.now ?? null, limit],
+        },
+      }
+    : {
+        condition: "j.locked_by = $6::text",
+        params: [o.worker],
+        error: "worker restarted",
+        ids: {
+          text: `select id from ${table.name} where state = 'active' and locked_by = $2::text order by id limit $1::text::int`,
+          params: [limit, o.worker],
+        },
+      }
+}
+
+// The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `candidates` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
+// Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
 // Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
-const reapSql = (table: JobTable) => `with timeout as materialized (
+const reapSql = (table: JobTable, target: ReapTarget) => `with timeout as materialized (
     select set_config('lock_timeout', $5::text, true)
-  ), expired as (
+  ), candidates as (
     select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts from ${table.name} j, timeout
-    where j.state = 'active' and j.lease_until < ${NOW} and ($3::text::bigint is null or j.id = $3::text::bigint)
+    where j.state = 'active' and ${target.condition} and ($3::text::bigint is null or j.id = $3::text::bigint)
     order by j.id
     limit $2::text::int
     for update of j skip locked
@@ -108,7 +148,7 @@ const reapSql = (table: JobTable) => `with timeout as materialized (
       row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
       exists (select 1 from ${table.name} p
               where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
-    from expired e
+    from candidates e
   )
   update ${table.name} j set
     state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
@@ -116,12 +156,12 @@ const reapSql = (table: JobTable) => `with timeout as materialized (
                then null else j.key end,
     run_at = ${NOW}, not_before = ${NOW}, window_started_at = ${NOW},
     failed_at = case when r.attempts >= r.max_attempts then ${NOW} end,
-    claim_id = null, locked_by = null, lease_until = null, last_error = 'lease expired'
+    claim_id = null, locked_by = null, lease_until = null, last_error = '${target.error}'
   from ranked r where j.id = r.id
   returning j.id, j.state, (j.key is null and r.key is not null)::text as detached`
 
 /**
- * Returns expired active jobs: `failed` on the last attempt, otherwise `pending`.
+ * Returns expired active jobs, or the active jobs of `o.worker`: `failed` on the last attempt, otherwise `pending`.
  * The reaper never merges: a returning job loses its key when a pending job of the key exists or the batch returns several jobs of the key.
  * The batch runs as one statement, which holds the rows of the whole batch while it waits for the transaction of a producer that inserts a pending job of a returning key; each such wait lasts at most `lockTimeout`.
  * After a `23505` or such a timeout the batch is redone row by row, so a hot or blocked key affects only its own row:
@@ -134,14 +174,16 @@ export async function reap(
   stats: ReapStats = { uniqueViolations: 0 },
 ): Promise<Reaped[]> {
   const lockTimeoutMs = Math.max(1, Math.round((o.lockTimeout ?? 1) * 1000))
+  const target = toReapTarget(table, o)
   const run = async (onlyId: string | null, forceDetach: boolean): Promise<Reaped[]> => {
     await o.pause?.beforeAttempt?.()
-    const rows = await query(db, reapSql(table), [
+    const rows = await query(db, reapSql(table, target), [
       o.now ?? null,
       o.limit ?? 100,
       onlyId,
       forceDetach,
       lockTimeoutMs,
+      ...target.params,
     ])
     return rows.map(r => ({
       id: r.id!,
@@ -157,13 +199,9 @@ export async function reap(
     else if (isUniqueViolation(e, "job_pending_key_idx")) stats.uniqueViolations++
     else throw e
   }
-  const expired = await query(
-    db,
-    `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
-    [o.now ?? null, o.limit ?? 100],
-  )
+  const candidates = await query(db, target.ids.text, target.ids.params)
   const result: Reaped[] = []
-  for (const { id } of expired) {
+  for (const { id } of candidates) {
     for (let attempt = 0; ; attempt++) {
       const force = attempt >= (o.maxRetries ?? 3)
       try {
@@ -173,7 +211,7 @@ export async function reap(
           stats.forcedDetaches = (stats.forcedDetaches ?? 0) + rows.filter(r => r.detached).length
         break
       } catch (e) {
-        // The row waits for a producer: leave it expired and active, so that the next round returns it once the producer ends.
+        // The row waits for a producer: leave it active, so that the next round returns it once the producer ends.
         if (isQueryError(e, "lock_not_available")) {
           countLockTimeout()
           break

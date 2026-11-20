@@ -28,7 +28,7 @@ To tell your process manager or orchestrator that the worker has started, await 
 await worker.ready
 ```
 
-It resolves once the worker has checked its schema and reached the database on the connections of your client.
+It resolves once the worker has checked its schema and reached the database on the connections of your client, and no other running worker holds its `id`.
 Until then, the worker [reports](#report-errors) what keeps it from starting, such as a schema that `migrateJobs` has not created.
 If `stop` begins first, `ready` rejects.
 
@@ -44,7 +44,7 @@ createServer((request, response) => {
 
 - `starting`: the worker is not ready yet.
 - `ready`: the worker has started, and its heartbeat is healthy.
-- `unhealthy`: the worker cannot reach the database in time, such as after losing its connection: it takes no new jobs and keeps trying, and it becomes `ready` again by itself once the database answers.
+- `unhealthy`: the latest heartbeat of the worker failed or is late, such as after losing its connection or while another running worker holds its `id`: it takes no new jobs and keeps trying, and it becomes `ready` again by itself once a heartbeat succeeds.
 - `stopping` and `stopped`: `stop` has begun or ended.
 
 `state` does not tell whether jobs progress: a worker whose handlers keep every connection of its client busy stays `ready` while it waits for one.

@@ -21,8 +21,8 @@ Every statement names the table and the sequence qualified by their schema, so t
 - `state`: `pending`, `active`, or `failed`.
 - `claim_id`: the claim id, a new value of the sequence `claim_seq` at each claim.
 - `lease_until`: the end of the lease.
-- `locked_by` and `locked_at`: the worker and the time of the claim, for observation.
-- `last_error`: the error of the latest failure or `lease expired`; a requeue and a retry keep it.
+- `locked_by` and `locked_at`: the worker and the time of the claim; a worker returns the active rows of its id at its start ([Leases](leases.md#jobs-of-an-ended-worker)).
+- `last_error`: the error of the latest failure, `lease expired`, or `worker restarted`; a requeue and a retry keep it.
 - `failed_at`: the time when the job became failed, by which the application deletes old failed jobs.
 
 Check constraints enforce these invariants for every write:
@@ -39,7 +39,7 @@ Check constraints enforce these invariants for every write:
 - Complete deletes an active job.
 - Fail makes an active job pending again, deletes it as superseded by the pending job of its key, or makes it failed; with a pending job of its key in mode `keep`, fail deletes that pending job instead ([Settlement](settlement.md#fail)).
 - Requeue makes an active job pending again or deletes it as superseded, as fail does, but never makes it failed ([Settlement](settlement.md#requeue)).
-- The reaper makes an active job whose lease expired pending again, or failed on its last attempt.
+- The reaper makes an active job whose lease expired pending again, or failed on its last attempt, and so does a worker at its start with the active jobs of its id.
 - No worker or enqueue changes a `failed` row: it stays as a dead letter, outside the uniqueness of keys.
 - A retry of the application makes a failed job pending again, unless a pending job of its key exists; a delete of the application deletes pending or failed jobs by id or by a filter ([Administration](administration.md)).
 

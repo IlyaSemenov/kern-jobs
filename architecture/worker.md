@@ -12,7 +12,7 @@ Claiming, heartbeats, and the reaper run in rounds, each one at a time: the next
 
 - `schemaName`: the PostgreSQL schema of the job table, `kern_jobs` by default, as of `createJobs` and `migrateJobs`.
 - `concurrency`: the [slots](#slots) of the worker, 1 by default, an integer from 1 to 2^31 − 1, the largest limit of a statement.
-- `id`: the name of the worker in the rows it claims, by default of its host, its process id, and a random suffix; [storable text](README.md#terms) that is not empty.
+- `id`: the name of the worker in the rows it claims and in the key of the lock that tells whether it runs, by default of its host, its process id, and a random suffix; [storable text](README.md#terms) that is not empty, which no other running worker of the [installation](README.md#terms) may have ([Leases](leases.md#jobs-of-an-ended-worker)).
 - `lease`: the lease in seconds of tasks without one, 60 by default, in the [range of a lease](producer.md#task-definitions).
 - `pollInterval`: seconds between claim cycles while slots are free, 1 by default.
 - `reaper`: `false`, or `interval`, 5 seconds by default, and `limit`, 100 jobs per batch by default, of the [reaper](#reaper).
@@ -84,8 +84,10 @@ The worker becomes ready once such a statement has returned and the heartbeat is
 
 ## Claiming
 
-- The worker claims only while its heartbeat is healthy: the latest heartbeat succeeded, and none has been in flight for longer than the heartbeat interval.
+- The worker claims only while its heartbeat is healthy: the latest heartbeat succeeded, so its session held the lock of the id then, and none has been in flight for longer than the heartbeat interval.
   It checks this again before each claim statement of a cycle and ends the cycle when the heartbeat fails or the worker stops.
+- Its first claim cycle with a healthy heartbeat first returns the active jobs of its id in the session of the heartbeat, in batches of 100: a batch that returns a row is followed by another, which tries again the rows whose keys a producer held, and a batch that returns none ends the return ([Leases](leases.md#jobs-of-an-ended-worker)); then it checks the stop and the heartbeat again before it claims.
+  A cycle whose return fails is reported as a failed claim cycle, and the next one returns them again.
 - A claim cycle fills the free slots, and each claim starts its handler as soon as its statement returns ([Claiming](claiming.md#claim-cycle)), unless:
   - `stop` has given up, at its timeout or by `force`: the worker sends nothing, and the job returns after its lease;
   - `stop` has begun: the worker requeues the job with its attempt given back, also when the deadline of its lease has passed too;
@@ -98,6 +100,7 @@ The worker becomes ready once such a statement has returned and the heartbeat is
 The worker keeps the requirements of [Leases](leases.md#heartbeat):
 
 - The heartbeat runs in a session of kern-db on a connection that the worker reserves for its life ([Drivers](drivers.md#connections-of-the-worker)).
+- Each heartbeat takes the lock of the id first, and sends nothing more when the stop began meanwhile; a heartbeat whose lock another session holds fails with an error that names the id, and closes the session, so the next heartbeat tries again on another connection.
 - It sends one heartbeat at a time, every heartbeat interval, with every claim of the worker that is not known lost, and `select 1` without one, so that a broken connection is noticed before the worker claims.
 - After a connection error, it closes the session, which does not return a connection that may be broken to the pool, and opens another one for the next heartbeat; a statement that PostgreSQL rejected keeps the session.
 - The lease of a claim is confirmed until the send time of the latest statement that confirmed it, its claim statement or a heartbeat, plus the lease, on a monotonic clock, since the server extends the lease after the statement was sent; each claim statement of a cycle counts from its own send time.
@@ -170,7 +173,7 @@ Both listen with `process.on` and treat a later signal of either kind by its tim
 - `backoff` and `settlement`: the backoff of a task failed, or a settlement statement did; with the task and the metadata of the job.
 - `schema`: the schema is not up to date, or its check failed.
 - `schedule`: the check of a schedule failed; with the schedule ID.
-- `claim`, `heartbeat`, `reaper`, and `release`: a claim cycle, a heartbeat, a reaper round, or the release of a connection failed; `claim` also reports a claim that returned after the deadline of its lease, whose job the worker failed without running its handler.
+- `claim`, `heartbeat`, `reaper`, and `release`: a claim cycle, a heartbeat, a reaper round, or the release of a connection or of the lock of the id on it failed; `claim` also reports a failed return of the jobs of the id and a claim that returned after the deadline of its lease, whose job the worker failed without running its handler, and `heartbeat` a heartbeat whose lock of the id another session holds.
 - `worker`: an unexpected failure of the runtime, such as a defect.
 
 Each failed statement is reported, also one that the worker retries.

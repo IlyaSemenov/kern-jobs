@@ -39,6 +39,7 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Heartbeats run in a session that the worker opens with `openSession` of its `Database`, which reserves a connection for the life of the worker from the pool of its driver, which therefore needs at least two connections, and one more for each other worker on it ([Worker](worker.md#accepted-limitations)); the runtime can take the connection from another pool, which tests use to break it alone.
   [Leases](leases.md#heartbeat) describes why they need a connection of their own.
   A heartbeat that PostgreSQL rejected keeps the session, and after a connection error, the worker closes it and opens another one.
+  The session holds the lock of the worker id, which kern-db releases before it returns the connection to the pool ([Leases](leases.md#jobs-of-an-ended-worker)).
 - The worker cancels no statement: the drivers of kern-db cannot, so a statement in flight when `stop` gives up ends in the background, bounded only by the timeouts of the client and the server ([Worker](worker.md#stopping)).
 - The worker waits for the release of a connection, which a driver may finish asynchronously, and a failed release does not change the outcome of the statements on the connection: fail and requeue still return their outcome or throw their error, and the worker reports the failure as `release-error`.
 

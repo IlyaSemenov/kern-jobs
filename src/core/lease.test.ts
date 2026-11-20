@@ -1,4 +1,4 @@
-// Leases: the reaper with an existing pending job, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
+// Leases: the reaper with an existing pending job, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { waitForLock, waitForLockedStatement } from "kern-db/testing"
@@ -258,6 +258,45 @@ describe("reaper with an existing pending job", () => {
       await claimCycle(schema.admin, schema.table, { ...W("live"), slots: 1, now: T(11) }),
     )
     expect(next.job.payload).toBe(2)
+  })
+})
+
+describe("returning the active jobs of a worker", () => {
+  test("returns the active jobs of the worker before their leases expire, and leaves those of another worker", async () => {
+    const { a } = await expiredWithPending({ withPending: false })
+    await enqueue(schema.admin, schema.table, { task: "t", now: T(0) })
+    const other = only(
+      await claimPlain(schema.admin, schema.table, { ...W("live"), limit: 1, now: T(0) }),
+    )
+    expect(await reap(schema.admin, schema.table, { worker: "dead", now: T(1) })).toEqual([
+      { id: a.id, state: "pending", detached: false },
+    ])
+    const rows = await jobs(schema)
+    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.locked_by, r.last_error])).toEqual([
+      [a.id, "pending", "k", 1, null, "worker restarted"],
+      [other.id, "active", null, 1, "live", null],
+    ])
+    expect(secondsOf(rows[0]!.run_at)).toBe(1)
+  })
+
+  test("a job of the worker on its last attempt fails", async () => {
+    const { a } = await expiredWithPending({ maxAttempts: 1, withPending: false })
+    expect(await reap(schema.admin, schema.table, { worker: "dead", now: T(1) })).toEqual([
+      { id: a.id, state: "failed", detached: false },
+    ])
+  })
+
+  test("B committed after the snapshot → 23505, and the retry row by row detaches the job of the worker", async () => {
+    const { a } = await expiredWithPending({ withPending: false })
+    const reaper = await schema.connect({ hooks: ["reap"] })
+    const release = await holdHook(schema.admin, "reap")
+    const stats = { uniqueViolations: 0 }
+    const reaped = reap(reaper, schema.table, { worker: "dead", now: T(1) }, stats)
+    await waitForLock(schema.admin, reaper.pid)
+    await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(1) })
+    await release()
+    expect(await reaped).toEqual([{ id: a.id, state: "pending", detached: true }])
+    expect(stats.uniqueViolations).toBe(1)
   })
 })
 

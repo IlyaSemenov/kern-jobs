@@ -7,7 +7,7 @@ Its core promises:
 
 - A key keeps at most one pending job per scope and task, and no event of the key is lost unless the application deletes the pending job that carries it: an event either merges into the pending job by the mode of the key, and that job runs after the event commits, or becomes the next pending job, also while a job of the key runs.
 - A queue runs at most one job at a time per scope and starts the earliest of its ready jobs of the tasks of the claiming worker in the snapshot of each claim.
-- A worker owns a job through a claim, which every heartbeat and settlement proves; a job whose lease expires returns to pending, or fails on its last attempt, and a stale claim can neither extend nor settle it.
+- A worker owns a job through a claim, which every heartbeat and settlement proves; a job whose lease expires, or whose worker has ended when a worker of its id starts, returns to pending, or fails on its last attempt, and a stale claim can neither extend nor settle it.
 - Deadlines are computed in SQL from the committed row, so concurrent producers and workers never move a lease or the debounce deadline of a window backwards, and no enqueue moves a retry before the end of its backoff.
 
 The public API is not settled before 1.0 and may change in any release.
@@ -17,6 +17,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 
 ## Terms
 
+- An installation is one job table, which `migrateJobs` creates in a PostgreSQL schema of its own, with the producers and workers that use it; its schema tells it apart from another installation in the same database.
 - A task is a kind of work defined in code, such as sending an email; a job is one row of the table that a worker executes as a task.
 - A scope is a namespace of keys and queues, such as of a tenant: a key merges and a queue serializes only the jobs of its scope.
   It separates jobs logically within one table and one set of workers; it is neither a partition of the table, nor a quota, nor access control.

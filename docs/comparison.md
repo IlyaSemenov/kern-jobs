@@ -23,17 +23,17 @@ kern-jobs is in early development, and its API changes between minor versions.
 
 ## At a glance
 
-|                                                                          | kern-jobs                                                  | Graphile Worker                                      | pg-boss                                                |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
-| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM                                 | Through a SQL function                               | Through an adapter of your client                      |
-| [Payload types shared by the application and workers](#payload-types)    | A task definition                                          | A global interface                                   | Not connected                                          |
-| [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                       | Job keys                                             | Queue policies, with other rules                       |
-| [Debounce with a bound on postponing](#debounce)                         | Built in                                                   | Without a bound                                      | Time slots of a fixed length                           |
-| [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                     | Named queues                                         | `key_strict_fifo`, which also blocks on a failed job   |
-| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window             | UTC crontab, backfill of each eligible occurrence    | Cron or RRULE in a time zone, one catch-up job         |
-| [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | Released after a lease, 60 seconds by default              | Locked for at least 4 hours                          | Released after a heartbeat timeout or their expiration |
-| [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt | A job that throws after the abort spends its attempt | Jobs still running at the timeout fail                 |
-| [Schema migrations](#schema-migrations)                                  | A call of the application                                  | At the start of a worker                             | At the start of an instance                            |
+|                                                                          | kern-jobs                                                         | Graphile Worker                                      | pg-boss                                                |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM                                        | Through a SQL function                               | Through an adapter of your client                      |
+| [Payload types shared by the application and workers](#payload-types)    | A task definition                                                 | A global interface                                   | Not connected                                          |
+| [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                              | Job keys                                             | Queue policies, with other rules                       |
+| [Debounce with a bound on postponing](#debounce)                         | Built in                                                          | Without a bound                                      | Time slots of a fixed length                           |
+| [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                            | Named queues                                         | `key_strict_fifo`, which also blocks on a failed job   |
+| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window                    | UTC crontab, backfill of each eligible occurrence    | Cron or RRULE in a time zone, one catch-up job         |
+| [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | After a lease, 60 s by default, or when a worker of its id starts | Locked for at least 4 hours                          | Released after a heartbeat timeout or their expiration |
+| [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt        | A job that throws after the abort spends its attempt | Jobs still running at the timeout fail                 |
+| [Schema migrations](#schema-migrations)                                  | A call of the application                                         | At the start of a worker                             | At the start of an instance                            |
 
 ## Enqueue in a transaction
 
@@ -82,9 +82,9 @@ kern-jobs [schedules](./workers/schedules) use UTC calendars and can enqueue one
 ## Jobs of a worker that dies
 
 With kern-jobs, a worker extends the leases of its running jobs, and when it dies, each of its jobs returns to pending once its lease expires, and runs again, or fails if that was its last attempt; see [Leases](./workers/leases).
-The lease is 60 seconds by default.
+The lease is 60 seconds by default, and a worker that starts with the `id` of the dead worker returns its jobs at once.
 
-- Graphile Worker: a job of a worker that died stays locked for [at least 4 hours](https://github.com/graphile/worker/blob/v0.18.0/website/docs/error-handling.md#instantaneous-exit).
+- Graphile Worker: a job of a worker that died stays locked for [at least 4 hours](https://github.com/graphile/worker/blob/v0.18.0/website/docs/error-handling.md#instantaneous-exit), unless you pass the ids of crashed workers to [`force_unlock_workers`](https://github.com/graphile/worker/blob/v0.18.0/website/docs/admin-functions.md?plain=1#L91-L125).
 - pg-boss: such a job waits for its expiration, 15 minutes by default, or, with a [heartbeat](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/queues.md#heartbeat-vs-expiration) that its queue or job enables, until its heartbeats stop for longer than their timeout.
 
 ## Stopping a worker

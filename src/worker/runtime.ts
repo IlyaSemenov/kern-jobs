@@ -1,9 +1,10 @@
-// Runtime of a worker: checks its schema, claims jobs of its tasks into free slots, runs their handlers under kept leases, settles them, runs the reaper, and tells its readiness and state.
+// Runtime of a worker: checks its schema, returns the jobs of a previous worker of its id, claims jobs of its tasks into free slots, runs their handlers under kept leases, settles them, runs the reaper, and tells its readiness and state.
 // Claims and settlements use the pool of the worker; heartbeats use a connection of their own.
 import { createDatabase, type Database, type Driver } from "kern-db"
 
 import { claimCycle, createClaimState } from "../core/claim"
 import type { Claim, JobRow } from "../core/job"
+import { reap } from "../core/lease"
 import type { JobTable } from "../core/schema"
 import type { FailOptions } from "../core/settlement"
 import { query, type StatementTarget } from "../core/statement"
@@ -55,7 +56,7 @@ export interface RuntimeOptions {
   tasks: Record<string, WorkerTask>
   /** Jobs that run at once; a job takes its slot from its claim until its settlement ends. */
   concurrency: number
-  /** Name of the worker in claimed rows. */
+  /** Name of the worker in claimed rows, unique among the running workers of its installation, which the heartbeat holds the lock of. */
   id: string
   /** Lease in seconds of tasks without one. */
   lease: number
@@ -170,6 +171,23 @@ function toFailOptions(
   return { error: message, backoff: defaultBackoff(attempt) }
 }
 
+/**
+ * Returns the advisory lock of a worker id in the schema of a job table, which the heartbeat holds while the worker runs, and the message of the error of a heartbeat while another worker holds it.
+ * The key names kern-jobs, since an application takes advisory locks of its own in the same space, and the schema name, which identifies the installation within the database, since workers of different installations may share an id; JSON keeps a separator in the schema or the id from making two keys equal.
+ */
+function toWorkerLock(table: JobTable, id: string): { key: string; busyMessage: string } {
+  return {
+    key: `kern-jobs:worker:${JSON.stringify([table.schemaName, id])}`,
+    busyMessage: `Worker id ${id} is in use in schema ${table.schemaName}; this worker takes no jobs until the id is free`,
+  }
+}
+
+/** Maximum number of jobs that one batch of the return at the start of a worker returns. */
+const recoveryLimit = 100
+
+/** Rejection of a statement of the return of the jobs of the id after the stop began, which ends the return without an error. */
+const recoveryStopped = new Error("The worker stopped")
+
 /** Starts the runtime of a worker; it trusts its options, which `startWorker` checks. */
 export function startRuntime(o: RuntimeOptions): Worker {
   const { id, lease } = o
@@ -222,6 +240,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
     database: o.heartbeatSource
       ? createDatabase({ driver: o.heartbeatSource, onReleaseError })
       : database,
+    lock: toWorkerLock(o.table, id),
     table: o.table,
     interval,
     margin,
@@ -352,6 +371,37 @@ export function startRuntime(o: RuntimeOptions): Worker {
   }
   if (schemaChecked) startMaintenance()
 
+  /**
+   * Returns the active jobs of the id to pending, or failed on their last attempt, without waiting for their leases, in batches.
+   * The worker calls it before its first claim, while its heartbeat holds the lock of the id: the session of the worker that claimed them has ended, such as of a process killed before a restart.
+   * Each batch runs in the session of the heartbeat, so that the lock outlives it: once the session closes, such as at a stop that gives up, a worker of the id that starts cannot find a batch of this one returning the jobs that it claims.
+   * A batch that returns a row is followed by another, which tries again the rows whose keys a producer held, and a batch that returns none ends the return.
+   * Once the stop begins, it sends no further statement, also within a batch, and the jobs that it did not return wait for a worker of the id or for their leases.
+   */
+  async function recoverJobs() {
+    while (!stopping) {
+      let jobs
+      try {
+        jobs = await heartbeat.runLocked(session =>
+          reap(
+            {
+              execute: statement =>
+                stopping ? Promise.reject(recoveryStopped) : session.execute(statement),
+            },
+            o.table,
+            { worker: id, limit: recoveryLimit },
+          ),
+        )
+      } catch (error) {
+        if (error === recoveryStopped) return
+        throw error
+      }
+      if (jobs.length === 0) return
+      emit({ type: "recover", jobs })
+    }
+  }
+  let recovered = false
+
   const claimState = createClaimState()
   const claimLoop: Loop = startLoop(
     async () => {
@@ -372,6 +422,14 @@ export function startRuntime(o: RuntimeOptions): Worker {
       waitingForHeartbeat = !heartbeat.healthy()
       if (waitingForHeartbeat) return
       try {
+        if (!recovered) {
+          await recoverJobs()
+          recovered = true
+          // The claim cycle does not check the stop and the heartbeat before its first statement, and both may have changed during the return.
+          if (stopping) return
+          waitingForHeartbeat = !heartbeat.healthy()
+          if (waitingForHeartbeat) return
+        }
         // A worker without tasks claims nothing; one statement proves a connection of the pool beside the heartbeat's.
         if (taskNames.length === 0) {
           if (!poolProven) await query(database, "select 1")

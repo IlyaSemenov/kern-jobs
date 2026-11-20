@@ -22,6 +22,7 @@ A job runs again only after a failure or a stop:
 - Its worker [stopped](./stopping) and aborted the handler, which threw, and the job returned to pending: the next run starts the handler from the beginning.
 - Its worker died, stopped without waiting for the handler, or lost the database for longer than the [lease](./leases), after the handler did its work and before the worker recorded the completion.
   No setting rules it out.
+- A worker with the [same `id`](./leases#return-the-jobs-of-a-restarted-worker-at-once) started while its worker had lost the connection that it keeps, and the job ran again before its handler ended.
 
 After a failure or a stop, a job of a [key](../tasks/keys#while-a-job-of-the-key-runs) can instead merge with the pending job of its key, and the mode of the key decides which payload runs.
 
@@ -59,7 +60,7 @@ The reason of the signal is a `HandlerAbort`, whose `reason` tells why:
 - `deadline`: the worker could not extend the lease, which is about to end.
 
 After the abort of a stop, a handler that throws while the stop still waits for it returns its job to pending at once without spending an attempt, also on its last attempt, and `onError` does not get the error; a `TerminalError`, a `RetryError`, or a return keeps its usual meaning.
-Once the stop [stops waiting](./stopping#stop-from-your-code), at its timeout or when forced, the outcome of a handler that ends later does not change its job, which returns once its lease expires with its attempt spent, or fails if that was its last attempt.
+Once the stop [stops waiting](./stopping#stop-from-your-code), at its timeout or when forced, the outcome of a handler that ends later does not change its job, which returns later with its attempt spent, or fails if that was its last attempt.
 
 A handler that ignores the signal keeps running: it delays the stop of its worker, and after `lost` or `deadline`, another worker can run the same job at the same time.
 

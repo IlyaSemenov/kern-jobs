@@ -1,4 +1,4 @@
-// Heartbeat of a worker on a fake connection: one heartbeat at a time, health, reopening its session, stopping, lost and busy claims, and local deadlines.
+// Heartbeat of a worker on a fake connection: one heartbeat at a time, health, reopening its session, the lock of its session, stopping, lost and busy claims, and local deadlines.
 import { afterEach, expect, jest, test } from "bun:test"
 
 import {
@@ -12,7 +12,7 @@ import {
 
 import type { ClaimRef } from "../core/job"
 import { createJobTable } from "../core/schema"
-import type { TextRow } from "../core/statement"
+import { query, type TextRow } from "../core/statement"
 
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
@@ -44,19 +44,31 @@ function toResult(rows: TextRow[]): DriverResult {
 }
 
 /**
- * Pool whose connections hand every statement to the test, which answers it; `release` of a connection records its number, counted from 1 in the order of acquiring, and returns what `onRelease` returns.
+ * Pool whose connections hand every statement to the test, which answers it, except the statements of advisory locks, which it answers itself: a lock once `lockGate` resolves, taken unless `lockBusy` is set, and an unlock at once.
+ * `release` of a connection records its number, counted from 1 in the order of acquiring, and returns what `onRelease` returns.
+ * `journal` records the locks, unlocks, and releases in their order, with the number of their connection.
  */
 function createFakeSource(onRelease?: () => Promise<void>) {
   const calls: Call[] = []
   const releases: number[] = []
+  const journal: string[] = []
   let acquires = 0
   let waiters: (() => void)[] = []
   const source = {
     async acquire(): Promise<Connection> {
       const number = ++acquires
       return {
-        execute: ({ text, parameters }) =>
-          new Promise<DriverResult>((resolve, reject) => {
+        execute: ({ text, parameters }) => {
+          if (text.includes("pg_try_advisory_lock")) {
+            journal.push(`lock ${number}`)
+            const taken = fake.lockBusy ? "f" : "t"
+            return fake.lockGate.then(() => toResult([{ taken }]))
+          }
+          if (text.includes("pg_advisory_unlock")) {
+            journal.push(`unlock ${number}`)
+            return Promise.resolve(toResult([{ released: "t" }]))
+          }
+          return new Promise<DriverResult>((resolve, reject) => {
             const c: Call = {
               text,
               params: parameters,
@@ -67,10 +79,12 @@ function createFakeSource(onRelease?: () => Promise<void>) {
             calls.push(c)
             for (const w of waiters) w()
             waiters = []
-          }),
+          })
+        },
         executeScript: async () => {},
         release: () => {
           releases.push(number)
+          journal.push(`release ${number}`)
           return onRelease?.()
         },
       }
@@ -81,7 +95,16 @@ function createFakeSource(onRelease?: () => Promise<void>) {
     while (calls.length <= index) await new Promise<void>(r => waiters.push(r))
     return calls[index]!
   }
-  const fake = { source, calls, releases, call, acquires: () => acquires }
+  const fake = {
+    source,
+    calls,
+    releases,
+    journal,
+    lockBusy: false,
+    lockGate: Promise.resolve(),
+    call,
+    acquires: () => acquires,
+  }
   fakes.push(fake)
   return fake
 }
@@ -121,6 +144,7 @@ function start(
       driver: createAcquireOnlyDriver(() => source.acquire()),
       onReleaseError: error => events.push({ type: "release-error", error }),
     }),
+    lock: { key: "worker", busyMessage: "worker id in use" },
     table: createJobTable("fake"),
     interval: 0.02,
     margin: 0.1,
@@ -206,6 +230,77 @@ test("a release that fails is reported, and the next heartbeat acquires another 
     { type: "release-error", error: releaseError },
     { type: "heartbeat-recovered" },
   ])
+})
+
+test("a session takes the lock before its first heartbeat and holds it, and a new session after a connection error takes it again", async () => {
+  const fake = createFakeSource()
+  start(fake.source)
+  ;(await fake.call(0)).resolve([])
+  expect(fake.journal).toEqual(["lock 1"])
+  ;(await fake.call(1)).reject(new ConnectionError("reset"))
+  ;(await fake.call(2)).resolve([])
+  expect(fake.journal).toEqual(["lock 1", "unlock 1", "release 1", "lock 2"])
+})
+
+test("a lock that another session holds fails the round and closes its session, and the heartbeat is healthy once a later round takes it", async () => {
+  const fake = createFakeSource()
+  fake.lockBusy = true
+  const events: WorkerEvent[] = []
+  const hb = start(fake.source, events)
+  while (fake.releases.length < 2) await sleep(0.01)
+  expect([fake.calls.length, hb.healthy()]).toEqual([0, false])
+  expect(events.slice(0, 2)).toEqual([
+    { type: "heartbeat-error", error: new Error("worker id in use") },
+    { type: "heartbeat-error", error: new Error("worker id in use") },
+  ])
+  fake.lockBusy = false
+  ;(await fake.call(0)).resolve([])
+  await fake.call(1)
+  expect(hb.healthy()).toBe(true)
+  expect(events.at(-1)).toEqual({ type: "heartbeat-recovered" })
+})
+
+test("stop releases the lock before the connection", async () => {
+  const fake = createFakeSource()
+  const hb = start(fake.source)
+  ;(await fake.call(0)).resolve([])
+  const inFlight = await fake.call(1)
+  const stopping = hb.stop()
+  inFlight.resolve([])
+  await stopping
+  heartbeat = undefined
+  expect(fake.journal).toEqual(["lock 1", "unlock 1", "release 1"])
+})
+
+test("a stop that begins while the lock is taken sends no heartbeat, and releases the lock and the connection", async () => {
+  const fake = createFakeSource()
+  const gate = Promise.withResolvers<void>()
+  fake.lockGate = gate.promise
+  const hb = start(fake.source)
+  while (fake.journal.length === 0) await sleep(0.01)
+  const stopping = hb.stop()
+  gate.resolve()
+  await stopping
+  heartbeat = undefined
+  expect([fake.calls.length, fake.journal]).toEqual([0, ["lock 1", "unlock 1", "release 1"]])
+})
+
+test("runLocked runs its statements in the session that holds the lock, and rejects once the stop began", async () => {
+  const fake = createFakeSource()
+  const hb = start(fake.source)
+  ;(await fake.call(0)).resolve([])
+  const ran = hb.runLocked(target => query(target, "select 42 as answer"))
+  let index = 1
+  let call = await fake.call(index)
+  while (!call.text.includes("42")) {
+    call.resolve([])
+    call = await fake.call(++index)
+  }
+  call.resolve([{ answer: "42" }])
+  expect(await ran).toEqual([{ answer: "42" }])
+  expect([fake.acquires(), fake.journal]).toEqual([1, ["lock 1"]])
+  void hb.stop()
+  await expect(hb.runLocked(async () => {})).rejects.toThrow("The heartbeat holds no lock")
 })
 
 test("stop waits for the release of the connection", async () => {
