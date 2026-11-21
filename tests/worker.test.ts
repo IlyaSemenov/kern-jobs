@@ -137,13 +137,15 @@ for (const [name, createDriver] of drivers) {
         ["accounts.sync", "pending", 1, "the account is busy", 30],
       ])
       const byTask = new Map(
-        reports.map(([error, info]) => [info.source === "handler" ? info.task : "", error]),
+        reports.map(([error, info]) =>
+          info.source === "handler" ? [info.task, [error, info.decision]] : ["", [error]],
+        ),
       )
       expect(byTask).toEqual(
-        new Map<string, unknown>([
-          ["search.indexProduct", errors[0]],
-          ["documents.renderPreview", errors[1]],
-          ["accounts.sync", errors[2]],
+        new Map<string, unknown[]>([
+          ["search.indexProduct", [errors[0], "terminal"]],
+          ["documents.renderPreview", [errors[1], "retry"]],
+          ["accounts.sync", [errors[2], "retry"]],
         ]),
       )
     })
@@ -173,7 +175,12 @@ for (const [name, createDriver] of drivers) {
         [id, 1],
         [id, 1],
       ])
-      expect([await jobRows(), reports.map(([reported]) => reported)]).toEqual([[], [error]])
+      // The only attempt of the first run is its last one, so the worker decides to fail the job for good.
+      const decisions = reports.map(([reported, info]) => [
+        reported,
+        info.source === "handler" && info.decision,
+      ])
+      expect([await jobRows(), decisions]).toEqual([[], [[error, "terminal"]]])
     })
 
     test("a job whose claim returns after the deadline of its lease fails without running its handler, and onError gets it", async () => {

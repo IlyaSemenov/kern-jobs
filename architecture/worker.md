@@ -120,8 +120,12 @@ After the handler ends, the worker aborts nothing, and the heartbeat keeps the l
 ## Settlement
 
 - A handler that returns completes its job, and one that throws fails it: a `TerminalError` for good, a `RetryError` with its delay, and any other error with the backoff of the task for the number of the attempt; the attempt counts in each case, so the last one fails for good, except after an interruption by `stop`; once `stop` has given up, a handler that ends is not settled.
+- Once a handler ends, the worker classifies the thrown value and decides the outcome, by `classifyThrown` and `toHandlerOutcome` of `worker/outcome.ts`, from the reason of the abort of its signal at that moment and the attempt, and uses that classification for reporting and settlement, also when `onError` changes the error that it gets.
+  It marks the handler ended before it inspects the thrown value, so that code of the value cannot abort the signal.
 - A handler whose signal was aborted with `stop` and that throws any other error than a `TerminalError` or a `RetryError` is interrupted: the worker [requeues](settlement.md#requeue) its job with the attempt given back and does not report the error, since libraries wrap an abort in errors of their own, and counting such an error as a failure would fail jobs for good at a deploy ([decision](../decisions/settlement/requeue-on-stop.md)); an abort `lost` or `deadline` does not change the outcome.
-- A backoff that throws or returns a value outside the range of a delay is reported as `backoff-error`, and the job retries with `defaultBackoff`, so that it is still settled; so is a thrown value whose class `instanceof` cannot tell, such as a proxy whose trap throws.
+- When the worker gets no valid delay for a fail, it reports `backoff-error` and takes `defaultBackoff`, so that the job is still settled; the delay applies if the job returns to pending.
+  It reports what was thrown when the backoff of the task throws, when `instanceof` cannot tell the class of the thrown value, such as of a proxy whose trap throws, or when the delay of a `RetryError` cannot be read, and a `RangeError` for a delay outside its range, of the backoff or of a `RetryError`.
+  A value whose class cannot be told counts as an ordinary error, also as an interruption after the abort `stop`, which reports nothing, and a `RetryError` whose delay cannot be read stays a `RetryError`.
 - A claim that a heartbeat found lost is not settled.
 - After a connection error, the worker retries the settlement on a new connection, with a delay that doubles up to the heartbeat interval, while the lease is confirmed; a statement that PostgreSQL rejected is retried three times ([decision](../decisions/settlement/worker-retries-settlement.md)).
 - After a statement of unknown outcome, which `isOutcomeUnknown` of kern-db tells, a retry that finds the claim gone, or giving the settlement up, gives the outcome `unknown`: that statement may have been applied.
@@ -171,8 +175,9 @@ Both listen with `process.on` and treat a later signal of either kind by its tim
 
 `startWorker` reports every error of the runtime synchronously to `onError`, with what failed, and ignores an error that `onError` throws:
 
-- `handler`: the handler of a job threw, unless it was interrupted by `stop`; with the task, the metadata of the job, and the reason of the abort of its signal, or `null`.
-- `backoff` and `settlement`: the backoff of a task failed, or a settlement statement did; with the task and the metadata of the job.
+- `handler`: the handler of a job threw, unless it was interrupted by `stop`; with the task, the metadata of the job, the reason of the abort of its signal, or `null`, and the decision of the worker: `retry`, or `terminal` for a failure for good.
+  The decision is the [outcome](#settlement) that the worker then settles, not what the database recorded: the settlement of a `retry` can delete the job as superseded, a claim that a heartbeat found lost is not settled, and a settlement that the worker gives up may or may not have been applied.
+- `backoff` and `settlement`: the worker could not determine the delay of a retry and took `defaultBackoff`, as [Settlement](#settlement) lists, or a settlement statement failed; with the task and the metadata of the job.
 - `schema`: the schema is not up to date, or its check failed.
 - `schedule`: the check of a schedule failed; with the schedule ID.
 - `claim`, `heartbeat`, `reaper`, and `release`: a claim cycle, a heartbeat, a reaper round, or the release of a connection or of the lock of the id on it failed; `claim` also reports a failed return of the jobs of the id and a claim that returned after the deadline of its lease, whose job the worker failed without running its handler, and `heartbeat` a heartbeat whose lock of the id another session holds.

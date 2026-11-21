@@ -14,6 +14,7 @@ import { migrateJobs } from "../migration/migrate"
 import { evaluateSchedule } from "../schedule/evaluate"
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { fixedBackoff } from "../task/backoff"
+import { TerminalError } from "../task/errors"
 import { defineManifest } from "../task/manifest"
 import { defineTask, type JobInfo } from "../task/task"
 
@@ -97,12 +98,54 @@ describe("a running worker", () => {
             queue: null,
           },
           aborted: null,
+          decision: "retry",
         },
       ],
     ])
     const rows = await jobs(schema)
     expect(rows.map(row => [row.id, row.state, row.attempts, row.last_error])).toEqual([
       [failed.id, "pending", 1, "the index is down"],
+    ])
+  })
+
+  test("settles a job by the decision that it reports, also when onError changes the class of the error", async () => {
+    const terminal = await enqueue(schema.admin, schema.table, { task: "search.indexProduct" })
+    const retried = await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    const decisions = new Map<string, string>()
+    const reported = Promise.withResolvers<void>()
+    const worker = start({
+      manifest: defineManifest({
+        tasks: [
+          indexProduct.implement(() => {
+            throw new TerminalError("no product")
+          }),
+          purgeExpiredSessions.implement(() => {
+            throw new Error("the database is down")
+          }),
+        ],
+      }),
+      concurrency: 2,
+      reaper: false,
+      onError(error, info) {
+        if (info.source !== "handler") return
+        decisions.set(info.job.id, info.decision)
+        // Makes the terminal error an ordinary one and the ordinary error a terminal one.
+        const prototype = error instanceof TerminalError ? Error.prototype : TerminalError.prototype
+        Object.setPrototypeOf(error, prototype)
+        if (decisions.size === 2) reported.resolve()
+      },
+    })
+    await reported.promise
+    await worker.stop()
+    expect([...decisions]).toEqual(
+      expect.arrayContaining([
+        [terminal.id, "terminal"],
+        [retried.id, "retry"],
+      ]),
+    )
+    expect((await jobs(schema)).map(row => [row.id, row.state])).toEqual([
+      [terminal.id, "failed"],
+      [retried.id, "pending"],
     ])
   })
 

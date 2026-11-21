@@ -289,7 +289,7 @@ describe("heartbeat on an independent connection", () => {
       expect(bStart.attempts).toBe(2)
       if (honorAbort) {
         // The pool still works, so A fails the job at once instead of leaving it to the reaper.
-        expect([aEnd.abort, aEnd.failed]).toEqual(["deadline", true])
+        expect([aEnd.abort, aEnd.outcome]).toEqual(["deadline", "retry"])
         expect(overlap).toBeLessThan(0)
         expect(a.events().find(e => e.ev === "settled")!.outcome).toBe("retry")
       } else {

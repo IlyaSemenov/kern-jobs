@@ -192,6 +192,7 @@ test("onError gets the scope of the job whose handler threw", async () => {
           queue: "product:42",
         },
         aborted: null,
+        decision: "terminal",
       },
     ],
   ])

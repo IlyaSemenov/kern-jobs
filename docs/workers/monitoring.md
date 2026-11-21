@@ -20,6 +20,26 @@ The other sources are failures of the worker itself, such as a lost database con
 
 Without `onError`, the worker writes the errors with `console.error`.
 
+### Report the first and terminal attempts
+
+A job that keeps failing reports the error of each of its attempts.
+To report only its first attempt and the one that fails it for good, check `info.decision`:
+
+```ts
+const worker = startWorker(driver, {
+  manifest,
+  onError(error, info) {
+    if (info.source === "handler" && info.decision === "retry" && info.job.attempt > 1) return
+    reportError(error, { extra: info })
+  },
+})
+```
+
+`info.decision` is what the worker decided when the handler threw: `retry` to run the job again, or `terminal` to fail it for good, by a [`TerminalError`](./retries#decide-in-the-handler) or on its last attempt.
+
+It is a decision, not a record of what became of the job: after `retry`, a newer job of its [key](../tasks/keys#while-a-job-of-the-key-runs) can run in its place, and a job can fail for good without an error of its handler, such as when its worker dies on its last attempt.
+So use `decision` to choose what you report, not to mark the data of your application as failed.
+
 ## Check the health of a worker
 
 To tell your process manager or orchestrator that the worker has started, await `ready`:

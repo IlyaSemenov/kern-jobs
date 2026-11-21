@@ -616,9 +616,9 @@ describe("heartbeat", () => {
     const first = await log.waitFor("start")
     await reapNow(schema, job.id)
     const end = await log.waitFor("end", e => e.claim === first.claim)
-    expect([end.aborted, end.failed, (end.error as HandlerAbort).reason]).toEqual([
+    expect([end.aborted, end.outcome, (end.error as HandlerAbort).reason]).toEqual([
       "lost",
-      true,
+      "retry",
       "lost",
     ])
     expect((await log.waitFor("settled", e => e.claim === first.claim)).outcome).toBe("lost")
@@ -1026,6 +1026,25 @@ describe("failures", () => {
     }
   })
 
+  test("a handler that throws undefined fails its job, for good on its last attempt", async () => {
+    const job = await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const log = recordEvents()
+    startTestWorker(schema, {
+      tasks: {
+        t: {
+          handler() {
+            throw undefined
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    expect((await log.waitFor("settled")).outcome).toBe("failed")
+    expect(log.all("end").map(e => e.outcome)).toEqual(["terminal"])
+    const row = only(await jobs(schema, `id = ${job.id}`))
+    expect([row.state, row.last_error]).toEqual(["failed", "undefined"])
+  })
+
   test("a handler that throws a value whose inspection or string conversion throws fails its job", async () => {
     const plain = await enqueue(schema.admin, schema.table, { task: "nullPrototype" })
     const hostile = await enqueue(schema.admin, schema.table, { task: "throwingGetter" })
@@ -1121,7 +1140,7 @@ describe("stop", () => {
       "AbortError",
       true,
     ])
-    expect(log.all("end")[0]!.interrupted).toBe(true)
+    expect(log.all("end")[0]!.outcome).toBe("requeue")
     expect(log.all("settled")[0]!.outcome).toBe("requeued")
     const row = only(await jobs(schema, `id = ${job.id}`))
     expect([row.state, row.attempts, row.last_error, row.claim_id]).toEqual([
@@ -1169,12 +1188,42 @@ describe("stop", () => {
     await worker.stop({ abortAfter: 0 })
     const outcomes = Object.fromEntries(log.all("settled").map(e => [e.claim.job.task, e.outcome]))
     expect(outcomes).toEqual({ terminal: "failed", retry: "retry", returns: "completed" })
-    expect(log.all("end").map(e => e.interrupted)).toEqual([false, false, false])
+    const decided = Object.fromEntries(log.all("end").map(e => [e.claim.job.task, e.outcome]))
+    expect(decided).toEqual({ terminal: "terminal", retry: "retry", returns: "complete" })
     const rows = await jobs(schema)
     expect(rows.map(r => [r.id, r.state, r.attempts, r.last_error])).toEqual([
       [ids.terminal, "failed", 1, "gone"],
       [ids.retry, "pending", 1, "later"],
     ])
+  })
+
+  test("after the abort, a RetryError whose delay cannot be read spends the attempt, and the failed read is reported", async () => {
+    const job = await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const log = recordEvents()
+    const trap = new Error("trap")
+    const worker = startTestWorker(schema, {
+      tasks: {
+        t: {
+          handler: async (_job, { signal }) => {
+            await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve()))
+            throw new Proxy(new RetryError("later", { delay: 3600 }), {
+              get(target, property, receiver) {
+                if (property === "delay") throw trap
+                return Reflect.get(target, property, receiver) as unknown
+              },
+            })
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    await log.waitFor("start")
+    await worker.stop({ abortAfter: 0 })
+    expect(log.all("end").map(e => [e.aborted, e.outcome])).toEqual([["stop", "terminal"]])
+    expect(log.all("backoff-error").map(e => e.error)).toEqual([trap])
+    expect(log.all("settled").map(e => e.outcome)).toEqual(["failed"])
+    const row = only(await jobs(schema, `id = ${job.id}`))
+    expect([row.state, row.attempts, row.last_error]).toEqual(["failed", 1, "later"])
   })
 
   test("a job interrupted by stop merges with the pending job of its key", async () => {
@@ -1302,6 +1351,33 @@ describe("stop", () => {
     expect([row.state, row.attempts]).toEqual(["active", 1])
     await reapNow(schema, job.id)
     expect(only(await jobs(schema)).state).toBe("failed")
+  })
+
+  test("a thrown value whose inspection forces the stop does not abort the signal of its handler, which has ended, and its error is reported as a failure", async () => {
+    await enqueue(schema.admin, schema.table, { task: "t" })
+    const log = recordEvents()
+    let handlerSignal: AbortSignal | undefined
+    const worker = startTestWorker(schema, {
+      tasks: {
+        t: {
+          handler(_job, { signal }) {
+            handlerSignal = signal
+            // `instanceof` reads the prototype of the value, and the trap forces the stop.
+            throw new Proxy(new Error("boom"), {
+              getPrototypeOf(target) {
+                worker.stop({ force: true }).catch(() => {})
+                return Reflect.getPrototypeOf(target)
+              },
+            })
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    const end = await log.waitFor("end")
+    expect([end.outcome, end.aborted, handlerSignal!.aborted]).toEqual(["retry", null, false])
+    await expect(worker.stop()).rejects.toThrow("The worker stop was forced")
+    expect(log.all("abort")).toEqual([])
   })
 
   test("a stop that has resolved keeps its outcome after a force", async () => {

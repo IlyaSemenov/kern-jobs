@@ -12,6 +12,17 @@ import type { FailOutcome, RequeueOutcome } from "../core/settlement"
 export type AbortReason = "lost" | "deadline" | "stop"
 
 /**
+ * What a worker decides to do with a job once its handler ends, before it reports or settles it:
+ * - `complete`: the handler returned;
+ * - `requeue`: `stop` interrupted the handler, so the worker returns its job with the attempt given back;
+ * - `retry`: the handler failed, and the job has attempts left, so the worker returns it for another one;
+ * - `terminal`: the handler failed by a `TerminalError` or on the last attempt, so the worker fails its job for good.
+ *
+ * The settlement may record another result, such as a job superseded rather than retried, or none.
+ */
+export type HandlerOutcome = "complete" | "requeue" | "retry" | "terminal"
+
+/**
  * Outcome of the settlement of a claim:
  * - `completed` and the outcomes of fail and requeue: applied;
  * - `fenced`: the settlement found the claim lost;
@@ -36,15 +47,13 @@ export type SettleOutcome =
 /** Event of a worker. */
 export type WorkerEvent =
   | { type: "start"; claim: Claim }
-  // The handler returned or, with `failed`, threw `error`.
-  // With `interrupted`, it threw after the abort `stop` an error other than a `TerminalError` or a `RetryError`, which counts as an interruption rather than a failure.
+  // The handler ended with `outcome`: it returned, or threw `error`; `aborted` is the reason of the abort of its signal by then.
   | {
       type: "end"
       claim: Claim
-      failed: boolean
+      outcome: HandlerOutcome
       error?: unknown
       aborted: AbortReason | null
-      interrupted: boolean
     }
   | { type: "settled"; claim: Claim; outcome: SettleOutcome }
   // The claim returned after the deadline of the lease of its job; the worker fails the job without running its handler.

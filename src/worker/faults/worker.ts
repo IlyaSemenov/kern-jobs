@@ -131,7 +131,7 @@ function onEvent(e: WorkerEvent) {
         id: e.claim.id,
         claimId: e.claim.claimId,
         abort: e.aborted,
-        failed: e.failed,
+        outcome: e.outcome,
       })
     case "settled":
       return log("settled", { id: e.claim.id, claimId: e.claim.claimId, outcome: e.outcome })

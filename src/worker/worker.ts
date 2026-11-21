@@ -26,8 +26,8 @@ export interface WorkerReaperOptions {
 
 /**
  * Details of an error of a worker, which `onError` gets beside the error, by `source`:
- * - `handler`: the handler of a job threw, and the job retries or fails; `aborted` tells why its signal was aborted before that, or is `null`;
- * - `backoff`: the backoff of the task threw or returned no valid delay, and the job retries with the default backoff;
+ * - `handler`: the handler of a job threw; `decision` tells what the worker decided then, before it records the outcome: `retry` to run the job again, or `terminal` to fail it for good, such as on its last attempt, and `aborted` tells why the signal of the handler was aborted before that, or is `null`;
+ * - `backoff`: the worker got no valid delay of a retry from the backoff of the task or from the error that the handler threw: the error is what getting it threw, or a `RangeError` for a delay outside its range, and the worker uses the default backoff if the job returns to pending;
  * - `settlement`: a statement that records the outcome of a job failed; the worker retries it, and a job whose outcome it cannot record returns to pending once its lease expires, or fails on its last attempt;
  * - `schema`: the schema of kern-jobs is not up to date, such as before `migrateJobs`, or checking it failed; the worker takes no jobs and checks again after the poll interval;
  * - `schedule`: the worker could not check the schedule identified by `info.id` and tries again in its next round;
@@ -38,7 +38,13 @@ export interface WorkerReaperOptions {
  * - `worker`: the worker itself failed unexpectedly and goes on.
  */
 export type WorkerErrorInfo =
-  | { source: "handler"; task: string; job: JobInfo; aborted: AbortReason | null }
+  | {
+      source: "handler"
+      task: string
+      job: JobInfo
+      aborted: AbortReason | null
+      decision: "retry" | "terminal"
+    }
   | { source: "backoff" | "settlement"; task: string; job: JobInfo }
   | { source: "schedule"; id: string }
   | { source: "schema" | "claim" | "heartbeat" | "reaper" | "release" | "worker" }
@@ -108,12 +114,19 @@ function toStopOptions(options: unknown): StopOptions {
 function toErrorReport(event: WorkerEvent): [error: unknown, info: WorkerErrorInfo] | null {
   switch (event.type) {
     case "end": {
+      const { outcome } = event
       // A handler interrupted by stop did not fail: its job returns to pending without spending its attempt.
-      if (!event.failed || event.interrupted) return null
+      if (outcome === "complete" || outcome === "requeue") return null
       const { job } = event.claim
       return [
         event.error,
-        { source: "handler", task: job.task, job: toJobInfo(job), aborted: event.aborted },
+        {
+          source: "handler",
+          task: job.task,
+          job: toJobInfo(job),
+          aborted: event.aborted,
+          decision: outcome,
+        },
       ]
     }
     case "backoff-error":

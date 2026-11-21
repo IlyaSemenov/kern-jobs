@@ -12,11 +12,11 @@ import { evaluateSchedule } from "../schedule/evaluate"
 import type { WorkerSchedule } from "../schedule/schedule"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
-import { RetryError, TerminalError } from "../task/errors"
 
 import type { WorkerEvent } from "./events"
 import { type HandlerAbort, type KeptLease, startHeartbeat } from "./heartbeat"
 import { type Loop, maxInterval, monotonicNow, startLoop } from "./loop"
+import { classifyThrown, type Thrown, toHandlerOutcome } from "./outcome"
 import { startReaper } from "./reaper"
 import { settle, type SettleAction } from "./settle"
 
@@ -131,42 +131,35 @@ function toErrorMessage(error: unknown): string {
 const lateClaimError = "lease confirmation deadline passed before the handler started"
 
 /**
- * Whether a handler threw a `TerminalError` or a `RetryError`, which decides its outcome also after an abort.
- * A thrown value whose class `instanceof` cannot tell, such as a proxy whose trap throws, decides nothing.
- */
-function isHandlerDecision(error: unknown): boolean {
-  try {
-    return error instanceof TerminalError || error instanceof RetryError
-  } catch {
-    return false
-  }
-}
-
-/**
- * Builds the options of the fail of a job whose handler threw `error`: a `TerminalError` fails it for good, a `RetryError` retries it after its delay, and any other error after the backoff of its task.
- * A backoff that throws or gives a delay outside the range of `isDelay`, which keeps SQL from rejecting the fail, is reported, and the job retries with the default backoff, so that it is still settled.
+ * Builds the options of the fail of a job whose handler threw `error`, by its classification `thrown`: a `TerminalError` fails it for good, a `RetryError` retries it after its delay, and any other error after the backoff of its task.
+ * When it gets no valid delay, it reports the error and takes the default backoff, so that the job is still settled: what was thrown by the backoff or by the read of the class of the thrown value or of the delay of a `RetryError`, or a `RangeError` for a delay outside the range of `isDelay`, which keeps SQL from rejecting the fail.
+ * The fail uses the delay only if the job returns to pending.
  */
 function toFailOptions(
   task: WorkerTask,
   claim: Claim,
   error: unknown,
+  thrown: Thrown,
   onBackoffError: (error: unknown) => void,
 ): FailOptions {
   const message = toErrorMessage(error)
   const attempt = claim.job.attempts
-  try {
-    if (error instanceof TerminalError) return { error: message, terminal: true, backoff: 0 }
-    const backoff =
-      error instanceof RetryError ? error.delay : (task.backoff ?? defaultBackoff)(attempt)
-    if (isDelay(backoff)) return { error: message, backoff }
-    onBackoffError(
-      new RangeError(
-        `The delay of the retry of task ${claim.job.task} is ${String(backoff)}, not ${delayRange}`,
-      ),
-    )
-  } catch (e) {
-    // `instanceof` runs code of the thrown value, such as a trap of a proxy, and the backoff runs code of the task.
-    onBackoffError(e)
+  if (thrown.type === "terminal") return { error: message, terminal: true, backoff: 0 }
+  if ("failure" in thrown) onBackoffError(thrown.failure)
+  else {
+    try {
+      const backoff =
+        thrown.type === "retry" ? thrown.delay : (task.backoff ?? defaultBackoff)(attempt)
+      if (isDelay(backoff)) return { error: message, backoff }
+      onBackoffError(
+        new RangeError(
+          `The delay of the retry of task ${claim.job.task} is ${String(backoff)}, not ${delayRange}`,
+        ),
+      )
+    } catch (e) {
+      // The backoff runs code of the task.
+      onBackoffError(e)
+    }
   }
   return { error: message, backoff: defaultBackoff(attempt) }
 }
@@ -277,7 +270,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
       emit({ type: "late-claim", claim })
       return execute(claim, kept, async () => ({
         type: "fail",
-        options: toFailOptions(task, claim, new Error(lateClaimError), e =>
+        options: toFailOptions(task, claim, new Error(lateClaimError), { type: "other" }, e =>
           emit({ type: "backoff-error", claim, error: e }),
         ),
       }))
@@ -292,15 +285,19 @@ export function startRuntime(o: RuntimeOptions): Worker {
         failed = true
         error = e
       }
+      // The handler has ended before any code of the thrown value runs, so that such code, such as a trap of a proxy that stops the worker, cannot abort its signal.
       kept.endHandler()
-      const reason = kept.signal.aborted ? (kept.signal.reason as HandlerAbort).reason : null
-      const interrupted = failed && reason === "stop" && !isHandlerDecision(error)
-      emit({ type: "end", claim, failed, error, aborted: reason, interrupted })
-      if (!failed) return { type: "complete" }
-      if (interrupted) return { type: "requeue" }
+      const aborted = kept.signal.aborted ? (kept.signal.reason as HandlerAbort).reason : null
+      // The thrown value is classified once, before the report, whose receiver gets the value and can change it: the report and the settlement both use this classification.
+      const thrown = failed ? classifyThrown(error) : null
+      const { attempts: attempt, max_attempts: maxAttempts } = claim.job
+      const outcome = toHandlerOutcome({ thrown, aborted, attempt, maxAttempts })
+      emit({ type: "end", claim, outcome, error, aborted })
+      if (!thrown) return { type: "complete" }
+      if (outcome === "requeue") return { type: "requeue" }
       return {
         type: "fail",
-        options: toFailOptions(task, claim, error, e =>
+        options: toFailOptions(task, claim, error, thrown, e =>
           emit({ type: "backoff-error", claim, error: e }),
         ),
       }
