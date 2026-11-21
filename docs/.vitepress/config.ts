@@ -41,6 +41,7 @@ export default defineConfig({
         text: "Tasks",
         items: [
           { text: "Defining Tasks", link: "/tasks/" },
+          { text: "Enqueueing Jobs", link: "/tasks/enqueue" },
           { text: "Deduplication and Debouncing", link: "/tasks/keys" },
           { text: "Sequential Queues", link: "/tasks/queues" },
           { text: "Scopes", link: "/tasks/scopes" },

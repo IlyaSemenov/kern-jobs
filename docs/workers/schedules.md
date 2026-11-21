@@ -48,7 +48,7 @@ A field that lists all its values, such as `0-6` for weekdays, counts as `*`, so
 
 ## Set job options
 
-Use `enqueue` on the schedule to [override the task options](../tasks/#overriding-options).
+Use `enqueue` on the schedule to [override the task options](../tasks/enqueue#overriding-options).
 
 A schedule can enqueue a job while its previous job is pending or running.
 Give it a [key](../tasks/keys) to merge it into a pending job, or a [queue](../tasks/queues) to run one job at a time.

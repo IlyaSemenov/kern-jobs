@@ -97,7 +97,7 @@ export const sendWelcomeEmailTask = defineTask("email.sendWelcome").withPayload<
 }>()
 ```
 
-[Defining Tasks](./tasks/) describes the options of a task, such as delays, and the pages after it describe keys, queues, and scopes.
+[Defining Tasks](./tasks/) describes the options of a task, and the pages after it describe keys, queues, and scopes.
 
 ## Connect
 
@@ -133,6 +133,7 @@ await sql.begin(async tx => {
 
 The job becomes visible to workers when the transaction commits and never runs when it rolls back, so it never misses the data that the transaction writes.
 To share `jobs` across your application and still enqueue in its transactions, or to enqueue in the transactions of an ORM, see [Database Clients and Transactions](./database-clients).
+[Enqueueing Jobs](./tasks/enqueue) describes delays, overriding the options of a task, and enqueueing many jobs at once.
 
 ## Run a worker
 
