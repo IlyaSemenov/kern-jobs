@@ -656,6 +656,27 @@ describe("heartbeat", () => {
     ])
   })
 
+  test("a claim that returns after the deadline of its lease on the last attempt fails the job with the reason late-claim of its failure job", async () => {
+    await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const release = await holdHook(schema.admin, "claim_plain")
+    const log = recordEvents()
+    startTestWorker(schema, {
+      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      heartbeatSource: schema.createDriver({ max: 1 }),
+      tasks: { t: { handler: () => {}, failureMaxAttempts: 2 } },
+      onEvent: log.onEvent,
+    })
+    await waitForLockedStatement(schema.admin, "kern_test_hook('claim_plain')")
+    await sleep((lease - testTimings.abortMargin) * 1000 + 100)
+    await release()
+    expect((await log.waitFor("settled")).outcome).toBe("failed")
+    const failed = only(await jobs(schema, "task = 't:failure'"))
+    expect(failed.payload).toMatchObject({
+      reason: "late-claim",
+      error: { message: "lease confirmation deadline passed before the handler started" },
+    })
+  })
+
   test("a broken heartbeat connection aborts handlers at their deadline and stops claiming until it reconnects", async () => {
     const job = await enqueue(schema.admin, schema.table, { task: "t" })
     const { proxy, source } = await proxiedHeartbeat()

@@ -31,6 +31,8 @@ export interface WorkerTask {
   lease?: number | undefined
   /** `defaultBackoff` when omitted. */
   backoff?: Backoff | undefined
+  /** Attempt budget of the failure jobs of the task, which each claim of the task stamps on its job, for a task that has a failure task; no failure jobs when omitted. */
+  failureMaxAttempts?: number | undefined
 }
 
 /** Options of `Worker.stop`. */
@@ -131,7 +133,7 @@ function toErrorMessage(error: unknown): string {
 const lateClaimError = "lease confirmation deadline passed before the handler started"
 
 /**
- * Builds the options of the fail of a job whose handler threw `error`, by its classification `thrown`: a `TerminalError` fails it for good, a `RetryError` retries it after its delay, and any other error after the backoff of its task.
+ * Builds the options of the fail of a job whose handler threw `error`, by its classification `thrown`: a `TerminalError` fails it for good, with the reason `terminal-error`, a `RetryError` retries it after its delay, and any other error after the backoff of its task, with the reason of a fail without one, `handler-error`.
  * When it gets no valid delay, it reports the error and takes the default backoff, so that the job is still settled: what was thrown by the backoff or by the read of the class of the thrown value or of the delay of a `RetryError`, or a `RangeError` for a delay outside the range of `isDelay`, which keeps SQL from rejecting the fail.
  * The fail uses the delay only if the job returns to pending.
  */
@@ -144,7 +146,7 @@ function toFailOptions(
 ): FailOptions {
   const message = toErrorMessage(error)
   const attempt = claim.job.attempts
-  if (thrown.type === "terminal") return { error: message, terminal: true, backoff: 0 }
+  if (thrown.type === "terminal") return { error: message, reason: "terminal-error", backoff: 0 }
   if ("failure" in thrown) onBackoffError(thrown.failure)
   else {
     try {
@@ -187,6 +189,11 @@ export function startRuntime(o: RuntimeOptions): Worker {
   const taskNames = Object.keys(o.tasks)
   const leases = Object.fromEntries(
     Object.entries(o.tasks).map(([name, task]) => [name, task.lease ?? lease]),
+  )
+  const failureMaxAttempts = Object.fromEntries(
+    Object.entries(o.tasks).flatMap(([name, task]) =>
+      task.failureMaxAttempts === undefined ? [] : [[name, task.failureMaxAttempts]],
+    ),
   )
   const shortest = Math.min(lease, ...Object.values(leases))
   const interval = o.heartbeatInterval ?? Math.min(shortest / 3, maxInterval)
@@ -270,9 +277,12 @@ export function startRuntime(o: RuntimeOptions): Worker {
       emit({ type: "late-claim", claim })
       return execute(claim, kept, async () => ({
         type: "fail",
-        options: toFailOptions(task, claim, new Error(lateClaimError), { type: "other" }, e =>
-          emit({ type: "backoff-error", claim, error: e }),
-        ),
+        options: {
+          ...toFailOptions(task, claim, new Error(lateClaimError), { type: "other" }, e =>
+            emit({ type: "backoff-error", claim, error: e }),
+          ),
+          reason: "late-claim",
+        },
       }))
     }
     execute(claim, kept, async () => {
@@ -440,6 +450,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
               slots: free,
               leases,
               defaultLease: lease,
+              failureMaxAttempts,
               onClaim: claim => start(claim, sentAt),
               proceed: () => !stopping && heartbeat.healthy(),
             },

@@ -24,6 +24,7 @@ Every statement names the table and the sequence qualified by their schema, so t
 - `locked_by` and `locked_at`: the worker and the time of the claim; a worker returns the active rows of its id at its start ([Leases](leases.md#jobs-of-an-ended-worker)).
 - `last_error`: the error of the latest failure, `lease expired`, or `worker restarted`; a requeue and a retry keep it.
 - `failed_at`: the time when the job became failed, by which the application deletes old failed jobs.
+- `failure_max_attempts`: the stamp of the claim of an active row for a failure job, the attempt budget of that job, or null for a claim without one; inactive rows keep the stamp of their last claim, which nothing reads ([Failure jobs](failure-jobs.md)).
 
 Check constraints enforce these invariants for every write:
 
@@ -31,6 +32,7 @@ Check constraints enforce these invariants for every write:
 - A row has `failed_at` exactly while it is failed.
 - `attempts` is at least 0, and `max_attempts` at least 1.
 - `run_at` is not below `not_before`, the end of the backoff.
+- `failure_max_attempts` is null or at least 1, and set only for a task whose name is at most 120 bytes, so that the name of its failure task fits the limit of `task`; the constraint is `NOT VALID`, since the rows before its migration have null stamps, and it checks every write.
 - `task`, `scope`, `queue`, and `key` are within their limits, which count bytes, since a character takes 1 to 4 bytes: they keep an entry of an index within the 2704 bytes of a B-tree entry also for names that do not compress.
 
 ## States
@@ -38,6 +40,7 @@ Check constraints enforce these invariants for every write:
 - A claim makes a pending job active.
 - Complete deletes an active job.
 - Fail makes an active job pending again, deletes it as superseded by the pending job of its key, or makes it failed; with a pending job of its key in mode `keep`, fail deletes that pending job instead ([Settlement](settlement.md#fail)).
+- A fail or a return by the reaper that makes a job stamped for a failure job failed inserts that pending job ([Failure jobs](failure-jobs.md)).
 - Requeue makes an active job pending again or deletes it as superseded, as fail does, but never makes it failed ([Settlement](settlement.md#requeue)).
 - The reaper makes an active job whose lease expired pending again, or failed on its last attempt, and so does a worker at its start with the active jobs of its id.
 - No worker or enqueue changes a `failed` row: it stays as a dead letter, outside the uniqueness of keys.

@@ -45,7 +45,7 @@ async function createFailedJob(o: Partial<EnqueueParams> = {}, failedAt = 11): P
   expect(
     await fail(schema.database, schema.table, claim, {
       error: "boom",
-      terminal: true,
+      reason: "terminal-error",
       backoff: 0,
       now: T(failedAt),
     }),

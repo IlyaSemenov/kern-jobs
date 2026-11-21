@@ -2,6 +2,7 @@
 import { isQueryError } from "kern-db"
 
 import { hook, NOW } from "./db"
+import { type FailureReason, insertFailureJobsSql } from "./failure"
 import type { ClaimRef } from "./job"
 import type { JobTable } from "./schema"
 import { type Param, query, type StatementTarget } from "./statement"
@@ -95,13 +96,14 @@ export interface ReapStats {
   forcedDetaches?: number
 }
 
-/** Active rows that a reap returns, and the `last_error` that it gives them. */
+/** Active rows that a reap returns, the `last_error` that it gives them, and the reason that the `JobFailure` of a failure job records. */
 interface ReapTarget {
   /** Condition of the rows of the alias `j` in the reap statement, whose `$1` is its time and `$6` the worker. */
   condition: string
   /** Parameters of the reap statement after its first five: the worker, if any. */
   params: string[]
   error: string
+  reason: Extract<FailureReason, "lease-expired" | "worker-restarted">
   /** Statement of the ids of the rows, in the order of their ids, up to the limit. */
   ids: { text: string; params: Param[] }
 }
@@ -115,6 +117,7 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
         condition: `j.lease_until < ${NOW}`,
         params: [],
         error: "lease expired",
+        reason: "lease-expired",
         ids: {
           text: `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
           params: [o.now ?? null, limit],
@@ -124,6 +127,7 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
         condition: "j.locked_by = $6::text",
         params: [o.worker],
         error: "worker restarted",
+        reason: "worker-restarted",
         ids: {
           text: `select id from ${table.name} where state = 'active' and locked_by = $2::text order by id limit $1::text::int`,
           params: [limit, o.worker],
@@ -134,10 +138,11 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
 // The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `candidates` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
 // Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
 // Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
+// A row that becomes failed with the stamp of a failure job inserts it in the same statement, from the claim id that the update clears, so the batch applies both or neither.
 const reapSql = (table: JobTable, target: ReapTarget) => `with timeout as materialized (
     select set_config('lock_timeout', $5::text, true)
   ), candidates as (
-    select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts from ${table.name} j, timeout
+    select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${table.name} j, timeout
     where j.state = 'active' and ${target.condition} and ($3::text::bigint is null or j.id = $3::text::bigint)
     order by j.id
     limit $2::text::int
@@ -149,19 +154,24 @@ const reapSql = (table: JobTable, target: ReapTarget) => `with timeout as materi
       exists (select 1 from ${table.name} p
               where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
     from candidates e
+  ), returned as (
+    update ${table.name} j set
+      state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
+      key = case when r.attempts < r.max_attempts and r.key is not null and ($4::text::boolean or r.has_pending or r.rn > 1)
+                 then null else j.key end,
+      run_at = ${NOW}, not_before = ${NOW}, window_started_at = ${NOW},
+      failed_at = case when r.attempts >= r.max_attempts then ${NOW} end,
+      claim_id = null, locked_by = null, lease_until = null, last_error = '${target.error}'
+    from ranked r where j.id = r.id
+    returning j.*, r.claim_id as failed_claim_id, (j.key is null and r.key is not null)::text as detached
+  ), inserted as (
+    ${insertFailureJobsSql(table, "returned", `'${target.reason}'`)}
   )
-  update ${table.name} j set
-    state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
-    key = case when r.attempts < r.max_attempts and r.key is not null and ($4::text::boolean or r.has_pending or r.rn > 1)
-               then null else j.key end,
-    run_at = ${NOW}, not_before = ${NOW}, window_started_at = ${NOW},
-    failed_at = case when r.attempts >= r.max_attempts then ${NOW} end,
-    claim_id = null, locked_by = null, lease_until = null, last_error = '${target.error}'
-  from ranked r where j.id = r.id
-  returning j.id, j.state, (j.key is null and r.key is not null)::text as detached`
+  select id, state, detached from returned`
 
 /**
  * Returns expired active jobs, or the active jobs of `o.worker`: `failed` on the last attempt, otherwise `pending`.
+ * A job that becomes failed with the stamp of a failure job inserts it in the statement that fails it.
  * The reaper never merges: a returning job loses its key when a pending job of the key exists or the batch returns several jobs of the key.
  * The batch runs as one statement, which holds the rows of the whole batch while it waits for the transaction of a producer that inserts a pending job of a returning key; each such wait lasts at most `lockTimeout`.
  * After a `23505` or such a timeout the batch is redone row by row, so a hot or blocked key affects only its own row:

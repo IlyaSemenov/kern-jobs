@@ -38,7 +38,7 @@ const worker = startWorker(driver, {
 `info.decision` is what the worker decided when the handler threw: `retry` to run the job again, or `terminal` to fail it for good, by a [`TerminalError`](./retries#decide-in-the-handler) or on its last attempt.
 
 It is a decision, not a record of what became of the job: after `retry`, a newer job of its [key](../tasks/keys#while-a-job-of-the-key-runs) can run in its place, and a job can fail for good without an error of its handler, such as when its worker dies on its last attempt.
-So use `decision` to choose what you report, not to mark the data of your application as failed.
+So use `decision` to choose what you report, and [`onFailure`](./failure-handlers) to act on a failure for good.
 
 ## Check the health of a worker
 

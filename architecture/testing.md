@@ -22,3 +22,4 @@
 - The payload goes through `encodePayload` and `decodePayload` of `core/job.ts`, as an enqueue stores it and the worker reads it, so a payload without JSON text, such as `undefined` or an object whose `toJSON` returns `undefined`, reaches the handler as `undefined`.
 - A scoped task takes a scope, which the types require and `runJob` rejects with `TypeError` without, since the worker does not run such a job; a scope that `job` gives, of any task, passes `checkScope` of `jobs/jobs.ts`.
 - `runJob` does not run the `runHandler` of a worker, nor turn `RetryError` and `TerminalError` into a settlement: it resolves or rejects as the handler does.
+- It runs the `onFailure` of an implementation as the handler of its failure implementation, `implementation.failure`, with a `JobFailure` as the payload ([Failure jobs](failure-jobs.md#failure-tasks)).

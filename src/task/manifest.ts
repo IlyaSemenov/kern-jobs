@@ -2,7 +2,7 @@
 // An application can check handler coverage across all its manifests.
 import { type Schedule, toWorkerSchedules } from "../schedule/schedule"
 
-import { isTask, type TaskImplementation } from "./task"
+import { isTask, resolveFailure, type Task, type TaskImplementation } from "./task"
 
 /** Tasks a worker runs and schedules it evaluates. */
 export interface Manifest {
@@ -12,10 +12,13 @@ export interface Manifest {
 }
 
 /**
- * Defines a worker manifest and rejects duplicate task names, invalid schedules, and duplicate schedule IDs.
+ * Defines a worker manifest and rejects duplicate task names, among which the name of the failure task of an implementation counts, invalid failure implementations, invalid schedules, and duplicate schedule IDs.
  */
 export function defineManifest(manifest: Manifest): Manifest {
-  const tasks = [...toTaskMap(manifest?.tasks).values()]
+  // The tasks are copied before their check, so that an addition to the list during the definition does not escape it; a copy turns the holes of a sparse array into `undefined`, which the check rejects.
+  const list = manifest?.tasks
+  const tasks = Array.isArray(list) ? [...list] : list
+  toManifestTasks(tasks)
   const { schedules = [] } = manifest
   toWorkerSchedules(schedules)
   // Copy and freeze both lists so later additions cannot escape validation.
@@ -38,37 +41,66 @@ export function mergeManifests(...manifests: Manifest[]): Manifest {
   })
 }
 
+/** Task that a worker of a manifest runs: of an implementation of the manifest, or the failure task of one. */
+export interface ManifestTask {
+  name: string
+  /** Implementation whose handler runs the jobs of the task. */
+  implementation: Pick<TaskImplementation<string, unknown>, "handler">
+  /** Settings of the task, each read once and not checked. */
+  settings: Pick<Task<string, unknown>, "lease" | "backoff" | "scoped">
+  /** Attempt budget of the failure jobs of the task, which its claims stamp, for an implementation with a failure task. */
+  failureMaxAttempts?: number | undefined
+}
+
 /**
- * Returns the implementations by task name, in their order.
- * Throws `TypeError` for tasks that are not an array or for an element that is not an implementation, such as a task without `implement`, and `Error` for task names of several implementations.
+ * Returns the tasks that a worker of the implementations runs, in their order: the task of each implementation, followed by its failure task, if it has one.
+ * It reads the task and the failure implementation of each implementation, the task of the failure implementation, and the settings of both tasks once, so that the manifest and the worker check and run the same values.
+ * Throws `TypeError` for tasks that are not an array, for an element that is not an implementation, such as a task without `implement`, and for a failure task whose `scoped` differs from that of its task, whose handler is typed by it; the errors of `resolveFailure` for the failure implementation; and `Error` for a task name that several of the returned tasks have.
  */
-export function toTaskMap(
+export function toManifestTasks(
   tasks: readonly TaskImplementation<string, unknown>[],
-): Map<string, TaskImplementation<string, unknown>> {
-  const map = new Map<string, TaskImplementation<string, unknown>>()
-  const duplicates = new Set<string>()
+): ManifestTask[] {
   if (!Array.isArray(tasks)) {
     throw new TypeError("manifest.tasks must be an array of task implementations")
   }
+  const result: ManifestTask[] = []
   for (const implementation of tasks) {
-    if (
-      typeof implementation?.handler !== "function" ||
-      typeof implementation.task?.name !== "string"
-    ) {
+    const task = implementation?.task
+    const name = task?.name
+    if (typeof implementation?.handler !== "function" || typeof name !== "string") {
       throw new TypeError(
         "A manifest takes implementations of tasks, which task.implement(handler) returns",
       )
     }
-    const { name } = implementation.task
-    if (map.has(name)) duplicates.add(name)
-    else map.set(name, implementation)
+    const { failure } = implementation
+    const settings = toSettings(task)
+    const resolved = resolveFailure(name, failure)
+    result.push({ name, implementation, settings, failureMaxAttempts: resolved?.maxAttempts })
+    if (!failure || !resolved) continue
+    const failureSettings = toSettings(resolved.task)
+    if ((failureSettings.scoped === true) !== (settings.scoped === true)) {
+      throw new TypeError(`scoped of failure task ${resolved.name} must be that of task ${name}`)
+    }
+    result.push({ name: resolved.name, implementation: failure, settings: failureSettings })
+  }
+  const names = new Set<string>()
+  const duplicates = new Set<string>()
+  for (const { name } of result) {
+    if (names.has(name)) duplicates.add(name)
+    else names.add(name)
   }
   if (duplicates.size > 0) {
     throw new Error(
       `A manifest takes one implementation of each task; duplicate tasks: ${[...duplicates].join(", ")}`,
     )
   }
-  return map
+  return result
+}
+
+/** Returns the settings of a task, each read once. */
+function toSettings(task: Task<string, unknown>): ManifestTask["settings"] {
+  const { lease, backoff, scoped } = task
+  return { lease, backoff, scoped }
 }
 
 /**
@@ -80,7 +112,10 @@ export function findUnimplementedTasks(
   manifests: Manifest | readonly Manifest[],
 ): string[] {
   const implemented = new Set(
-    [manifests].flat().flatMap(manifest => [...toTaskMap(manifest?.tasks).keys()]),
+    [manifests]
+      .flat()
+      .flatMap(manifest => toManifestTasks(manifest?.tasks))
+      .map(task => task.name),
   )
   const names = Object.values(tasks)
     .filter(isTask)

@@ -53,6 +53,7 @@ export default defineConfig({
           { text: "Writing Handlers", link: "/workers/handlers" },
           { text: "Retries", link: "/workers/retries" },
           { text: "Failed Jobs", link: "/workers/failed-jobs" },
+          { text: "Failure Handlers", link: "/workers/failure-handlers" },
           { text: "Scheduling Recurring Jobs", link: "/workers/schedules" },
           { text: "Leases", link: "/workers/leases" },
           { text: "Graceful Shutdown", link: "/workers/stopping" },

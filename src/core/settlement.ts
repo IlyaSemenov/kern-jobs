@@ -2,6 +2,7 @@
 import type { Database } from "kern-db"
 
 import { NOW } from "./db"
+import { type FailureReason, insertFailureJobsSql } from "./failure"
 import type { ClaimRef } from "./job"
 import type { JobTable } from "./schema"
 import { query, type StatementTarget } from "./statement"
@@ -24,11 +25,13 @@ export async function complete(
 /** Outcome of a fail. */
 export type FailOutcome = "fenced" | "failed" | "retry" | "superseded" | "replaced-pending"
 
+/** Reason of a fail, which the `JobFailure` of a failure job records if the fail is terminal: `terminal-error` fails the job for good, without retries; `handler-error` when omitted. */
+export type FailReason = Extract<FailureReason, "handler-error" | "terminal-error" | "late-claim">
+
 /** Options of a fail. */
 export interface FailOptions {
   error: string
-  /** Fails the job for good, without retries. */
-  terminal?: boolean
+  reason?: FailReason | undefined
   /** Delay of the retry in seconds. */
   backoff: number
   /** Time of the statements; `statement_timestamp()` when omitted. */
@@ -46,7 +49,7 @@ export interface FailOptions {
 }
 
 /**
- * Settles an active job after an error: `failed` on a terminal error or the last attempt, otherwise back to pending with a backoff, or merged with the pending job of its key by the key mode of that job.
+ * Settles an active job after an error: `failed` on a terminal error or the last attempt, with its failure job, if its claim stamped one, inserted by the same statement, otherwise back to pending with a backoff, or merged with the pending job of its key by the key mode of that job.
  * Runs one `READ COMMITTED` transaction of the database, which reserves a connection for it, so statements of other handlers never run inside it.
  * A lost connection throws `TransactionConnectionError` and is never retried on.
  */
@@ -144,13 +147,23 @@ async function returnOnce(
   if (!a) return "fenced"
   await o.pause?.afterOwnLock?.(tx)
   // A terminal outcome is always recorded as failed and never merged away; failed rows are outside key uniqueness.
-  if (o.terminal || (!o.refund && Number(a.attempts) >= Number(a.max_attempts))) {
+  // The failure job is inserted by the statement that fails the job, so both commit or roll back together, and only a claim that commits its own transition from active inserts one.
+  if (
+    o.reason === "terminal-error" ||
+    (!o.refund && Number(a.attempts) >= Number(a.max_attempts))
+  ) {
     await query(
       tx,
-      `update ${table.name} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = $3::text,
-         failed_at = ${NOW}
-       where id = $2::text::bigint`,
-      [now, c.id, o.error],
+      `with s as (
+         update ${table.name} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = $3::text,
+           failed_at = ${NOW}
+         where id = $2::text::bigint
+         returning *, $4::text::bigint as failed_claim_id
+       ), i as (
+         ${insertFailureJobsSql(table, "s", "$5::text")}
+       )
+       select from s`,
+      [now, c.id, o.error, c.claimId, o.reason ?? "handler-error"],
     )
     return "failed"
   }

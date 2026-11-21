@@ -95,7 +95,7 @@ describe("last attempt and terminal error", () => {
 
   test("a terminal error with B pending: A failed at the time of the fail, B unchanged", async () => {
     const { a, b } = await activeWithPending()
-    expect(await failA(a, { terminal: true })).toBe("failed")
+    expect(await failA(a, { reason: "terminal-error" })).toBe("failed")
     expect((await jobs(schema)).map(r => [r.id, r.state, r.failed_at])).toEqual([
       [a.id, "failed", T(2)],
       [b.id, "pending", null],

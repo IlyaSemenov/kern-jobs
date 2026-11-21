@@ -12,7 +12,7 @@ Complete deletes the active row of the claim in one statement and reports whethe
 Fail runs one transaction on a connection that the driver reserves for it ([Drivers](drivers.md#connections-of-the-worker)):
 
 1. It locks the active row of the claim; without one, the claim is lost, and nothing changes.
-2. On a terminal error or on the last attempt, the row becomes `failed` with `failed_at` now and keeps its key.
+2. On a terminal error or on the last attempt, the row becomes `failed` with `failed_at` now and keeps its key, and the same statement inserts the failure job of a row that its claim stamped for one, with the reason that the worker passes, or `handler-error` without one ([Failure jobs](failure-jobs.md#insert)).
 3. A row without a key returns to pending with `run_at` and `not_before` at now plus the backoff, and a new debounce window.
 4. A row with a key locks the pending row of its `(scope, task, key)`, the competitor, and then:
    - without a competitor, it returns to pending as in step 3;

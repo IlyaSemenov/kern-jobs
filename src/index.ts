@@ -23,10 +23,15 @@ export {
   type ExponentialBackoffOptions,
   fixedBackoff,
 } from "./task/backoff"
+export type { FailureReason, JobFailure } from "./task/failure"
 export type { EnqueueOptions, EnqueueOverrides } from "./task/options"
 export {
   defineTask,
+  type FailureHandler,
+  type FailureImplementation,
+  type FailureOptions,
   type HandlerContext,
+  type ImplementOptions,
   type JobInfo,
   type Task,
   type TaskBuilder,

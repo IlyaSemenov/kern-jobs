@@ -1,6 +1,7 @@
 # Failed Jobs
 
 A job that spent its attempts or failed for good, such as by a `TerminalError`, stays in the database as failed until you retry or delete it.
+To act when that happens, such as to update your data or send a notification, use [`onFailure`](./failure-handlers).
 
 ## Find out why a job failed
 
@@ -37,6 +38,8 @@ When a pending job of its [key](../tasks/keys) exists, such as one that an enque
 Then delete the failed job if the pending job does its work, or delete the pending job and retry the failed one again.
 
 `retry` resolves to `null` when no failed job has the id, such as one that a retry has already returned to pending.
+
+A retry does not cancel the [failure job](./failure-handlers) that the failure has added.
 
 An enqueue that adds a new pending job of its key and commits while `retry` runs can make it reject with the unique violation of your database client and change nothing.
 In a transaction, the error aborts the transaction: roll it back, and retry the job again.

@@ -40,6 +40,8 @@ export interface JobRow {
   lease_until: Date | null
   last_error: string | null
   failed_at: Date | null
+  /** Attempt budget of the failure job that the claim of an active row stamped, or null for a claim without one; ignored on an inactive row. */
+  failure_max_attempts: number | null
 }
 
 /** Claimed job with its claim id, which every heartbeat and settlement of the claim must match. */
@@ -64,7 +66,7 @@ export const jobColumns = (t: string) =>
    extract(epoch from ${t}.window_started_at) as window_started_at, extract(epoch from ${t}.created_at) as created_at,
    ${t}.attempts, ${t}.max_attempts, ${t}.state, ${t}.claim_id, ${t}.locked_by,
    extract(epoch from ${t}.locked_at) as locked_at, extract(epoch from ${t}.lease_until) as lease_until, ${t}.last_error,
-   extract(epoch from ${t}.failed_at) as failed_at`
+   extract(epoch from ${t}.failed_at) as failed_at, ${t}.failure_max_attempts`
 
 /** Reads a job row selected with `jobColumns`. */
 export function toJob(row: TextRow): JobRow {
@@ -89,6 +91,8 @@ export function toJob(row: TextRow): JobRow {
     lease_until: toTime(row.lease_until),
     last_error: row.last_error ?? null,
     failed_at: toTime(row.failed_at),
+    failure_max_attempts:
+      row.failure_max_attempts == null ? null : Number(row.failure_max_attempts),
   }
 }
 

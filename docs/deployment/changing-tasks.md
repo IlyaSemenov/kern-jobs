@@ -14,6 +14,8 @@ So change a task in steps that both releases handle, and take the next step only
   Instead of waiting, delete the jobs that remain by the task: the [pending ones](../workers/failed-jobs#delete-pending-jobs) and the [failed ones](../workers/failed-jobs#delete-failed-jobs).
   For a scoped task, delete them through `jobs` with [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope), which reaches the jobs of every scope.
 
+The [failure jobs](../workers/failure-handlers) of a task have a name of their own, such as `email.send:failure`, so count them too before you [remove its `onFailure`](../workers/failure-handlers#add-and-remove-onfailure) or its implementation.
+
 To see how many jobs of a task remain in each state, query the [summary of the jobs](../workers/monitoring#watch-the-backlog) by its name:
 
 ```sql

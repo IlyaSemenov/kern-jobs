@@ -75,7 +75,7 @@ const worker = startWorker(driver, {
 
 To enqueue more jobs of the same scope from a handler, pass `scope: job.scope` to `createJobs`.
 
-A worker does not run the handler for a job of a scoped task that has no scope, such as one enqueued before the task became scoped: it marks the job as failed at once, without retries.
+A worker does not run the handler for a job of a scoped task that has no scope, such as one enqueued before the task became scoped: it marks the job as failed at once, without retries, and does not run its [`onFailure`](../workers/failure-handlers) either.
 
 A scope separates keys and queues, and the jobs that `jobs` retries and deletes, but nothing else: the jobs of all scopes share one table and the same workers, which run the jobs of every scope, so a scope neither limits the jobs of a tenant nor controls access to them.
 A scope is at most 128 bytes long.

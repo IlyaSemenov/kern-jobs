@@ -2,6 +2,7 @@
 
 An application retries failed jobs and deletes pending or failed ones by id through `retry` and `delete` of `jobs`, deletes the pending jobs of a scope, a task, or a key through `deletePending`, and deletes the failed jobs of a scope or a task, or by age, through `deleteFailed`, which run on its own client as the [enqueue](enqueue.md) does: each is one statement, since the client, such as a `pg.Pool`, gives kern-jobs no transaction of its own, and it joins the transaction of the application that the client holds.
 None of them changes an active row, since the database cannot stop the handler of a running job.
+A failure job is an ordinary job of its failure task, which they reach as any job of that task, the `failure.task` of the implementation, and none of them changes a failure job by the job whose failure inserted it ([Failure jobs](failure-jobs.md#consequences-of-ordinary-jobs)).
 
 The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)), and must change the table only through `jobs`, since workers and enqueues rely on the rows that they write.
 

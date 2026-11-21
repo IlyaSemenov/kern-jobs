@@ -15,12 +15,20 @@ export interface ClaimOptions {
   leases?: Record<string, number>
   /** Lease in seconds of tasks missing from `leases`. */
   defaultLease?: number
+  /** Attempt budget of the failure jobs of each task that has a failure task, which each claim stamps on its job, and clears for a task missing from it. */
+  failureMaxAttempts?: Record<string, number>
   /** Time of the statement; `statement_timestamp()` when omitted. */
   now?: Date | null
 }
 
 /** SQL of the lease end of the claimed row `j`: now plus the lease of its task from `$4`, or the default `$5`. */
 const LEASE = `${NOW} + make_interval(secs => coalesce(($4::text::jsonb ->> j.task)::float8, $5::text::float8))`
+
+/**
+ * SQL of the assignment that stamps the attempt budget of the failure job of its task from `$n` on the claimed row `j`, or clears it for a task without one.
+ * Every claim overwrites the column, so the claim that a terminal failure ends decides whether it inserts a failure job, and a stamp of an earlier claim never counts.
+ */
+const stampFailure = (n: number) => `failure_max_attempts = ($${n}::text::jsonb ->> j.task)::int`
 
 /** SQL of the next claim id of a job table. */
 const nextClaimId = (table: JobTable) => `nextval('${table.sequence.replace(/'/g, "''")}')`
@@ -42,7 +50,7 @@ export async function claimPlain(
        for update skip locked
      )
      update ${table.name} j set state = 'active', claim_id = ${nextClaimId(table)}, locked_by = $6::text, locked_at = ${NOW},
-       attempts = j.attempts + 1, lease_until = ${LEASE}
+       attempts = j.attempts + 1, lease_until = ${LEASE}, ${stampFailure(7)}
      from c where j.id = c.id
      returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds`,
     [
@@ -52,6 +60,7 @@ export async function claimPlain(
       JSON.stringify(o.leases ?? {}),
       o.defaultLease ?? 60,
       o.worker,
+      JSON.stringify(o.failureMaxAttempts ?? {}),
     ],
   )
   return rows.map(toClaim)
@@ -126,7 +135,7 @@ export async function claimQueued(
        for update of j skip locked
      ), claimed as (
        update ${table.name} j set state = 'active', claim_id = ${nextClaimId(table)}, locked_by = $6::text, locked_at = ${NOW},
-         attempts = j.attempts + 1, lease_until = ${LEASE}
+         attempts = j.attempts + 1, lease_until = ${LEASE}, ${stampFailure(10)}
        from locked l where j.id = l.id
        returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds
      )
@@ -141,6 +150,7 @@ export async function claimQueued(
       o.after?.scope ?? null,
       o.after?.queue ?? null,
       skip.map(r => r.queue),
+      JSON.stringify(o.failureMaxAttempts ?? {}),
     ],
   )
   if (rows.length === 0) return { kind: "none" }

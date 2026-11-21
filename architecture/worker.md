@@ -32,11 +32,13 @@ The worker reserves the heartbeat connection from the pool of its driver ([Drive
 A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns into the tasks of the runtime:
 
 - `task.implement(handler)` pairs a task with the handler of its jobs, which gets the payload of the job and a context: the signal of [Leases](#leases) and the metadata of the job, its id, its scope (`null` for the empty scope), the number of the attempt from 1, `maxAttempts`, its key, and its queue.
+  Its option `onFailure`, a handler of the terminal failures of the jobs of the task, gives the implementation the implementation of its failure task as `failure`, and so the [failure jobs](failure-jobs.md) that its claims stamp; a wrapper of an implementation must keep `failure`, such as by spreading the implementation.
 - `defineManifest({ tasks, schedules })` takes an array of task implementations and an optional array of schedules.
   It copies and freezes both arrays and freezes the manifest.
   It throws `TypeError` for an invalid array or entry.
   It checks each schedule as `defineSchedule` does ([Schedules](schedules.md)).
   Reusing a task name or schedule ID throws `Error`, including when the same entry is listed twice.
+  The name of the failure task of an implementation counts as a task name of the manifest, and a `failure` that is not the implementation of that task, or whose task differs in `scoped` from the task, throws `TypeError` ([Failure jobs](failure-jobs.md#failure-tasks)).
 - `mergeManifests(...manifests)` defines a manifest with the tasks and schedules of the given manifests, in their order.
   It checks each manifest as `defineManifest` does, and throws `Error` for a task name or schedule ID that two of them share, also when the same manifest is given twice.
 - A scheduling-only worker may pass `tasks: []`.
@@ -44,7 +46,8 @@ A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns
   The worker evaluates its schedules after the schema check and reports errors with their IDs ([Schedules](schedules.md)).
   It sends no claim statement and still runs its heartbeat and, unless `reaper` is `false`, the reaper.
 - `findUnimplementedTasks(tasks, manifests)` returns the names of the tasks that none of the manifests implements, for a test of the application, since no worker can tell a task without an implementation from a task of another worker; it takes the tasks as the values of an object, such as the exports of a module, skips the values without a string `name` and a function `implement`, and names each task once.
-- `toWorkerTasks` checks the list of implementations and the [name](producer.md#task-definitions), lease, backoff, and `scoped` of each task again, as `defineManifest` and `defineTask` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
+  The failure task of an implementation counts as implemented.
+- `toWorkerTasks` checks the list of implementations and the [name](producer.md#task-definitions), lease, backoff, `scoped`, and failure task of each task again, as `defineManifest`, `defineTask`, and `implement` do, since any object of their shape passes the types, and gives each task the lease and the backoff of its definition; for an implementation with a failure task, it gives the task the attempt budget of its failure jobs, which the runtime passes to its claims, and adds the failure task as a task of the worker, which runs `onFailure` through `runHandler` as any handler, all from the one read of `toManifestTasks`; `toWorkerSchedules` does the same for the schedules ([Schedules](schedules.md)).
 - A job of a scoped task without a scope, such as one enqueued before the task became scoped, does not run its handler: the worker fails it with a `TerminalError`, so it becomes failed without retries, since its handler gets `job.scope` typed as a string.
 - `runHandler` of the worker runs every other job in place of its handler, such as in the context of the tenant of its scope: it gets the context of the handler with the task and the payload, and `run`, which runs the handler and returns its promise.
   The outcome of `runHandler` is the outcome of the handler for its settlement, its report, and an interruption by `stop`, so one that resolves without calling `run` completes the job without running the handler, such as of a deleted tenant.
@@ -120,6 +123,7 @@ After the handler ends, the worker aborts nothing, and the heartbeat keeps the l
 ## Settlement
 
 - A handler that returns completes its job, and one that throws fails it: a `TerminalError` for good, a `RetryError` with its delay, and any other error with the backoff of the task for the number of the attempt; the attempt counts in each case, so the last one fails for good, except after an interruption by `stop`; once `stop` has given up, a handler that ends is not settled.
+- A fail passes the reason that a failure job records if the fail is terminal: `terminal-error` for a `TerminalError`, and `late-claim` for a claim that returned after the deadline of its lease; the fail of any other error passes none, which records `handler-error` ([Failure jobs](failure-jobs.md#insert)).
 - Once a handler ends, the worker classifies the thrown value and decides the outcome, by `classifyThrown` and `toHandlerOutcome` of `worker/outcome.ts`, from the reason of the abort of its signal at that moment and the attempt, and uses that classification for reporting and settlement, also when `onError` changes the error that it gets.
   It marks the handler ended before it inspects the thrown value, so that code of the value cannot abort the signal.
 - A handler whose signal was aborted with `stop` and that throws any other error than a `TerminalError` or a `RetryError` is interrupted: the worker [requeues](settlement.md#requeue) its job with the attempt given back and does not report the error, since libraries wrap an abort in errors of their own, and counting such an error as a failure would fail jobs for good at a deploy ([decision](../decisions/settlement/requeue-on-stop.md)); an abort `lost` or `deadline` does not change the outcome.

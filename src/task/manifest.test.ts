@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 
 import { defineSchedule } from "../schedule/schedule"
 
-import { defineManifest, findUnimplementedTasks, mergeManifests, toTaskMap } from "./manifest"
-import { defineTask, type TaskImplementation } from "./task"
+import { defineManifest, findUnimplementedTasks, mergeManifests, toManifestTasks } from "./manifest"
+import { defineTask } from "./task"
 
 const indexProduct = defineTask("search.indexProduct").withPayload<{ productId: string }>()
 const purgeExpiredSessions = defineTask("sessions.purgeExpired")
@@ -14,12 +14,10 @@ describe("defineManifest", () => {
     const purge = purgeExpiredSessions.implement(() => {})
     const manifest = defineManifest({ tasks: [index, purge] })
     expect(manifest.tasks).toEqual([index, purge])
-    expect(toTaskMap(manifest.tasks)).toEqual(
-      new Map<string, TaskImplementation<string, unknown>>([
-        ["search.indexProduct", index],
-        ["sessions.purgeExpired", purge],
-      ]),
-    )
+    expect(toManifestTasks(manifest.tasks).map(task => [task.name, task.implementation])).toEqual([
+      ["search.indexProduct", index],
+      ["sessions.purgeExpired", purge],
+    ])
   })
 
   test("rejects several implementations of a task, also the same one listed twice", () => {
@@ -27,6 +25,48 @@ describe("defineManifest", () => {
     const tasks = [indexProduct.implement(() => {}), purge, indexProduct.implement(() => {}), purge]
     expect(() => defineManifest({ tasks })).toThrow(
       "A manifest takes one implementation of each task; duplicate tasks: search.indexProduct, sessions.purgeExpired",
+    )
+  })
+
+  test("keeps the failure task of an implementation within it, and takes a failure implementation listed on its own", () => {
+    const index = indexProduct.implement(() => {}, { onFailure: () => {} })
+    expect(defineManifest({ tasks: [index] }).tasks).toEqual([index])
+    expect(defineManifest({ tasks: [index.failure] }).tasks).toEqual([index.failure])
+    // An implementation without onFailure beside the failure implementation of another one of its task, such as of an earlier release.
+    const plain = indexProduct.implement(() => {})
+    expect(defineManifest({ tasks: [plain, index.failure] }).tasks).toEqual([plain, index.failure])
+  })
+
+  test("rejects another implementation of the name of the failure task of an implementation", () => {
+    const index = indexProduct.implement(() => {}, { onFailure: () => {} })
+    const other = indexProduct.implement(() => {}, { onFailure: () => {} })
+    for (const tasks of [
+      [index, index.failure],
+      [other.failure, index],
+    ]) {
+      expect(() => defineManifest({ tasks })).toThrow(
+        "A manifest takes one implementation of each task; duplicate tasks: search.indexProduct:failure",
+      )
+    }
+  })
+
+  test("rejects a failure task whose scoped differs from that of its task", () => {
+    const scoped = defineTask("search.indexProduct", { scoped: true })
+    const implementation = scoped.implement(() => {}, { onFailure: () => {} })
+    const { failure } = implementation
+    const unscoped = { ...failure, task: { ...failure.task, scoped: false } }
+    expect(() => defineManifest({ tasks: [{ ...implementation, failure: unscoped }] })).toThrow(
+      new TypeError(
+        "scoped of failure task search.indexProduct:failure must be that of task search.indexProduct",
+      ),
+    )
+  })
+
+  test("rejects a failure of an implementation that is not the implementation of its failure task", () => {
+    const { failure } = purgeExpiredSessions.implement(() => {}, { onFailure: () => {} })
+    const index = { ...indexProduct.implement(() => {}), failure }
+    expect(() => defineManifest({ tasks: [index as never] })).toThrow(
+      "failure of the implementation of task search.indexProduct must be the implementation of task search.indexProduct:failure",
     )
   })
 
@@ -43,6 +83,19 @@ describe("defineManifest", () => {
         new TypeError("manifest.tasks must be an array of task implementations"),
       )
     }
+  })
+
+  test("checks a copy of the tasks, so that an addition during the definition does not escape the check", () => {
+    const index = indexProduct.implement(() => {})
+    const tasks = [index]
+    const manifest = defineManifest({
+      tasks,
+      get schedules() {
+        tasks.push(index)
+        return []
+      },
+    })
+    expect(manifest.tasks).toEqual([index])
   })
 
   test("keeps its implementations when the array given to it changes later", () => {
@@ -136,6 +189,15 @@ describe("mergeManifests", () => {
     )
   })
 
+  test("rejects the name of the failure task of an implementation that another manifest implements", () => {
+    const index = indexProduct.implement(() => {}, { onFailure: () => {} })
+    const search = defineManifest({ tasks: [index] })
+    const failures = defineManifest({ tasks: [index.failure] })
+    expect(() => mergeManifests(search, failures)).toThrow(
+      "duplicate tasks: search.indexProduct:failure",
+    )
+  })
+
   test("rejects a malformed manifest, as defineManifest does", () => {
     // As a JavaScript caller passes them, past the types: also the values that flattening would accept, a single task or schedule in place of its array, and a sparse array.
     const sparse: never[] = []
@@ -183,6 +245,18 @@ describe("findUnimplementedTasks", () => {
     expect(findUnimplementedTasks(exports, defineManifest({ tasks: [] }))).toEqual([
       "search.indexProduct",
     ])
+  })
+
+  test("counts the failure task of an implementation as implemented, also listed on its own", () => {
+    const index = indexProduct.implement(() => {}, { onFailure: () => {} })
+    const tasks = { indexProduct, indexProductFailure: index.failure.task }
+    expect(findUnimplementedTasks(tasks, defineManifest({ tasks: [index] }))).toEqual([])
+    expect(findUnimplementedTasks(tasks, defineManifest({ tasks: [index.failure] }))).toEqual([
+      "search.indexProduct",
+    ])
+    expect(
+      findUnimplementedTasks(tasks, defineManifest({ tasks: [indexProduct.implement(() => {})] })),
+    ).toEqual(["search.indexProduct:failure"])
   })
 
   test("checks each manifest", () => {

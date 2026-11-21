@@ -1,6 +1,7 @@
 // Runs of a handler in a test: the metadata of its job, its scope, its payload through JSON, its signal, and its outcome.
 import { describe, expect, mock, test } from "bun:test"
 
+import type { JobFailure } from "../task/failure"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { runJob } from "./run-job"
@@ -19,6 +20,42 @@ describe("job", () => {
       maxAttempts: 3,
       key: "k:7",
       queue: "q",
+    })
+  })
+
+  test("runs the onFailure of an implementation as the handler of its failure implementation, with the metadata of a failure job and the scope of a scoped task", async () => {
+    const onFailure = mock((_failure: JobFailure<{ id: number }>, _context: HandlerContext) => {})
+    const task = defineTask("t", { queue: "q", maxAttempts: 3, scoped: true })
+      .withPayload<{ id: number }>()
+      .withOptions(payload => ({ key: `k:${payload.id}` }))
+    const failure: JobFailure<{ id: number }> = {
+      id: "5",
+      reason: "handler-error",
+      error: { message: "boom" },
+      failedAt: "2030-01-01T00:00:00.000Z",
+      job: {
+        id: "4",
+        task: "t",
+        scope: "acme",
+        attempt: 3,
+        maxAttempts: 3,
+        key: "k:7",
+        queue: "q",
+      },
+      payload: { id: 7 },
+    }
+    await runJob(task.implement(() => {}, { onFailure }).failure, failure, {
+      job: { scope: "acme" },
+    })
+    expect(onFailure.mock.calls[0]![0]).toEqual(failure)
+    // A failure job takes neither the options of the task nor its key and queue.
+    expect(onFailure.mock.calls[0]![1].job).toEqual({
+      id: "1",
+      scope: "acme",
+      attempt: 1,
+      maxAttempts: 25,
+      key: null,
+      queue: null,
     })
   })
 

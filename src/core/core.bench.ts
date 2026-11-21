@@ -1,4 +1,4 @@
-// Measurements of the SQL core: hot-key upsert churn, claim latency under backlog, idle cycle cost, reaper and fail latency.
+// Measurements of the SQL core: hot-key upsert churn, claim latency under backlog, idle cycle cost, reaper and fail latency, and the cost of failure jobs.
 // Run: bun --env-file=.env.test.local src/core/core.bench.ts
 import { claimCycle, claimPlain, claimQueued } from "./claim"
 import { enqueue } from "./enqueue"
@@ -184,9 +184,74 @@ async function reapAndFail() {
   await schema.dispose()
 }
 
+/** Claims, a reap, and terminal fails with and without stamps of failure jobs, alternating so that both see the same table. */
+async function failureJobs() {
+  const schema = await createTestSchema()
+  const failureMaxAttempts = { t: 25 }
+  await query(
+    schema.admin,
+    `insert into ${schema.table.name} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+     select 't', case when i % 2 = 0 then 'q' || ((i / 2) % 100) end, '{"id": 1}', now() - interval '1 second', now(), now(), 1
+     from generate_series(1, 20000) i`,
+  )
+  await query(schema.admin, `analyze ${schema.table.name}`)
+  const plain = { without: [] as number[], with: [] as number[] }
+  const queued = { without: [] as number[], with: [] as number[] }
+  for (let i = 0; i < 400; i++) {
+    const variant = i % 2 === 0 ? "without" : "with"
+    const o = {
+      worker: "w",
+      tasks: ["t"],
+      failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
+    }
+    const [p, claims] = await time(() => claimPlain(schema.admin, schema.table, { ...o, limit: 4 }))
+    plain[variant].push(p)
+    const [q, r] = await time(() => claimQueued(schema.admin, schema.table, o))
+    queued[variant].push(q)
+    for (const c of [...claims, ...(r.kind === "job" ? [r.claim] : [])])
+      await complete(schema.admin, schema.table, c)
+  }
+  console.log(
+    `claimPlain, limit 4, without stamps: ${fmt(plain.without)}; with: ${fmt(plain.with)}`,
+  )
+  console.log(
+    `claimQueued, 100 queues, without stamps: ${fmt(queued.without)}; with: ${fmt(queued.with)}`,
+  )
+  for (const variant of ["without", "with"] as const) {
+    const o = {
+      worker: "dead",
+      tasks: ["t"],
+      failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
+    }
+    await claimPlain(schema.admin, schema.table, { ...o, limit: 1000, defaultLease: 0.001 })
+    await new Promise(r => setTimeout(r, 10))
+    const [ms, reaped] = await time(() => reap(schema.admin, schema.table, { limit: 1000 }))
+    console.log(
+      `reap 1000 expired rows on their last attempt ${variant} stamps: ${ms.toFixed(1)} ms (${reaped.length} failed)`,
+    )
+  }
+  const fails = { without: [] as number[], with: [] as number[] }
+  for (let i = 0; i < 400; i++) {
+    const variant = i % 2 === 0 ? "without" : "with"
+    const o = {
+      worker: "w",
+      tasks: ["t"],
+      failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
+    }
+    const [c] = await claimPlain(schema.admin, schema.table, { ...o, limit: 1 })
+    const [t] = await time(() =>
+      fail(schema.database, schema.table, c!, { error: "e", backoff: 10 }),
+    )
+    fails[variant].push(t)
+  }
+  console.log(`terminal fail without stamps: ${fmt(fails.without)}; with: ${fmt(fails.with)}`)
+  await schema.dispose()
+}
+
 for (const mode of ["replace", "keep", "debounce"] as KeyMode[]) await hotKey(mode)
 await claimBacklog()
 await queueBacklog(3)
 await queueBacklog(1000)
 await idleCycle()
 await reapAndFail()
+await failureJobs()

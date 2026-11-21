@@ -115,6 +115,31 @@ for (const mode of ["before", "after"] as const) {
   })
 }
 
+for (const mode of ["before", "after"] as const) {
+  test(`terminal fail of a claim stamped with a failure job cut ${mode} its COMMIT reaches the server: one failure job either way`, async () => {
+    const { proxy, driver } = await proxied()
+    await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    const claim = only(
+      await claimPlain(schema.admin, schema.table, {
+        worker: "w",
+        tasks: ["t"],
+        limit: 1,
+        defaultLease: 60,
+        failureMaxAttempts: { t: 3 },
+      }),
+    )
+    proxy.cutNext(/^\s*commit\b/i, mode)
+    expect(await run({ driver, claim, action: failAction })).toEqual({
+      outcome: mode === "before" ? "failed" : "unknown",
+      errors: 1,
+    })
+    expect((await jobs(schema)).map(r => [r.task, r.state])).toEqual([
+      ["t", "failed"],
+      ["t:failure", "pending"],
+    ])
+  })
+}
+
 test("a claim that a heartbeat found lost is not settled", async () => {
   const claim = await claimJob()
   expect(

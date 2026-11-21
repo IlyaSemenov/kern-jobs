@@ -3,8 +3,17 @@ import { RetryError, TerminalError } from "kern-jobs/worker"
 
 import { indexProductTask } from "../../tasks.ts"
 
-export default indexProductTask.implement(async ({ productId }, { signal, job }) => {
-  if (productId === "") throw new TerminalError(`job ${job.id} has no product`)
-  signal.throwIfAborted()
-  if (job.attempt < job.maxAttempts) throw new RetryError("the index is busy", { delay: 10 })
-})
+export default indexProductTask.implement(
+  async ({ productId }, { signal, job }) => {
+    if (productId === "") throw new TerminalError(`job ${job.id} has no product`)
+    signal.throwIfAborted()
+    if (job.attempt < job.maxAttempts) throw new RetryError("the index is busy", { delay: 10 })
+  },
+  {
+    onFailure: async (failure, { job }) => {
+      console.log(
+        `indexing product ${failure.payload.productId} failed: ${failure.error.message} (failure job ${job.id})`,
+      )
+    },
+  },
+)

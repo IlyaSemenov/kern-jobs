@@ -38,6 +38,7 @@ When changing a project's version, recheck all its comparison items against the 
 - [Migrations](migrations.md)
 - [Administration](administration.md)
 - [Testing](testing.md)
+- [Terminal failures](terminal-failures.md)
 
 ## Scenarios to compare
 

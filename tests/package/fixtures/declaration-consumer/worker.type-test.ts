@@ -1,6 +1,14 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
-import type { Backoff, JobInfo, Jobs, TaskBuilder, TaskImplementation } from "kern-jobs"
+import type {
+  Backoff,
+  FailureImplementation,
+  JobFailure,
+  JobInfo,
+  Jobs,
+  TaskBuilder,
+  TaskImplementation,
+} from "kern-jobs"
 import type { AbortReason, CronDefinition, Manifest, Schedule, Worker } from "kern-jobs/worker"
 
 import {
@@ -29,8 +37,14 @@ declare const jobs: Jobs
 describe("emitted declarations of the worker", () => {
   test("keep the task and the payload of each implementation, the manifest, a schedule, and the metadata of a job", () => {
     expectTypeOf(indexProduct).toEqualTypeOf<
-      TaskImplementation<"search.indexProduct", { productId: string }>
+      TaskImplementation<"search.indexProduct", { productId: string }> & {
+        readonly failure: FailureImplementation<"search.indexProduct", { productId: string }>
+      }
     >()
+    expectTypeOf(indexProduct.failure.task.name).toEqualTypeOf<"search.indexProduct:failure">()
+    expectTypeOf(indexProduct.failure.handler)
+      .parameter(0)
+      .toEqualTypeOf<JobFailure<{ productId: string }>>()
     expectTypeOf(purgeExpiredSessions).toEqualTypeOf<
       TaskImplementation<"sessions.purgeExpired", void>
     >()
@@ -59,6 +73,8 @@ describe("emitted declarations of the worker", () => {
   test("let implement reject a handler of another payload, and enqueue reject a setting", () => {
     // @ts-expect-error The handler takes the payload of the task.
     indexProductTask.implement((payload: { id: number }) => payload)
+    // @ts-expect-error The handler of the failures of another task takes the failures of another payload.
+    purgeExpiredSessionsTask.implement(() => {}, { onFailure: indexProduct.failure.handler })
     // @ts-expect-error An enqueue cannot override the lease.
     void jobs.enqueue(purgeExpiredSessionsTask, undefined, { lease: 5 })
   })

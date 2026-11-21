@@ -8,6 +8,7 @@ Its core promises:
 - A key keeps at most one pending job per scope and task, and no event of the key is lost unless the application deletes the pending job that carries it: an event either merges into the pending job by the mode of the key, and that job runs after the event commits, or becomes the next pending job, also while a job of the key runs.
 - A queue runs at most one job at a time per scope and starts the earliest of its ready jobs of the tasks of the claiming worker in the snapshot of each claim.
 - A worker owns a job through a claim, which every heartbeat and settlement proves; a job whose lease expires, or whose worker has ended when a worker of its id starts, returns to pending, or fails on its last attempt, and a stale claim can neither extend nor settle it.
+- A terminal failure of a claim whose implementation has `onFailure` inserts exactly one job that runs it, of the failure task of its task, in the statement that records the failure, also when the reaper records it.
 - Deadlines are computed in SQL from the committed row, so concurrent producers and workers never move a lease or the debounce deadline of a window backwards, and no enqueue moves a retry before the end of its backoff.
 
 The public API is not settled before 1.0 and may change in any release.
@@ -28,6 +29,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - A claim is the ownership of an active job by a worker, identified by a claim id.
 - A lease is the time until which the reaper leaves a claimed job to its worker.
 - Settlement ends a claim: complete deletes the job, and fail retries it, merges it with the pending job of its key, or records it as failed.
+- The failure task of a task runs the `onFailure` of its implementation and has the name of the task with `:failure` after it; a failure job is the job of that task that a terminal failure of a claim of the implementation inserts.
 - Administration is what the application does with existing jobs: it retries a failed job, and deletes pending or failed jobs by id or by a filter.
 - Storable text is a string that has neither U+0000 nor a lone surrogate.
   PostgreSQL rejects U+0000 in text, and encoding as UTF-8 replaces a lone surrogate with U+FFFD, so two different strings would become one value, such as two keys that share a pending job.
@@ -48,7 +50,7 @@ The package test enqueues through the main entry, and records an enqueue and run
 
 Module paths are relative to `src/`.
 
-- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `core/schema.ts`, `core/job.ts`, and `migration/migrations/0003_job_summary.ts`.
+- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `core/schema.ts`, `core/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
 - [Enqueue](enqueue.md): key modes and debounce; `core/enqueue.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `jobs/`.
@@ -56,6 +58,7 @@ Module paths are relative to `src/`.
 - [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `core/administration.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `core/claim.ts`.
 - [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `core/settlement.ts`.
+- [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `core/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.
 - [Leases](leases.md): heartbeat, the reaper, and fencing; `core/lease.ts`.
 - [PostgreSQL](postgresql.md): supported versions, isolation, transactions, and time; `core/db.ts`.
 - [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `db/`, `core/driver.ts`, `core/statement.ts`, and `core/violation.ts`.

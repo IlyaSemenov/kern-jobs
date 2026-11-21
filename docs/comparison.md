@@ -23,17 +23,18 @@ kern-jobs is in early development, and its API changes between minor versions.
 
 ## At a glance
 
-|                                                                          | kern-jobs                                                         | Graphile Worker                                      | pg-boss                                                |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
-| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM                                        | Through a SQL function                               | Through an adapter of your client                      |
-| [Payload types shared by the application and workers](#payload-types)    | A task definition                                                 | A global interface                                   | Not connected                                          |
-| [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                              | Job keys                                             | Queue policies, with other rules                       |
-| [Debounce with a bound on postponing](#debounce)                         | Built in                                                          | Without a bound                                      | Time slots of a fixed length                           |
-| [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                            | Named queues                                         | `key_strict_fifo`, which also blocks on a failed job   |
-| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window                    | UTC crontab, backfill of each eligible occurrence    | Cron or RRULE in a time zone, one catch-up job         |
-| [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | After a lease, 60 s by default, or when a worker of its id starts | Locked for at least 4 hours                          | Released after a heartbeat timeout or their expiration |
-| [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt        | A job that throws after the abort spends its attempt | Jobs still running at the timeout fail                 |
-| [Schema migrations](#schema-migrations)                                  | A call of the application                                         | At the start of a worker                             | At the start of an instance                            |
+|                                                                          | kern-jobs                                                                 | Graphile Worker                                                               | pg-boss                                                        |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM                                                | Through a SQL function                                                        | Through an adapter of your client                              |
+| [Payload types shared by the application and workers](#payload-types)    | A task definition                                                         | A global interface                                                            | Not connected                                                  |
+| [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                                      | Job keys                                                                      | Queue policies, with other rules                               |
+| [Debounce with a bound on postponing](#debounce)                         | Built in                                                                  | Without a bound                                                               | Time slots of a fixed length                                   |
+| [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                                    | Named queues                                                                  | `key_strict_fifo`, which also blocks on a failed job           |
+| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window                            | UTC crontab, backfill of each eligible occurrence                             | Cron or RRULE in a time zone, one catch-up job                 |
+| [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | After a lease, 60 s by default, or when a worker of its id starts         | Locked for at least 4 hours                                                   | Released after a heartbeat timeout or their expiration         |
+| [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt                | A job that throws after the abort spends its attempt                          | Jobs still running at the timeout fail                         |
+| [Work after a job fails for good](#work-after-a-job-fails-for-good)      | A handler in a job of its own, added with the failure, also by the reaper | A local event before the failure is recorded, none for a job of a dead worker | A dead letter copy, added with the failure, also at expiration |
+| [Schema migrations](#schema-migrations)                                  | A call of the application                                                 | At the start of a worker                                                      | At the start of an instance                                    |
 
 ## Enqueue in a transaction
 
@@ -94,6 +95,14 @@ A job whose handler then throws, other than a `TerminalError` or a `RetryError`,
 
 - Graphile Worker: it waits for its running jobs and [aborts their signal](https://github.com/graphile/worker/blob/v0.18.0/website/docs/error-handling.md#termination-signal) after [5 seconds](https://github.com/graphile/worker/blob/v0.18.0/website/docs/config.md#workergracefulshutdownaborttimeout); a job whose handler then throws spends its attempt.
 - pg-boss: [`stop`](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/ops.md#stopoptions) waits for the running handlers for 30 seconds, then fails their jobs.
+
+## Work after a job fails for good
+
+With kern-jobs, [`onFailure`](./workers/failure-handlers) runs in a job that is added in the transaction that records the failure, also when the worker died on the last attempt, and that retries as any job.
+A job that a stop returns to pending without spending its attempt adds none.
+
+- Graphile Worker: a worker emits the local event [`job:failed`](https://github.com/graphile/worker/blob/v0.18.0/src/worker.ts#L295-L356) before it records the failure, and a job whose worker died on its last attempt [is no longer taken](https://github.com/graphile/worker/blob/v0.18.0/sql/000011.sql#L67) and gets no event.
+- pg-boss: the statement that fails a job after its retries, [also at its expiration](https://github.com/timgit/pg-boss/blob/12.38.1/src/plans.ts#L3268-L3296), inserts a copy of its payload into the [`deadLetter`](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/queues.md?plain=1#L69-L71) queue of its queue, also of a job that its stop failed at the timeout.
 
 ## Schema migrations
 
