@@ -152,7 +152,7 @@ await sql.begin(async tx => {
 })
 ```
 
-The job appears to workers when the transaction commits, and never when it rolls back.
+Workers see the enqueue when the transaction commits, and a rollback undoes it.
 With node-postgres, pass the `pg.PoolClient` that runs the transaction.
 
 To share one jobs API across your application, such as `jobs` of `src/jobs.ts`, keep the client of the current transaction in an `AsyncLocalStorage`, and pass a function that returns it:
