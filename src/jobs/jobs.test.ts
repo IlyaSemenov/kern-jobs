@@ -284,6 +284,16 @@ for (const [name, createClient] of clients) {
   })
 }
 
+test("runs statements through the query method of a callable executor", async () => {
+  const client = Object.assign(
+    () => {
+      throw new Error("called the executor as a factory")
+    },
+    { query: async () => ({ rows: [["42"]] }) },
+  )
+  expect(await createJobs(client).delete("42")).toBe(true)
+})
+
 test("throws TypeError for a client of another kind, such as a connection string", () => {
   expect(() => createJobs(databaseUrl() as unknown as JobsClient)).toThrow(
     new TypeError(

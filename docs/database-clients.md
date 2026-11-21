@@ -182,7 +182,8 @@ Pass an object with a `query` function that runs the SQL text with its parameter
 export const jobs = createJobs({ query: (text, values) => client.query(text, values) })
 ```
 
-To enqueue in the current transaction of such a client, pass a function that returns the object instead.
+If the client itself is callable and has a `query` method, pass it directly to `createJobs`.
+To enqueue in the current transaction, pass a function such as `() => getCurrentClient()`.
 
 The client may rename columns, such as with `postgres.camel`, and parse values of any type but `text` as it likes; keep `text` values as the database returns them.
 

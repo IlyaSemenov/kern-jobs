@@ -62,7 +62,6 @@ function toClientTarget(connection: unknown): ValuesTarget {
     : connection
   // A database of kern-db also has `query`, which takes a template, so `execute` tells it first.
   if (hasMethod(database, "execute")) return database as JobsDatabase
-  // `sql` of postgres.js is a function too, so its `unsafe` tells it from a function that returns a client.
   if (hasMethod(connection, "unsafe")) {
     const client = connection as UnsafeClient
     return fromExecutor({
@@ -79,7 +78,8 @@ function toClientTarget(connection: unknown): ValuesTarget {
  * Returns the function that gives the statement target of the next call of `jobs`, such as an enqueue, on a client of `createJobs`, and throws `TypeError` for a value that is none of its forms; a function that returns a client is checked at each call.
  */
 export function toJobsTarget(client: JobsClient): () => ValuesTarget {
-  if (typeof client === "function" && !hasMethod(client, "unsafe")) {
+  // Both postgres.js and custom executors can be callable clients.
+  if (typeof client === "function" && !hasMethod(client, "unsafe") && !hasMethod(client, "query")) {
     const getClient = client as () => JobsConnection
     return () => toClientTarget(getClient())
   }

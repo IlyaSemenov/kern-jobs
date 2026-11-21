@@ -55,7 +55,8 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
 - a function that returns one of them, which `jobs` calls for each statement that it runs, such as of an enqueue, so that the statement runs in the transaction that the application holds at the call, such as one in `AsyncLocalStorage`;
 - a `Database` of kern-db or a `Db` of kern-orm, whose `execute` runs the statement of a call of `jobs` in the current transaction of the database.
 
-`toJobsTarget` of `jobs/client.ts` tells the forms apart: a `Db` by `$database`, a database by `execute`, which it checks before `query`, since a database has a `query` of templates, a client of postgres.js by `unsafe`, which it checks before telling a function, since `sql` is a function, and an executor by `query`.
+`toJobsTarget` of `jobs/client.ts` treats a function as a client factory only if it has neither an `unsafe` nor a `query` method.
+It recognizes a `Db` by `$database`, a database by `execute`, a postgres.js client by `unsafe`, and an executor by `query`, in that order, since a database also has a `query` method for templates.
 It throws `TypeError` for a value of another kind when `createJobs` is called, or for a function that returns one when a call of `jobs` calls it.
 The main entry declares the shapes of these clients, such as `JobsDatabase` and `UnsafeClient`, rather than importing them, since it depends on neither kern-db nor a client library.
 
