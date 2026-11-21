@@ -9,7 +9,7 @@ import pg from "pg"
 import postgres from "postgres"
 
 import type { EnqueueResult } from "../core/enqueue"
-import { type JobsClient, query } from "../core/statement"
+import { query } from "../core/statement"
 import {
   createTestSchema,
   databaseUrl,
@@ -19,6 +19,7 @@ import {
 } from "../core/testing"
 import { defineTask } from "../task/task"
 
+import type { JobsClient } from "./client"
 import {
   ALL_SCOPES,
   createJobs,

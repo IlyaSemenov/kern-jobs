@@ -16,7 +16,6 @@ import {
   prepareEnqueueMany,
 } from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
-import { type JobsClient, toJobsTarget } from "../core/statement"
 import { delayRange, isDelay } from "../task/delay"
 import {
   checkEnqueueOverrides,
@@ -26,6 +25,8 @@ import {
   toStoredKey,
 } from "../task/options"
 import type { Task } from "../task/task"
+
+import { type JobsClient, toJobsTarget } from "./client"
 
 /**
  * Value of the `scope` option of `createJobs` for code that manages the jobs of every scope, such as a script of an operator.

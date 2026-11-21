@@ -7,7 +7,7 @@ export type {
   JobsDatabase,
   JobsDb,
   UnsafeClient,
-} from "./core/statement"
+} from "./jobs/client"
 export {
   ALL_SCOPES,
   createJobs,
