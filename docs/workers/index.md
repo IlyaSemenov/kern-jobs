@@ -23,7 +23,7 @@ import purgeExpiredSessions from "./tasks/purge-expired-sessions"
 export const manifest = defineManifest({ tasks: [indexProduct, purgeExpiredSessions] })
 ```
 
-Register [schedules](./schedules) in the manifest to enqueue recurring jobs.
+Register [schedules](../tasks/schedules) in the manifest to enqueue recurring jobs.
 
 To run the tasks and schedules of several modules of your application in one worker, give each module a manifest of its own and merge them:
 
@@ -57,7 +57,7 @@ A job whose handler throws [runs again later](./retries).
 
 If your schema is not `kern_jobs`, pass its name as `schemaName`.
 
-Create the schema with [`migrateJobs`](../getting-started#create-the-schema) before the worker starts: a worker takes no jobs in a schema that is missing or lacks the changes of its version of kern-jobs, and [reports](./monitoring#report-errors) it until the schema is up to date.
+Create the schema with [`migrateJobs`](../getting-started#create-the-schema) before the worker starts: a worker takes no jobs in a schema that is missing or lacks the changes of its version of kern-jobs, and [reports](../operations/monitoring#report-errors) it until the schema is up to date.
 
 [Database Clients and Transactions](../database-clients) shows how to start a worker on node-postgres or kern-orm, and [how many connections](../database-clients#connections-of-a-worker) it needs.
 
@@ -91,21 +91,3 @@ To limit a group of tasks on its own, such as heavy renders, start another worke
 Each worker keeps one connection of its client, so give a client of several workers a connection for each of them and at least one more.
 
 A worker looks for due jobs every second while it has free slots; pass `pollInterval` in seconds to change it.
-
-## Check the manifest in tests
-
-A job of a task that no worker implements stays pending until you [delete it](./failed-jobs#delete-a-job).
-To catch a task that you defined and forgot to implement, compare the tasks of your application with its manifests in a test:
-
-```ts
-import { findUnimplementedTasks } from "kern-jobs/worker"
-
-import * as tasks from "../src/tasks"
-import { manifest } from "../src/worker/manifest"
-
-test("every task has an implementation", () => {
-  expect(findUnimplementedTasks(tasks, manifest)).toEqual([])
-})
-```
-
-It takes the tasks among the exports of the module, and one manifest or an array of the manifests of all your workers.

@@ -1,7 +1,7 @@
 # Retries
 
 A job whose handler throws runs again after the backoff of its task: 2 seconds after the first attempt, doubled after each next one, up to an hour.
-After its last attempt, [`maxAttempts`](#attempts) of its task, it stays in the database as failed with the message of the error, until you [retry or delete it](./failed-jobs).
+After its last attempt, [`maxAttempts`](#attempts) of its task, it stays in the database as failed with the message of the error, until you [retry or delete it](../operations/managing-jobs).
 
 ## Attempts
 

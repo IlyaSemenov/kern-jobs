@@ -1,7 +1,9 @@
-# Failed Jobs
+# Managing Jobs
+
+Use `jobs` to retry a failed job, delete a job, or delete all pending or failed jobs of a task or a scope.
 
 A job that spent its attempts or failed for good, such as by a `TerminalError`, stays in the database as failed until you retry or delete it.
-To act when that happens, such as to update your data or send a notification, use [`onFailure`](./failure-handlers).
+To act when that happens, such as to update your data or send a notification, use [`onFailure`](../workers/failure-handlers).
 
 ## Find out why a job failed
 
@@ -39,7 +41,7 @@ Then delete the failed job if the pending job does its work, or delete the pendi
 
 `retry` resolves to `null` when no failed job has the id, such as one that a retry has already returned to pending.
 
-A retry does not cancel the [failure job](./failure-handlers) that the failure has added.
+A retry does not cancel the [failure job](../workers/failure-handlers) that the failure has added.
 
 An enqueue that adds a new pending job of its key and commits while `retry` runs can make it reject with the unique violation of your database client and change nothing.
 In a transaction, the error aborts the transaction: roll it back, and retry the job again.
@@ -110,7 +112,7 @@ Without a filter, `deleteFailed` deletes the failed jobs of every task of the sc
 
 ### Delete old failed jobs every night
 
-To have your workers delete them, call `deleteFailed` from a task that a [schedule](./schedules) enqueues:
+To have your workers delete them, call `deleteFailed` from a task that a [schedule](../tasks/schedules) enqueues:
 
 ```ts
 import { ALL_SCOPES, createJobs, defineTask } from "kern-jobs"

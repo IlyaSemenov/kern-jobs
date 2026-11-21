@@ -38,7 +38,7 @@ This helps a dev server that restarts on every change, and a process manager tha
 Without `id`, each worker gets an id of its own process, and the jobs of a dead worker wait for their leases.
 
 Give each running worker its own id.
-A worker whose id another running worker of the same [installation](../getting-started#create-the-schema) has takes no jobs, and [reports](./monitoring#report-errors) a `heartbeat` error until that worker stops.
+A worker whose id another running worker of the same [installation](../getting-started#create-the-schema) has takes no jobs, and [reports](../operations/monitoring#report-errors) a `heartbeat` error until that worker stops.
 
 A worker that loses the connection that it keeps gives up its id until it reconnects.
 A worker that starts with that id in the meantime returns the jobs of the first one, which may run again before their handlers end, and the first worker [aborts](./handlers#stop-long-handlers) them once it cannot extend their leases.

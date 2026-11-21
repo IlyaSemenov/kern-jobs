@@ -34,7 +34,6 @@ export default defineConfig({
           { text: "Getting Started", link: "/getting-started" },
           { text: "Comparison", link: "/comparison" },
           { text: "Database Clients and Transactions", link: "/database-clients" },
-          { text: "Testing", link: "/testing" },
         ],
       },
       {
@@ -42,6 +41,7 @@ export default defineConfig({
         items: [
           { text: "Defining Tasks", link: "/tasks/" },
           { text: "Enqueueing Jobs", link: "/tasks/enqueue" },
+          { text: "Scheduling Recurring Jobs", link: "/tasks/schedules" },
           { text: "Deduplication and Debouncing", link: "/tasks/keys" },
           { text: "Sequential Queues", link: "/tasks/queues" },
           { text: "Scopes", link: "/tasks/scopes" },
@@ -53,21 +53,21 @@ export default defineConfig({
           { text: "Running Workers", link: "/workers/" },
           { text: "Writing Handlers", link: "/workers/handlers" },
           { text: "Retries", link: "/workers/retries" },
-          { text: "Failed Jobs", link: "/workers/failed-jobs" },
           { text: "Failure Handlers", link: "/workers/failure-handlers" },
-          { text: "Scheduling Recurring Jobs", link: "/workers/schedules" },
           { text: "Leases", link: "/workers/leases" },
           { text: "Graceful Shutdown", link: "/workers/stopping" },
-          { text: "Monitoring", link: "/workers/monitoring" },
         ],
       },
       {
-        text: "Deployment",
+        text: "Operations",
         items: [
-          { text: "Updating kern-jobs", link: "/deployment/updating-kern-jobs" },
-          { text: "Changing Tasks", link: "/deployment/changing-tasks" },
+          { text: "Managing Jobs", link: "/operations/managing-jobs" },
+          { text: "Monitoring", link: "/operations/monitoring" },
+          { text: "Updating kern-jobs", link: "/operations/updating-kern-jobs" },
+          { text: "Changing Tasks", link: "/operations/changing-tasks" },
         ],
       },
+      { text: "Testing", link: "/testing/" },
     ],
     search: { provider: "local" },
     editLink: {

@@ -79,7 +79,7 @@ await migrateJobs(postgresJsDriver(sql))
 await sql.end()
 ```
 
-Run it at every deploy as well, as [Updating kern-jobs](./deployment/updating-kern-jobs) describes.
+Run it at every deploy as well, as [Updating kern-jobs](./operations/updating-kern-jobs) describes.
 
 To use a different schema name, pass it as `schemaName` to `migrateJobs`, and to `createJobs` and `startWorker` below.
 Each schema is an installation of kern-jobs of its own: its jobs, the code that enqueues them, and its workers do not see those of another one.
@@ -97,7 +97,7 @@ export const sendWelcomeEmailTask = defineTask("email.sendWelcome").withPayload<
 }>()
 ```
 
-[Defining Tasks](./tasks/) describes the options of a task, and the pages after it describe keys, queues, and scopes.
+[Defining Tasks](./tasks/) describes the options of a task, and the pages after it describe enqueueing, recurring jobs, keys, queues, and scopes.
 
 ## Connect
 
@@ -176,4 +176,4 @@ On SIGTERM or SIGINT, `stopOnSignals` stops the worker, closes the database clie
 In a process that also serves your application, [call `stop`](./workers/stopping#stop-from-your-code) from its shutdown instead.
 
 A job whose handler returns is done, and a job whose handler throws runs again later.
-[Running Workers](./workers/) and the pages after it describe handlers, retries, leases, stopping, and monitoring.
+[Running Workers](./workers/) and the pages after it describe handlers, retries, leases, and stopping, and [Monitoring](./operations/monitoring) describes how to watch workers and jobs in production.

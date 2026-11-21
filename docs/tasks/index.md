@@ -10,7 +10,7 @@ export const sendEmailTask = defineTask("email.send").withPayload<{ to: string; 
 await jobs.enqueue(sendEmailTask, { to: "ann@example.com", subject: "Welcome" })
 ```
 
-The name identifies the task in the database, so keep it unique within your application, and rename a task only [in steps](../deployment/changing-tasks).
+The name identifies the task in the database, so keep it unique within your application, and rename a task only [in steps](../operations/changing-tasks).
 It is at most 128 bytes long, 120 for a task with an [`onFailure`](../workers/failure-handlers), and does not end with `:failure`, which names the failure jobs of a task.
 
 The payload is stored as JSON, so pass values that survive `JSON.stringify`, such as an ISO string instead of a `Date`.

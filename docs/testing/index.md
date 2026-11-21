@@ -47,7 +47,7 @@ Test what a rollback does with `createJobs` on a database, and also the limits o
 
 ## Scoped tasks
 
-Pass `createTestJobs` the scope of [scoped tasks](./tasks/scopes) as you pass it to `createJobs`, such as a function that returns the tenant of the current test:
+Pass `createTestJobs` the scope of [scoped tasks](../tasks/scopes) as you pass it to `createJobs`, such as a function that returns the tenant of the current test:
 
 ```ts [src/testing/jobs.ts]
 import { createTestJobs } from "kern-jobs/testing"
@@ -81,5 +81,23 @@ Replace them in `job`, such as to test the last attempt:
 await runJob(sendWelcomeEmail, { userId: "user-1" }, { job: { attempt: 25 } })
 ```
 
-Pass the scope of the job of a scoped task in `job.scope`, and an `AbortSignal` in `signal` to test how the handler [stops](./workers/handlers#stop-long-handlers).
-`runJob` calls the handler directly, without the [`runHandler`](./workers/handlers#wrap-every-handler) of a worker, [retries](./workers/retries), or `onFailure`; to test `onFailure`, [run it with a `JobFailure`](./workers/failure-handlers#test-onfailure).
+Pass the scope of the job of a scoped task in `job.scope`, and an `AbortSignal` in `signal` to test how the handler [stops](../workers/handlers#stop-long-handlers).
+`runJob` calls the handler directly, without the [`runHandler`](../workers/handlers#wrap-every-handler) of a worker, [retries](../workers/retries), or `onFailure`; to test `onFailure`, [run it with a `JobFailure`](../workers/failure-handlers#test-onfailure).
+
+## Check the manifest
+
+A job of a task that no worker implements stays pending without an error.
+To catch a task that you defined and forgot to implement, compare the tasks of your application with its manifests in a test:
+
+```ts
+import { findUnimplementedTasks } from "kern-jobs/worker"
+
+import * as tasks from "../src/tasks"
+import { manifest } from "../src/worker/manifest"
+
+test("every task has an implementation", () => {
+  expect(findUnimplementedTasks(tasks, manifest)).toEqual([])
+})
+```
+
+It takes the tasks among the exports of the module, and one manifest or an array of the manifests of all your workers.

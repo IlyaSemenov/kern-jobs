@@ -5,7 +5,7 @@ Deleting failed jobs after a configured time by the queue itself, without a sche
 ## Use case
 
 An application that moved to kern-jobs needs to delete its old failed jobs periodically.
-It can [schedule a task](../docs/workers/failed-jobs.md#delete-old-failed-jobs-every-night) that calls `deleteFailed({ olderThan })`, and built-in retention would spare it that task.
+It can [schedule a task](../docs/operations/managing-jobs.md#delete-old-failed-jobs-every-night) that calls `deleteFailed({ olderThan })`, and built-in retention would spare it that task.
 
 ## Preliminary
 

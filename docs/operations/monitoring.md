@@ -35,10 +35,10 @@ const worker = startWorker(driver, {
 })
 ```
 
-`info.decision` is what the worker decided when the handler threw: `retry` to run the job again, or `terminal` to fail it for good, by a [`TerminalError`](./retries#decide-in-the-handler) or on its last attempt.
+`info.decision` is what the worker decided when the handler threw: `retry` to run the job again, or `terminal` to fail it for good, by a [`TerminalError`](../workers/retries#decide-in-the-handler) or on its last attempt.
 
 It is a decision, not a record of what became of the job: after `retry`, a newer job of its [key](../tasks/keys#while-a-job-of-the-key-runs) can run in its place, and a job can fail for good without an error of its handler, such as when its worker dies on its last attempt.
-So use `decision` to choose what you report, and [`onFailure`](./failure-handlers) to act on a failure for good.
+So use `decision` to choose what you report, and [`onFailure`](../workers/failure-handlers) to act on a failure for good.
 
 ## Check the health of a worker
 
@@ -70,7 +70,7 @@ createServer((request, response) => {
 `state` does not tell whether jobs progress: a worker whose handlers keep every connection of its client busy stays `ready` while it waits for one.
 Watch the age of the oldest due job, in [Watch the backlog](#watch-the-backlog), to catch that.
 
-Neither `ready` nor `state` tells whether the worker checks its [schedules](./schedules): a worker stays `ready` while every check of a schedule fails.
+Neither `ready` nor `state` tells whether the worker checks its [schedules](../tasks/schedules): a worker stays `ready` while every check of a schedule fails.
 Alert on `schedule` errors in `onError` to catch that.
 
 ## Watch the backlog
@@ -96,9 +96,9 @@ The view has a row for each task in each scope that has jobs:
 - `task`: the name of the task.
 - `due`: jobs that wait for a worker.
 - `scheduled`: jobs that wait for their time, such as a delay or a debounce.
-- `retrying`: jobs that wait for the backoff of a [retry](./retries).
+- `retrying`: jobs that wait for the backoff of a [retry](../workers/retries).
 - `running`: jobs that workers run.
-- `failed`: jobs that spent their attempts or failed for good, which stay until you [retry or delete them](./failed-jobs).
+- `failed`: jobs that spent their attempts or failed for good, which stay until you [retry or delete them](./managing-jobs).
 - `oldest_due_seconds`: how long the oldest due job waits.
 - `longest_running_seconds`: how long ago a worker took the longest running job.
 - `oldest_failed_seconds`: how long ago the oldest failed job failed.
@@ -110,7 +110,7 @@ A task without jobs in a scope has no row, so take a missing value as zero where
 A growing `oldest_due_seconds` means that the workers do not keep up, or that no worker takes the jobs of the task, such as when none runs or implements it.
 A job of a [queue](../tasks/queues) also waits for the jobs before it in its queue.
 `longest_running_seconds` counts from the moment a worker took the job, also while the worker records its result.
-Compare it with the usual run time of the task to find a handler that hangs, or a job of a worker that ended, which stays running until a worker returns it, as [Leases](./leases) describes.
+Compare it with the usual run time of the task to find a handler that hangs, or a job of a worker that ended, which stays running until a worker returns it, as [Leases](../workers/leases) describes.
 
 A summary of every task reads every job, so query it at the interval of your metrics rather than often.
 Later versions of kern-jobs only add columns to the view, so select the columns by name.
@@ -118,7 +118,7 @@ Later versions of kern-jobs only add columns to the view, so select the columns 
 A worker deletes a job when it completes, so the view does not count completed jobs.
 To count the errors of handlers as they happen, count the `handler` reports of [`onError`](#report-errors).
 
-Retry and delete jobs, also [old failed jobs](./failed-jobs#delete-failed-jobs), only through [`jobs`](./failed-jobs): the worker relies on the rows that it and the enqueue write.
+Retry and delete jobs, also [old failed jobs](./managing-jobs#delete-failed-jobs), only through [`jobs`](./managing-jobs): the worker relies on the rows that it and the enqueue write.
 
 ### Grant access to a monitoring role
 

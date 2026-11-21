@@ -22,7 +22,7 @@ export const sql = postgres(process.env.DATABASE_URL!)
 export const jobs = createJobs(sql, { scope: () => currentTenantId() })
 ```
 
-For a scoped task, `jobs.enqueue`, `jobs.enqueueMany`, [`jobs.deletePending`](../workers/failed-jobs#delete-pending-jobs), and [`jobs.deleteFailed`](../workers/failed-jobs#delete-failed-jobs) resolve the scope on every call.
+For a scoped task, `jobs.enqueue`, `jobs.enqueueMany`, [`jobs.deletePending`](../operations/managing-jobs#delete-pending-jobs), and [`jobs.deleteFailed`](../operations/managing-jobs#delete-failed-jobs) resolve the scope on every call.
 During a request of a tenant, enqueue the task as usual:
 
 ```ts
@@ -39,7 +39,7 @@ Outside of a request, such as in a script that enqueues a job for every tenant, 
 await createJobs(sql, { scope: tenant.id }).enqueue(indexProductTask, { productId })
 ```
 
-To retry or delete the jobs of every scope, such as in a script of an operator, pass [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope) instead.
+To retry or delete the jobs of every scope, such as in a script of an operator, pass [`ALL_SCOPES`](../operations/managing-jobs#jobs-of-a-scope) instead.
 
 A handler of a scoped task gets the scope as `job.scope`.
 Every handler of a worker runs in one process with the same database clients, so open the data of the scope by `job.scope` in the handler, such as by the name of the schema of a tenant:

@@ -25,10 +25,10 @@ export const manifest = defineManifest({
 ```
 
 Give each schedule of the same task its own `id`: it defaults to the task name and identifies the schedule across your workers.
-The task can run on any worker of the same schema, so a worker that schedules it need not implement it; [check in a test](./#check-the-manifest-in-tests) that some manifest does.
+The task can run on any worker of the same schema, so a worker that schedules it need not implement it; [check in a test](../testing/#check-the-manifest) that some manifest does.
 
 A schedule enqueues an unscoped task.
-To dispatch work per tenant, have that task enumerate tenants and enqueue a [scoped task](../tasks/scopes) for each one.
+To dispatch work per tenant, have that task enumerate tenants and enqueue a [scoped task](./scopes) for each one.
 
 ## Define a UTC calendar
 
@@ -48,12 +48,12 @@ A field that lists all its values, such as `0-6` for weekdays, counts as `*`, so
 
 ## Set job options
 
-Use `enqueue` on the schedule to [override the task options](../tasks/enqueue#overriding-options).
+Use `enqueue` on the schedule to [override the task options](./enqueue#overriding-options).
 
 A schedule can enqueue a job while its previous job is pending or running.
-Give it a [key](../tasks/keys) to merge it into a pending job, or a [queue](../tasks/queues) to run one job at a time.
+Give it a [key](./keys) to merge it into a pending job, or a [queue](./queues) to run one job at a time.
 
-If the task uses `withOptions`, the worker calls it for each scheduled enqueue, possibly more than once, and reports any error it throws as a [`schedule` error](./monitoring#report-errors).
+If the task uses `withOptions`, the worker calls it for each scheduled enqueue, possibly more than once, and reports any error it throws as a [`schedule` error](../operations/monitoring#report-errors).
 Keep that function fast and free of side effects.
 
 ## Recover missed occurrences

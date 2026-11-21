@@ -189,7 +189,7 @@ The client may rename columns, such as with `postgres.camel`, and parse values o
 ## Connections of a worker
 
 Give the client of a worker at least two connections: the worker keeps one of them while it runs, and takes the others for a moment to take jobs and to record their outcomes.
-With one connection, the worker never becomes [ready](./workers/monitoring#check-the-health-of-a-worker) and takes no jobs.
+With one connection, the worker never becomes [ready](./operations/monitoring#check-the-health-of-a-worker) and takes no jobs.
 The worker can share the client with the rest of your application, such as with the handlers and with `createJobs`; give the client a connection for each of the [handlers that run at once](./workers/#run-several-jobs-at-once) and query the database through it, besides the two of the worker.
 
 Connect the worker to PostgreSQL directly or through a pooler in session mode.

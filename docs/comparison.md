@@ -75,7 +75,7 @@ With kern-jobs, a [queue](./tasks/queues) runs one of its jobs at a time.
 
 ## Recurring jobs
 
-kern-jobs [schedules](./workers/schedules) use UTC calendars and can enqueue one job for all occurrences missed within a configured window.
+kern-jobs [schedules](./tasks/schedules) use UTC calendars and can enqueue one job for all occurrences missed within a configured window.
 
 - Graphile Worker: a [crontab](https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md#distributed-crontab) in UTC, which several workers share, with a backfill of missed moments.
 - pg-boss: cron or RRULE schedules in a chosen time zone can recover [one missed job alongside the current one](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md#catch-up-after-an-outage).

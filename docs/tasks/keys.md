@@ -84,6 +84,6 @@ await jobs.deletePending({ task: remindAboutDraftTask, key: `document:${document
 
 In one scope, `deletePending` resolves to `1` if it deleted the pending job of the key and to `0` otherwise; the job takes with it the events that merged into it.
 For a [scoped](./scopes) task, it deletes the job of the scope of `jobs`, which an enqueue through `jobs` would merge into; for another task, it does not call the scope function of `jobs`.
-Through `jobs` with [`ALL_SCOPES`](../workers/failed-jobs#jobs-of-a-scope), it deletes the job of the key of a scoped task in every scope, and resolves to their total.
+Through `jobs` with [`ALL_SCOPES`](../operations/managing-jobs#jobs-of-a-scope), it deletes the job of the key of a scoped task in every scope, and resolves to their total.
 
 Deleting the pending job neither interrupts a running attempt of a job of the key nor keeps it from being retried, so check in the handler whether its work is still needed.

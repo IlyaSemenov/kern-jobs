@@ -39,7 +39,7 @@ The failure job [retries](./retries) as any job.
 
 A job fails for good by a [`TerminalError`](./retries#decide-in-the-handler) or on its last attempt.
 A job that returns to pending adds no failure job, also when a [stop](./stopping) interrupted its last attempt.
-The failed job stays [failed](./failed-jobs), whatever `onFailure` does.
+The failed job stays [failed](../operations/managing-jobs), whatever `onFailure` does.
 
 ## What `onFailure` gets
 
@@ -49,13 +49,13 @@ Its first argument is the `JobFailure` of the failed job, with its `payload` as 
 - `reason`: why the failure was recorded, such as `handler-error` or `lease-expired`.
   Under any reason, the handler may already have done its work.
 - `error.message`: the message that the table stores in `last_error`, such as `lease expired`.
-  The error itself, with its class and stack, reaches only [`onError`](./monitoring#report-errors) of the worker that ran the handler.
+  The error itself, with its class and stack, reaches only [`onError`](../operations/monitoring#report-errors) of the worker that ran the handler.
 
 Its second argument is the [context](./handlers) of a handler, whose `job` is the failure job itself.
 
 ## The failure job
 
-The failure job has the name of your task with `:failure` after it, such as `orders.charge:failure`: the [summary of the jobs](./monitoring#watch-the-backlog), [`runHandler`](./handlers#wrap-every-handler), and [`onError`](./monitoring#report-errors) show it by this name.
+The failure job has the name of your task with `:failure` after it, such as `orders.charge:failure`: the [summary of the jobs](../operations/monitoring#watch-the-backlog), [`runHandler`](./handlers#wrap-every-handler), and [`onError`](../operations/monitoring#report-errors) show it by this name.
 It has the scope of the failed job, which `onFailure` of a [scoped](../tasks/scopes) task gets as `job.scope` of its context, and no key or queue, so it does not wait for the other jobs of the key or the queue of the failed job.
 
 It runs under the [lease](./leases) of the worker, and by default it has 25 attempts with the default [backoff](./retries#backoff), which last about 14 hours.
@@ -73,8 +73,8 @@ export default chargeOrderTask.implement(handler, {
 })
 ```
 
-Watch the failed jobs of the names that end with `:failure`: a failure job that spends its attempts stays failed, until you [retry](./failed-jobs#retry-a-failed-job) it.
-To [delete](./failed-jobs#delete-failed-jobs) the failure jobs of a task, pass the `failure.task` of its implementation as the task.
+Watch the failed jobs of the names that end with `:failure`: a failure job that spends its attempts stays failed, until you [retry](../operations/managing-jobs#retry-a-failed-job) it.
+To [delete](../operations/managing-jobs#delete-failed-jobs) the failure jobs of a task, pass the `failure.task` of its implementation as the task.
 
 ## Write an `onFailure` that can run twice
 
@@ -86,13 +86,13 @@ So change your data only if it still belongs to the failed operation:
 - Let an error propagate, such as of a database that is down: the failure job then retries, while catching it would lose the update.
 - Send a notification or call another service with an idempotency key, such as `failure.id`.
 
-A [retry](./failed-jobs#retry-a-failed-job) of the failed job keeps its payload, also its version, so to start the operation again, increment its version and enqueue a new job with it in one transaction, rather than retry the failed job.
+A [retry](../operations/managing-jobs#retry-a-failed-job) of the failed job keeps its payload, also its version, so to start the operation again, increment its version and enqueue a new job with it in one transaction, rather than retry the failed job.
 
 ## Add and remove `onFailure`
 
 `onFailure` applies to the jobs that its workers take after its deploy, also to those enqueued before it; jobs that have failed already add no failure job.
 
-Failure jobs left after you remove `onFailure` stay pending, as the jobs of a [removed task](../deployment/changing-tasks).
+Failure jobs left after you remove `onFailure` stay pending, as the jobs of a [removed task](../operations/changing-tasks).
 So keep the `failure` of the implementation in the manifest until the jobs that the old release took have ended and no failure jobs remain:
 
 ```ts [src/worker/manifest.ts]
@@ -106,7 +106,7 @@ export const manifest = defineManifest({
 
 ## Test `onFailure`
 
-Run the `failure` of the implementation with a `JobFailure` by [`runJob`](../testing#run-a-handler):
+Run the `failure` of the implementation with a `JobFailure` by [`runJob`](../testing/#run-a-handler):
 
 ```ts
 await runJob(chargeOrder.failure, {
