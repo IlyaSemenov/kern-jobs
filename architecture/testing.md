@@ -6,8 +6,9 @@
 
 - `createTestJobs` builds the jobs API with `createJobsApi` of `jobs/jobs.ts` over a store in memory, as `createJobs` builds it over the SQL of the core, so that both check the arguments, the options, and the scope by the same code and reject with the same errors before the store records anything ([decision](../decisions/testing/in-memory-double.md)).
 - The store serializes the payload of each enqueue by `encodePayload` of `core/job.ts`, which the SQL enqueue calls, and discards the text, so that a payload for which `JSON.stringify` throws, such as a bigint or a circular object, rejects with its error, and if it returns `undefined`, the double records the original payload and the SQL enqueue stores SQL NULL.
+  It serializes every payload of `enqueueMany` before it records any of them.
   It checks neither the constraints of the table, such as the length of a key or a queue, nor transactions: an enqueue in a transaction that rolls back stays recorded.
-- Each enqueue is recorded as a call of its task, its scope (`null` for the empty scope), its payload as the code passed it, and its options.
+- Each enqueue, and each payload of `enqueueMany` in their order, is recorded as a call of its task, its scope (`null` for the empty scope), its payload as the code passed it, and its options.
   The options come from the parameters of the core: those that a layer gave, with `key: null` and `queue: null`, and without `maxWait` outside `debounce` and `resetAttempts` with `keep`, which `toEnqueueParams` drops; `toEnqueueParams` keeps the key mode absent when no layer gives it, so that the call tells it from an explicit `replace`.
 - The store keeps the id, task, scope, and key of each pending job, and no payload or run time.
   An enqueue of the key of a pending job of its task and scope resolves to its id and `created: false` in every key mode; other enqueues add a pending job with the next id.

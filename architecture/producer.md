@@ -1,6 +1,6 @@
 # Producer
 
-An application defines its tasks with `defineTask` and enqueues their jobs with `jobs.enqueue` of `createJobs`, through its own database client, through which `jobs` also retries and deletes jobs ([Administration](administration.md)).
+An application defines its tasks with `defineTask` and enqueues their jobs with `jobs.enqueue` or `jobs.enqueueMany` of `createJobs`, through its own database client, through which `jobs` also retries and deletes jobs ([Administration](administration.md)).
 `createJobs` builds the jobs API with `createJobsApi` of `jobs/jobs.ts`, which merges and checks the options, checks the arguments, and resolves the scope of each call, over a store of the statements of the core; the [test double](testing.md) builds it over a store in memory.
 
 ## Task definitions
@@ -37,13 +37,22 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
 - `maxAttempts` is an integer from 1 to 2^31 − 1, the largest `int`, which `checkCount` of `core/db.ts` checks, as it checks the counts of the worker.
 - `delay` counts from `statement_timestamp()` of the enqueue in SQL, not from the clock of the producer.
 
+## Many jobs
+
+`jobs.enqueueMany` enqueues a job of one task for each payload of an array, with the same overrides, by the [enqueue of many jobs](enqueue.md#many-jobs) of the core, all or none ([decision](../decisions/enqueue/batch-of-one-task.md)):
+
+- Each payload merges and checks its options as an enqueue does, and the call checks those of every payload, the keys, and the scope, which it resolves once, before it calls the client; `createJobs` serializes every payload before it calls the function of the client.
+- The call rejects with `TypeError` if `payloads` is not an array, and with `RangeError` if two payloads resolve to the same stored key, so `key: true` and `""` count as one.
+- Without payloads, it checks the name of the task, the overrides by `checkEnqueueOverrides` of `task/options.ts`, and the scope, and resolves to `[]` without calling `withOptions`, the store, or the client.
+- The store of the jobs API takes only an enqueue of the jobs of one task and scope, so `jobs.enqueue` is an enqueue of one job, and the test double has one enqueue.
+
 ## Client
 
 `createJobs` takes the client of the application as its first argument, and its options as its second:
 
 - an executor, an object with `query(text, values)` that resolves to `{ rows }`, such as a `pg.Pool` or a `pg.PoolClient` ([decision](../decisions/drivers/executor.md));
 - a client of postgres.js, `sql` or a transaction, whose `unsafe` kern-jobs calls as the `query` of an executor;
-- a function that returns one of them, which each call of `jobs`, such as an enqueue, calls, so that it runs in the transaction that the application holds at the call, such as one in `AsyncLocalStorage`;
+- a function that returns one of them, which `jobs` calls for each statement that it runs, such as of an enqueue, so that the statement runs in the transaction that the application holds at the call, such as one in `AsyncLocalStorage`;
 - a `Database` of kern-db or a `Db` of kern-orm, whose `execute` runs the statement of a call of `jobs` in the current transaction of the database.
 
 `toJobsTarget` of `core/statement.ts` tells the forms apart: a `Db` by `$database`, a database by `execute`, which it checks before `query`, since a database has a `query` of templates, a client of postgres.js by `unsafe`, which it checks before telling a function, since `sql` is a function, and an executor by `query`.
@@ -55,7 +64,7 @@ The main entry declares the shapes of these clients, such as `JobsDatabase` and 
 - The values are text or `null`, and the statement casts each one from text, so a client that serializes a parameter by its described type sends it as it is ([Drivers](drivers.md#statements)).
 - The client of the application may rename the columns of a result, such as `postgres.camel`, and parse values: the statements on an executor read their rows through `fromExecutor` of `core/statement.ts` only by position, as `ValuesTarget`, which `query` by the names of columns does not accept, and select only text.
 - A row may be an object of values in the order of the columns or an array of values; `undefined` counts as `null`, and any other value but a string throws `TypeError`, since only a client that transforms text values gives one.
-- The enqueue returns one row of one text column, a JSON array of the id and whether it inserted the row, so that reading it depends neither on the name of the column nor on how the client parses JSON.
+- The enqueue returns rows of one text column, a JSON array: one row `[id, created]` for one job, and a row `[id, key, created]` for each of many jobs, so that reading them depends neither on the name of the column nor on how the client parses JSON.
 - The errors of the client reach the caller unchanged: an executor gives no `QueryError` or `ConnectionError`, while a database of kern-db gives its own.
 - Producers must enqueue at `READ COMMITTED` ([PostgreSQL](postgresql.md#isolation)).
 
@@ -72,7 +81,7 @@ The jobs of a task defined with `scoped: true` take their [scope](README.md#term
 An enqueue of another task gives its job the empty scope ([decision](../decisions/enqueue/scope-of-jobs-api.md)):
 
 - Whether a task is scoped is its setting, beside `lease` and `backoff`, since the jobs of a task either each belong to a scope, such as of a tenant, or serve every scope, and the jobs API gives only the value, so that one jobs API of an application serves both kinds.
-- Each enqueue of a scoped task calls the function of the scope, such as one that reads the tenant of the current request, as each enqueue calls a function of the client.
+- Each enqueue of a scoped task calls the function of the scope, such as one that reads the tenant of the current request; `enqueueMany` calls it once, also without payloads, when it calls no function of the client.
   An enqueue of another task neither calls the function of the scope nor checks the scope.
 - `createJobs` throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or a string that is not [storable text](README.md#terms), and `RangeError` for the empty string, which would enqueue into the empty scope, such as for a tenant whose id is empty, and for one longer than 128 bytes in UTF-8, the [limit of the column](data-model.md#columns).
 - An enqueue of a scoped task rejects with `TypeError` without a scope or with `ALL_SCOPES`, since a job belongs to one scope, and with the errors of `createJobs` for a value that the function returns, before it calls the client.

@@ -25,6 +25,17 @@ Keys are unique per scope and task ([decision](../decisions/enqueue/key-per-task
 - The pending row stays locked until the producer commits or rolls back, and claiming skips it meanwhile, so a job never starts before the transaction of its latest event commits.
 - An active job is outside the uniqueness of keys: an enqueue during its run inserts the next pending row, including an enqueue that waited for an uncommitted claim of the pending row.
 
+## Many jobs
+
+`enqueueMany` of the core enqueues many jobs of one task and scope with one `INSERT … SELECT … ON CONFLICT DO UPDATE` statement, so they commit or roll back together, and merges each job with a key by its mode as an enqueue of one job does; one job takes the statement of one job, which costs less than parsing an array.
+
+- The jobs travel as one text parameter, a JSON array, beside the task and the scope, so the text of the statement does not depend on their count; each payload is its JSON text of `encodePayload`, serialized as a value of its own as an enqueue of one job serializes it, before a target is needed.
+- The jobs with a key must have distinct keys, since one statement cannot update a row twice, and PostgreSQL rejects such a batch with `21000`; the jobs API rejects such a call before the client ([decision](../decisions/enqueue/distinct-keys-in-batch.md)).
+- The statement inserts the rows in the order of the jobs, so the identity of the table gives the new rows ids in that order, and a queue starts them in that order at an equal `run_at`.
+  It locks the keys in that order too, so transactions that enqueue overlapping keys in different orders can deadlock, and PostgreSQL aborts one of them with `40P01` ([decision](../decisions/enqueue/batch-insert-order.md)).
+- The update of a conflict reads `delay`, `maxWait`, and `resetAttempts` of its job, which are not columns of `excluded`, from a second parameter, a JSON object of the jobs with a key by their keys, which an uncorrelated subquery parses once per statement, also under a generic plan.
+- The statement returns a row of each job in no promised order, and the core maps the rows back to the jobs: a job with a key by its key, and the jobs without a key to the new rows without a key in the ascending order of their ids.
+
 ## Debounce
 
 A debounced job runs `delay` seconds after the latest event, but no later than `maxWait` seconds after the first event of its window, when the events of the window pass the same `delay` and `maxWait`; the formulas give the rule for any settings:
@@ -46,6 +57,8 @@ For example, with `delay` 2 and `maxWait` 10, events every 0.5 seconds from 0 to
 ## Accepted limitations
 
 - Every enqueue on the key of a pending job writes a new row version, and `replace` and `debounce` usually move `run_at`, which the ready indexes contain, so their updates are not HOT and add index entries; vacuum reclaims them, and a sustained rate on one key, such as 1000 enqueues a second, is not measured.
+- The JSON array of `enqueueMany` is one text parameter, which PostgreSQL limits to 1 GB, and the client holds it in memory.
+  The statement of a batch whose jobs all merge into pending jobs, in `debounce` mode with `resetAttempts`, took about 17, 190, and 970 ms for 1,000, 10,000, and 40,000 jobs under a generic plan; larger batches, and the serialization and the mapping of the results in JavaScript, are not measured.
 
 ## Open questions
 

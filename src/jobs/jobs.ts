@@ -9,11 +9,22 @@ import {
   type RetryResult,
 } from "../core/administration"
 import { checkStorableText, utf8Length } from "../core/db"
-import { enqueue, type EnqueueParams, type EnqueueResult } from "../core/enqueue"
+import {
+  type EnqueueBatch,
+  type EnqueueJob,
+  type EnqueueResult,
+  prepareEnqueueMany,
+} from "../core/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../core/schema"
 import { type JobsClient, toJobsTarget } from "../core/statement"
 import { delayRange, isDelay } from "../task/delay"
-import { checkKey, type EnqueueOverrides, getTaskEnqueueParams, toStoredKey } from "../task/options"
+import {
+  checkEnqueueOverrides,
+  checkKey,
+  type EnqueueOverrides,
+  getTaskEnqueueParams,
+  toStoredKey,
+} from "../task/options"
 import type { Task } from "../task/task"
 
 /**
@@ -64,6 +75,18 @@ export interface Jobs {
     >
   ): Promise<EnqueueResult>
   /**
+   * Enqueues a job of a task for each payload, as `enqueue` does with the same overrides, in one statement: all of them or none, in the transaction of the executor.
+   * Resolves to the result of each payload in their order; the new jobs get ids in that order, so a queue starts them in that order when they are due at the same time.
+   * Without payloads, it resolves to `[]` without calling the client.
+   * It takes each key of the task at most once, and rejects with `RangeError` for two payloads whose options give the same key, before it calls the client.
+   * It locks the pending jobs of the keys in the order of the payloads, so two transactions that enqueue the same keys in different orders can deadlock, and PostgreSQL then aborts one of them.
+   */
+  enqueueMany<P>(
+    task: Task<string, P>,
+    payloads: readonly NoInfer<P>[],
+    overrides?: EnqueueOverrides,
+  ): Promise<EnqueueResult[]>
+  /**
    * Returns a failed job to pending with its payload and options and a full budget of attempts, to run as soon as a worker is free, and resolves to `{ retried: true }`.
    * When a pending job of its key exists, it changes neither job and resolves to `{ retried: false, pendingId }`.
    * Resolves to `null` when no failed job of the scope of `createJobs` has the id.
@@ -105,12 +128,12 @@ export interface Jobs {
  * `client` is one of:
  * - an executor, an object with `query(text, values)` that resolves to `{ rows }`, such as a `pg.Pool`;
  * - a client of postgres.js, `sql` or a transaction of it;
- * - a function that returns one of them, called at each call of the jobs API so that it runs in the transaction that the application holds at the call;
+ * - a function that returns one of them, called for each statement of the jobs API so that it runs in the transaction that the application holds at the call;
  * - a `Database` of kern-db or a `Db` of kern-orm, whose calls of the jobs API join its current transaction.
  * It throws `TypeError` for a client of another kind, and a call of the jobs API rejects with it for a function that returns one.
  * It throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
- * `enqueue`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and `enqueue` of a scoped task also with `ALL_SCOPES`.
- * Each call that calls the function of the scope, `enqueue`, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
+ * `enqueue`, `enqueueMany`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and `enqueue` and `enqueueMany` of a scoped task also with `ALL_SCOPES`.
+ * Each call that calls the function of the scope, `enqueue`, `enqueueMany`, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
  * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, for a task name that is not a string, for a key that is neither `true` nor a string, and for a name or a key string that has U+0000 or a lone surrogate, before it calls the client.
  * `deleteFailed` rejects with `TypeError` for an argument that is not an object of a task, `olderThan`, or both, and for a task name that is not storable text, and with `RangeError` for `olderThan` that is not a number of seconds from 0 to 1e12, before it calls the client.
@@ -121,7 +144,11 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
   const table = createJobTable(schemaName)
   return createJobsApi(
     {
-      enqueue: params => enqueue(target(), table, params),
+      enqueueMany: batch => {
+        // Serialize every payload before calling the client factory.
+        const run = prepareEnqueueMany(table, batch)
+        return run(target())
+      },
       retry: params => retryFailedJob(target(), table, params),
       delete: params => deleteJob(target(), table, params),
       deletePending: filter => deletePendingJobs(target(), table, filter),
@@ -136,7 +163,8 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
  * It takes parameters that the jobs API checked and whose scope it resolved: a string, the empty one for unscoped jobs, or `null` for every scope.
  */
 export interface JobStore {
-  enqueue(params: EnqueueParams & { scope: string }): Promise<EnqueueResult>
+  /** Enqueues jobs of one task and scope, at least one, whose keys are distinct, all or none, and resolves to the result of each in their order. */
+  enqueueMany(batch: Omit<EnqueueBatch, "now"> & { scope: string }): Promise<EnqueueResult[]>
   retry(params: { id: string; scope: string | null }): Promise<RetryResult | null>
   delete(params: { id: string; scope: string | null }): Promise<boolean>
   deletePending(filter: PendingJobsFilter & { scope: string | null }): Promise<number>
@@ -159,13 +187,30 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult> {
       const params = getTaskEnqueueParams(task, payload, overrides)
-      const taskScope = getTaskScope(task, scope)
-      if (taskScope === null) {
-        throw new TypeError(
-          `Task ${task.name} is scoped: pass createJobs the scope of its jobs rather than ALL_SCOPES`,
-        )
+      const [result] = await store.enqueueMany({
+        task: params.task,
+        scope: getEnqueueScope(task, scope),
+        jobs: [params],
+      })
+      return result!
+    },
+    async enqueueMany(
+      task: Task<string, unknown>,
+      payloads: readonly unknown[],
+      overrides?: EnqueueOverrides,
+    ): Promise<EnqueueResult[]> {
+      if (!Array.isArray(payloads)) throw new TypeError("enqueueMany takes an array of payloads")
+      // `Array.from` visits the holes of a sparse array too, as a loop of enqueues does, which `map` skips.
+      const jobs = Array.from(payloads, payload => getTaskEnqueueParams(task, payload, overrides))
+      if (jobs.length === 0) {
+        // No payload merges the options, so the checks that an enqueue makes run on the name and the overrides alone, and so does the check of the scope, without the client.
+        checkStorableText("The name of a task", task.name)
+        checkEnqueueOverrides(overrides)
+        getEnqueueScope(task, scope)
+        return []
       }
-      return store.enqueue({ ...params, scope: taskScope })
+      checkDistinctKeys(jobs)
+      return store.enqueueMany({ task: jobs[0]!.task, scope: getEnqueueScope(task, scope), jobs })
     },
     async retry(id: string): Promise<RetryResult | null> {
       checkJobId(id)
@@ -190,6 +235,34 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       const jobScope = task ? getTaskScope(task, scope) : getJobsScope(scope)
       return store.deleteFailed({ scope: jobScope, task: task?.name, olderThan })
     },
+  }
+}
+
+/**
+ * Returns the scope of the jobs that an enqueue of a task adds, as `getTaskScope` gives it, and throws `TypeError` for `ALL_SCOPES` with a scoped task, since a job belongs to one scope.
+ */
+function getEnqueueScope(task: Task<string, unknown>, scope: JobsOptions["scope"]): string {
+  const taskScope = getTaskScope(task, scope)
+  if (taskScope === null) {
+    throw new TypeError(
+      `Task ${task.name} is scoped: pass createJobs the scope of its jobs rather than ALL_SCOPES`,
+    )
+  }
+  return taskScope
+}
+
+/**
+ * Throws `RangeError` for two jobs of one `enqueueMany` with the same key, which one statement cannot merge both into the pending job of the key.
+ * Its jobs share their task and scope, so their stored keys tell them apart.
+ */
+function checkDistinctKeys(jobs: readonly EnqueueJob[]): void {
+  const keys = new Set<string>()
+  for (const { key } of jobs) {
+    if (key == null) continue
+    if (keys.has(key)) {
+      throw new RangeError(`enqueueMany takes each key once, got ${JSON.stringify(key)} twice`)
+    }
+    keys.add(key)
   }
 }
 

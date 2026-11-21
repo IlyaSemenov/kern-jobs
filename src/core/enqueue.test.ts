@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { waitForLock } from "kern-db/testing"
 
 import { claimPlain } from "./claim"
-import { enqueue, type EnqueueParams } from "./enqueue"
+import { enqueue, enqueueMany, type EnqueueParams } from "./enqueue"
 import type { Claim, KeyMode } from "./job"
 import { complete, fail } from "./settlement"
-import { query } from "./statement"
+import { query, type ValuesTarget } from "./statement"
 import {
   type Conn,
   createRandom,
@@ -155,6 +155,173 @@ describe("key modes with an existing pending job", () => {
     await enqueue(schema.admin, schema.table, { task: "t", scope: "s2", key: "k", now: T(0) })
     expect(await jobs(schema)).toHaveLength(3)
   })
+})
+
+describe("enqueueMany", () => {
+  /** Returns a target of the statements of the test schema that gives the rows of each result in reverse, an order that the statement does not exclude. */
+  const createReversingTarget = (): ValuesTarget => ({
+    async execute(statement) {
+      const result = await schema.admin.execute(statement)
+      return { ...result, rows: [...result.rows].reverse() }
+    },
+  })
+
+  test("inserts new rows in the order of the jobs, and resolves to the result of each job in that order, a merged job to the id of the pending job of its key, whatever the order of the rows of the result", async () => {
+    const existing = await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 0 })
+    const results = await enqueueMany(createReversingTarget(), schema.table, {
+      task: "t",
+      jobs: [
+        { payload: "unkeyed 1" },
+        { key: "k", payload: "merged" },
+        { key: "b", payload: "keyed b" },
+        { payload: "unkeyed 2" },
+        { key: "a", payload: "keyed a" },
+        { payload: "unkeyed 3" },
+      ],
+    })
+    expect(results.map(r => r.created)).toEqual([true, false, true, true, true, true])
+    expect(results[1]).toEqual({ id: existing.id, created: false })
+    const rows = await jobs(schema)
+    const payloadOf = (id: string) => rows.find(row => row.id === id)!.payload
+    expect(results.map(r => payloadOf(r.id))).toEqual([
+      "unkeyed 1",
+      "merged",
+      "keyed b",
+      "unkeyed 2",
+      "keyed a",
+      "unkeyed 3",
+    ])
+    // `jobs` reads the rows in the order of their ids.
+    expect(rows.map(row => row.payload)).toEqual([
+      "merged",
+      "unkeyed 1",
+      "keyed b",
+      "unkeyed 2",
+      "keyed a",
+      "unkeyed 3",
+    ])
+  })
+
+  test("merges each job into the pending job of its key by its own mode and settings", async () => {
+    const enqueueAt = (key: string, o: Partial<EnqueueParams>) =>
+      enqueue(schema.admin, schema.table, { task: "t", key, payload: 1, now: T(0), ...o })
+    const debounce = { mode: "debounce", delay: 2, maxWait: 10 } as const
+    await enqueueAt("keep", { runAt: T(5), maxAttempts: 3 })
+    await enqueueAt("replace", {})
+    await enqueueAt("__proto__", {})
+    await enqueueAt("capped", debounce)
+    await enqueueAt("delayed", debounce)
+    await enqueueAt("held", {})
+    await enqueueAt("opens", {})
+    await enqueueAt("backoff", {})
+    await query(
+      schema.admin,
+      `update ${schema.table.name} set attempts = 3,
+         not_before = case when key in ('held', 'backoff') then $1::text::timestamptz end,
+         run_at = case when key in ('held', 'backoff') then $1::text::timestamptz else run_at end`,
+      [T(30)],
+    )
+    const results = await enqueueMany(schema.admin, schema.table, {
+      task: "t",
+      now: T(1),
+      jobs: [
+        { key: "keep", payload: 2, runAt: T(1), maxAttempts: 9, mode: "keep" },
+        { key: "replace", payload: 2, runAt: T(7), maxAttempts: 9 },
+        { key: "__proto__", payload: 2, resetAttempts: true },
+        // Due at least(1 + 9, 0 + 6) in the window that opened at 0.
+        { key: "capped", payload: 2, mode: "debounce", delay: 9, maxWait: 6 },
+        // Due at least(1 + 3, 0 + 20) in the window that opened at 0.
+        { key: "delayed", payload: 2, mode: "debounce", delay: 3, maxWait: 20 },
+        // Opens a window at 1 over a row of another mode, due at 2, below the end of the backoff.
+        { key: "held", payload: 2, mode: "debounce", delay: 1, maxWait: 10 },
+        // Opens a window at 1 over a row of another mode.
+        { key: "opens", payload: 2, mode: "debounce", delay: 3, maxWait: 10 },
+        { key: "backoff", payload: 2 },
+      ],
+    })
+    expect(results.every(r => !r.created)).toBe(true)
+    const rows = await jobs(schema)
+    expect(
+      rows.map(row => [
+        row.key,
+        row.payload,
+        secondsOf(row.run_at),
+        secondsOf(row.window_started_at),
+        row.attempts,
+        row.max_attempts,
+      ]),
+    ).toEqual([
+      ["keep", 1, 5, 0, 3, 3],
+      ["replace", 2, 7, 0, 3, 9],
+      ["__proto__", 2, 1, 0, 0, 25],
+      ["capped", 2, 6, 0, 3, 25],
+      ["delayed", 2, 4, 0, 3, 25],
+      ["held", 2, 30, 1, 3, 25],
+      ["opens", 2, 4, 1, 3, 25],
+      ["backoff", 2, 30, 0, 3, 25],
+    ])
+  })
+
+  test("stores each payload as enqueue serializes it: by its own toJSON with the empty key, absent as SQL NULL, and null as JSON", async () => {
+    const results = await enqueueMany(schema.admin, schema.table, {
+      task: "t",
+      jobs: [
+        { payload: { toJSON: (key: string) => key } },
+        { payload: { toJSON: () => undefined } },
+        { payload: null },
+      ],
+    })
+    const stored = await query(
+      schema.admin,
+      `select id::text, payload::text from ${schema.table.name} order by id`,
+    )
+    expect(results.map(r => stored.find(row => row.id === r.id)!.payload)).toEqual([
+      '""',
+      null,
+      "null",
+    ])
+  })
+
+  test("enqueues all jobs or none: a job that a check of the table rejects rolls back the others", async () => {
+    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1 })
+    await expect(
+      enqueueMany(schema.admin, schema.table, {
+        task: "t",
+        jobs: [{ key: "k", payload: 2 }, { payload: 3 }, { key: "a".repeat(1025), payload: 4 }],
+      }),
+    ).rejects.toThrow()
+    expect((await jobs(schema)).map(row => [row.key, row.payload])).toEqual([["k", 1]])
+  })
+
+  test("resolves to no results without a statement for no jobs", async () => {
+    const target = { execute: () => Promise.reject(new Error("no statement")) }
+    expect(await enqueueMany(target, schema.table, { task: "t", jobs: [] })).toEqual([])
+  })
+
+  for (const outcome of ["commit", "rollback"] as const) {
+    test(`a job waits for an uncommitted insert of its key, and after a ${outcome} ${outcome === "commit" ? "merges into it" : "inserts its own row"}`, async () => {
+      const p1 = await schema.connect()
+      const p2 = await schema.connect()
+      await query(p1, "begin")
+      const first = await enqueue(p1, schema.table, { task: "t", key: "k", payload: 1 })
+      const batch = enqueueMany(p2, schema.table, {
+        task: "t",
+        jobs: [{ payload: 2 }, { key: "k", payload: 3 }],
+      })
+      await waitForLock(schema.admin, p2.pid)
+      await query(p1, outcome)
+      const [unkeyed, keyed] = await batch
+      expect(unkeyed!.created).toBe(true)
+      expect(keyed).toEqual(
+        outcome === "commit"
+          ? { id: first.id, created: false }
+          : { id: expect.not.stringMatching(`^${first.id}$`), created: true },
+      )
+      const rows = await jobs(schema)
+      expect(rows.find(row => row.id === keyed!.id)!.payload).toBe(3)
+      expect(rows).toHaveLength(2)
+    })
+  }
 })
 
 describe("concurrent producers", () => {

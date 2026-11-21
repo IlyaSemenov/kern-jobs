@@ -82,6 +82,23 @@ describe("enqueue", () => {
   })
 })
 
+describe("enqueueMany", () => {
+  test("takes an array of payloads of the task and overrides, and resolves to a result of each", () => {
+    expectTypeOf(jobs.enqueueMany(sendEmail, [{ to: "a@example.com" }])).toEqualTypeOf<
+      Promise<EnqueueResult[]>
+    >()
+    const payloads: readonly { to: string }[] = [{ to: "a@example.com" }]
+    void jobs.enqueueMany(sendEmail, payloads, { delay: 60 })
+    void jobs.enqueueMany(purgeExpiredSessions, [undefined])
+    // @ts-expect-error A payload has a field of another type.
+    void jobs.enqueueMany(sendEmail, [{ to: "a@example.com" }, { to: 1 }])
+    // @ts-expect-error The payloads come in an array.
+    void jobs.enqueueMany(sendEmail, { to: "a@example.com" })
+    // @ts-expect-error The lease belongs to defineTask.
+    void jobs.enqueueMany(sendEmail, payloads, { lease: 5 })
+  })
+})
+
 describe("retry and delete", () => {
   test("take the id of a job as a string, as an enqueue returns it", () => {
     expectTypeOf(jobs.retry("1")).toEqualTypeOf<Promise<RetryResult | null>>()

@@ -35,9 +35,10 @@ test("enqueues a welcome email for the new user", async () => {
 - `captured.callsFor(task)` gives the scope, the payload, and the options of each enqueue of the task.
   The options are those of `defineTask`, of `withOptions`, and of the enqueue, merged as an enqueue merges them, so check a key or a delay there; `key: true` is recorded as the empty key, `""`.
 - `testJobs.calls` lists every recorded enqueue, and `testJobs.clear()` forgets them, such as before each test.
+  `enqueueMany` records an enqueue of each of its payloads.
 
-An enqueue through `testJobs` rejects invalid options, a payload that `JSON.stringify` throws for, such as a bigint, and a scoped task without a scope as `createJobs` does, and records nothing then.
-If a pending job has the same task name, scope, and key, `enqueue` resolves to its id.
+An enqueue through `testJobs` rejects invalid options, a payload that `JSON.stringify` throws for, such as a bigint, and a scoped task without a scope as `createJobs` does, and records nothing then; `enqueueMany` also rejects two payloads of one key, and records none of its payloads when it rejects.
+If a pending job has the same task name, scope, and key, `enqueue` resolves to `{ id, created: false }` with its id, and `enqueueMany` gives such an object for the payload.
 Its jobs stay pending, since no worker runs them: `deletePending` and `delete` delete them, and nothing fails, so `retry` resolves to `null`.
 Each `createTestJobs()` keeps its own jobs, so another one, also with `ALL_SCOPES`, does not reach them.
 

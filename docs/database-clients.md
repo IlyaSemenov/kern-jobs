@@ -4,7 +4,7 @@ kern-jobs connects through the database client of your application in two ways:
 
 - `createJobs` enqueues through the client itself, so that an enqueue joins the transaction that writes the data of the job.
   Pass it your client or the client of a transaction.
-  You can also pass a function that returns the client of the current transaction: `createJobs` calls it at each enqueue.
+  You can also pass a function that returns the client of the current transaction: `createJobs` calls it each time it runs a statement, such as of an enqueue, once for all the jobs of `enqueueMany`.
 - The worker and `migrateJobs` take a driver that wraps the client: `postgresJsDriver` of `kern-jobs/db/postgres-js`, or `nodePostgresDriver` of `kern-jobs/db/node-postgres`.
   The worker runs outside the transactions of your application, and so does `migrateJobs` on a driver; with [kern-orm or kern-db](#kern-orm-and-kern-db), `migrateJobs` can run in the current transaction instead.
 

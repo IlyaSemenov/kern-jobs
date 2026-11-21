@@ -72,3 +72,29 @@ await jobs.enqueue(indexProductTask, { productId }, { delay: 0 })
 - An option passed as `undefined` keeps the option of the task.
 - `key: null` and `queue: null` enqueue the job without the key or queue of the task.
 - `delay` and `runAt` replace each other: passing one drops the other of the task.
+
+## Enqueueing many jobs
+
+To enqueue a job of a task for each of many payloads, such as to index the products of an import, pass the payloads to `jobs.enqueueMany`:
+
+```ts
+await jobs.enqueueMany(
+  indexProductTask,
+  productIds.map(productId => ({ productId })),
+)
+```
+
+It enqueues each payload as `jobs.enqueue` does, in one statement: either all of the jobs or none.
+To [override options](#overriding-options), pass them as the third argument; they apply to every payload, and options that differ by payload, such as a key, come from `withOptions` of the task:
+
+```ts
+await jobs.enqueueMany(indexProductTask, payloads, { delay: 0 })
+```
+
+It resolves to an array of `{ id, created }` in the order of the payloads: the id of the job of each payload, and whether the job was created rather than merged into the pending job of its [key](./keys).
+For an empty array of payloads, it resolves to `[]`.
+
+- Pass each key at most once: two payloads that get the same key reject the call.
+- The new jobs get ids in the order of the payloads, so a [queue](./queues) starts those that are due at the same time in that order.
+- `enqueueMany` locks the pending jobs of the keys in the order of the payloads, so two transactions that enqueue the same keys in different orders can deadlock.
+  PostgreSQL then aborts one of them with a deadlock error, `40P01`: retry its whole transaction.

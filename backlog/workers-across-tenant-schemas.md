@@ -56,7 +56,6 @@ from product p where p.active;
 The illustrative function defaults the target to the caller's `current_schema()` and accepts an explicit `schema_name`.
 Resolve that default at the API boundary and qualify and quote identifiers internally.
 Install the function outside the tenant dump.
-The SQL entry point and bulk enqueue remain separate backlog items.
 
 ## Admission and discovery
 

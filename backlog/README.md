@@ -23,7 +23,6 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Transactional handlers](transactional-handlers.md): writes of a handler commit with the completion of its job.
 - [Strict FIFO queues](strict-fifo-queues.md): a failed head blocks its queue.
 - [Accumulating payloads](accumulating-payloads.md): a key mode that appends payloads to the pending job.
-- [Batch enqueue](batch-enqueue.md): `enqueueMany` in one statement.
 - [Payload validation](payload-validation.md): by a Standard Schema of the task.
 - [Retention](retention.md): deleting failed jobs after a configured time, and keeping completed jobs for a configured time.
 

@@ -8,6 +8,7 @@ import { bindSchema, defineSchema } from "kern-orm"
 import pg from "pg"
 import postgres from "postgres"
 
+import type { EnqueueResult } from "../core/enqueue"
 import { type JobsClient, query } from "../core/statement"
 import {
   createTestSchema,
@@ -211,6 +212,37 @@ for (const [name, createClient] of clients) {
       const second = await jobs.enqueue(indexProduct, { productId: "42", version: 2 })
       expect(second).toEqual({ id: first.id, created: false })
       expect(only(await jobRows(schema)).payload).toEqual({ productId: "42", version: 1 })
+    })
+
+    test("enqueues many jobs in a transaction, which appear when it commits, and resolves to their results in the order of the payloads", async () => {
+      const jobs = createTestJobs()
+      const existing = await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
+      let results: EnqueueResult[] = []
+      await client.transaction(async () => {
+        results = await jobs.enqueueMany(indexProduct, [
+          { productId: "43", version: 1 },
+          { productId: "42", version: 2 },
+        ])
+        expect(await jobRows(schema)).toHaveLength(1)
+      })
+      const rows = await jobRows(schema)
+      expect(rows.map(row => row.key)).toEqual(["product:42", "product:43"])
+      expect(results).toEqual([
+        { id: rows[1]!.id, created: true },
+        { id: existing.id, created: false },
+      ])
+    })
+
+    test("many jobs enqueued in a transaction that rolls back never appear", async () => {
+      const jobs = createTestJobs()
+      const error = new Error("rollback")
+      await expect(
+        client.transaction(async () => {
+          await jobs.enqueueMany(sendEmail, [{ to: "a@example.com" }, { to: "b@example.com" }])
+          throw error
+        }),
+      ).rejects.toBe(error)
+      expect(await jobRows(schema)).toEqual([])
     })
 
     test("retries a failed job, reports a pending job of its key that keeps it from returning, and deletes a failed or pending job", async () => {
@@ -893,5 +925,118 @@ describe("options", () => {
     // Cut inside an emoji.
     await expect(jobs.enqueue(computedKey, "😀".slice(0, 1))).rejects.toThrow("key must be")
     expect(calls).toBe(0)
+  })
+})
+
+describe("enqueueMany", () => {
+  let pool: pg.Pool
+  beforeEach(() => {
+    pool = new pg.Pool({ connectionString: databaseUrl(), max: 2 })
+  })
+  afterEach(async () => {
+    await pool.end()
+  })
+
+  /** Returns a jobs API whose client counts the calls of its function. */
+  const createCountingJobs = (options: JobsOptions = {}) => {
+    const counts = { client: 0 }
+    const jobs = createJobs(
+      () => {
+        counts.client++
+        return pool
+      },
+      { schemaName: schema.name, ...options },
+    )
+    return { jobs, counts }
+  }
+
+  test("enqueues each payload with the options of the task and the overrides, and two payloads without a key", async () => {
+    const task = defineTask("t", { maxAttempts: 3 })
+      .withPayload<{ id: string }>()
+      .withOptions(({ id }) => (id === "a" ? { key: `k:${id}` } : {}))
+    const jobs = createJobs(pool, { schemaName: schema.name })
+    await jobs.enqueueMany(task, [{ id: "a" }, { id: "b" }, { id: "c" }], { queue: "q" })
+    expect(
+      (await jobRows(schema)).map(({ key, queue, max_attempts, payload }) => [
+        key,
+        queue,
+        max_attempts,
+        payload,
+      ]),
+    ).toEqual([
+      ["k:a", "q", 3, { id: "a" }],
+      [null, "q", 3, { id: "b" }],
+      [null, "q", 3, { id: "c" }],
+    ])
+  })
+
+  test("enqueues a job for each hole of a sparse array, as for undefined", async () => {
+    const jobs = createJobs(pool, { schemaName: schema.name })
+    const results = await jobs.enqueueMany(defineTask("t"), new Array<void>(2))
+    expect(results.map(r => r.created)).toEqual([true, true])
+    expect((await jobRows(schema)).map(row => row.payload)).toEqual([undefined, undefined])
+  })
+
+  test("rejects two payloads of one key, also key true and the empty key, an argument that is not an array, and an invalid per-payload option or an unserializable payload, before it calls the client", async () => {
+    const { jobs, counts } = createCountingJobs()
+    const task = defineTask("t")
+      .withPayload<string | true | bigint>()
+      .withOptions(key =>
+        typeof key === "bigint" ? {} : key === "invalid" ? { delay: -1 } : { key },
+      )
+    await expect(jobs.enqueueMany(task, ["a", "b", "a"])).rejects.toThrow(
+      new RangeError('enqueueMany takes each key once, got "a" twice'),
+    )
+    await expect(jobs.enqueueMany(task, [true, ""])).rejects.toThrow(
+      new RangeError('enqueueMany takes each key once, got "" twice'),
+    )
+    await expect(jobs.enqueueMany(task, "a" as unknown as string[])).rejects.toThrow(
+      new TypeError("enqueueMany takes an array of payloads"),
+    )
+    await expect(jobs.enqueueMany(task, ["a", "b"], { maxAttempts: 0 })).rejects.toBeInstanceOf(
+      RangeError,
+    )
+    await expect(jobs.enqueueMany(task, ["a", "invalid"])).rejects.toThrow(
+      new RangeError("delay must be a number of seconds from 0 to 1e12, got -1"),
+    )
+    await expect(jobs.enqueueMany(task, ["a", 1n])).rejects.toThrow("BigInt")
+    expect(counts.client).toBe(0)
+    expect(await jobRows(schema)).toEqual([])
+  })
+
+  test("resolves to no results for no payloads, after the checks of the name of the task, the overrides, and the scope, without calling withOptions or the client", async () => {
+    let scopeCalls = 0
+    let optionsCalls = 0
+    const { jobs, counts } = createCountingJobs({
+      scope: () => {
+        scopeCalls++
+        return "a"
+      },
+    })
+    const task = defineTask("t", { scoped: true }).withOptions(() => {
+      optionsCalls++
+      return {}
+    })
+    expect(await jobs.enqueueMany(task, [])).toEqual([])
+    expect([scopeCalls, optionsCalls, counts.client]).toEqual([1, 0, 0])
+    // A task defined by an older version of kern-jobs, whose defineTask accepted such a name.
+    await expect(jobs.enqueueMany({ ...defineTask("t"), name: "t\ud800" }, [])).rejects.toThrow(
+      "The name of a task must be",
+    )
+    await expect(jobs.enqueueMany(task, [], { maxAttempts: 0 })).rejects.toBeInstanceOf(RangeError)
+    await expect(createCountingJobs().jobs.enqueueMany(task, [])).rejects.toThrow(
+      new TypeError("Task t is scoped: pass its scope to createJobs"),
+    )
+    expect(counts.client).toBe(0)
+  })
+
+  test("calls the function of the scope once, and writes its scope to each job of a scoped task", async () => {
+    let calls = 0
+    const jobs = createJobs(pool, {
+      schemaName: schema.name,
+      scope: () => `tenant ${++calls}`,
+    })
+    await jobs.enqueueMany(defineTask("t", { scoped: true }).withPayload<number>(), [1, 2])
+    expect((await jobRows(schema)).map(row => row.scope)).toEqual(["tenant 1", "tenant 1"])
   })
 })

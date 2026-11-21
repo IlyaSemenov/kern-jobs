@@ -1,5 +1,5 @@
 // Test double of the jobs API: it records the enqueues of the code under test in memory, without a database, and checks them as `createJobs` does.
-import type { EnqueueParams, EnqueueResult } from "../core/enqueue"
+import type { EnqueueJob, EnqueueResult } from "../core/enqueue"
 import { encodePayload } from "../core/job"
 import { createJobsApi, getTaskScope, type Jobs, type JobsOptions } from "../jobs/jobs"
 import type { Task } from "../task/task"
@@ -78,6 +78,7 @@ interface PendingJob {
 /**
  * Creates the jobs API of tests: it records each enqueue rather than writing it to a database, and keeps its jobs pending, since no worker runs them.
  * It merges and checks the options of an enqueue, serializes its payload, resolves its scope, and checks the arguments of administration as `createJobs` does, and rejects with the same errors before it records anything, also with the error of `JSON.stringify` for a payload, such as a bigint; it does not check the constraints of the table, such as the length of a key.
+ * `enqueueMany` records an enqueue of each payload in their order, and none of them when it rejects.
  * An enqueue with the key of a pending job of its task and scope resolves to the id of that job and `created: false`, in every key mode.
  * `delete` and `deletePending` delete the pending jobs that they reach by the scope of `createTestJobs`, `retry` resolves to `null` and `deleteFailed` to 0, since no job fails.
  * Each call of `createTestJobs` has its own enqueues and pending jobs: another instance, also with `ALL_SCOPES`, does not reach them.
@@ -89,6 +90,24 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
   const captures = new Set<TestJobCall[]>()
   const pending: PendingJob[] = []
   let lastId = 0
+
+  /**
+   * Returns the function that finds the id of the pending job of a key of the task and scope of an enqueue, among the pending jobs before it: by a map for several jobs with a key, built once per call, and by a search for one, so that an enqueue of one job does not index every pending job.
+   * The jobs of one call have distinct keys, so none merges into another of the call.
+   */
+  const createPendingIdLookup = (
+    task: string,
+    jobScope: string,
+    jobs: readonly { key?: string | null }[],
+  ): ((key: string) => string | undefined) => {
+    const isOfCall = (j: PendingJob) => j.task === task && j.scope === jobScope
+    if (jobs.filter(params => params.key != null).length < 2) {
+      return key => pending.find(j => isOfCall(j) && j.key === key)?.id
+    }
+    const ids = new Map<string, string>()
+    for (const j of pending) if (isOfCall(j) && j.key !== null) ids.set(j.key, j.id)
+    return key => ids.get(key)
+  }
 
   /** Removes the pending jobs that match a filter, and returns their count. */
   const removePending = (filter: (job: PendingJob) => boolean) => {
@@ -104,26 +123,26 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
 
   const jobs = createJobsApi(
     {
-      async enqueue(params): Promise<EnqueueResult> {
-        // The payload of a real enqueue is serialized, which fails for such values as a bigint before anything is recorded.
-        encodePayload(params.payload)
-        const call: TestJobCall = {
-          task: params.task,
-          scope: params.scope === "" ? null : params.scope,
-          payload: params.payload,
-          options: toTestEnqueueOptions(params),
-        }
-        calls.push(call)
-        for (const captured of captures) captured.push(call)
-        const key = params.key ?? null
-        const job =
-          key === null
-            ? undefined
-            : pending.find(j => j.task === params.task && j.scope === params.scope && j.key === key)
-        if (job) return { id: job.id, created: false }
-        const id = String(++lastId)
-        pending.push({ id, task: params.task, scope: params.scope, key })
-        return { id, created: true }
+      async enqueueMany({ task, scope: jobScope, jobs }): Promise<EnqueueResult[]> {
+        // The payloads of a real enqueue are serialized, which fails for such values as a bigint before anything is recorded, also for the jobs before it.
+        for (const params of jobs) encodePayload(params.payload)
+        const findPendingId = createPendingIdLookup(task, jobScope, jobs)
+        return jobs.map(params => {
+          const call: TestJobCall = {
+            task,
+            scope: jobScope === "" ? null : jobScope,
+            payload: params.payload,
+            options: toTestEnqueueOptions(params),
+          }
+          calls.push(call)
+          for (const captured of captures) captured.push(call)
+          const key = params.key ?? null
+          const pendingId = key === null ? undefined : findPendingId(key)
+          if (pendingId !== undefined) return { id: pendingId, created: false }
+          const id = String(++lastId)
+          pending.push({ id, task, scope: jobScope, key })
+          return { id, created: true }
+        })
       },
       async retry() {
         return null
@@ -199,7 +218,7 @@ function createTestJobQueries<R>(
 }
 
 /** Returns the options of a recorded enqueue from the parameters of the core, without the options that no layer gave. */
-function toTestEnqueueOptions(params: EnqueueParams): TestEnqueueOptions {
+function toTestEnqueueOptions(params: EnqueueJob): TestEnqueueOptions {
   const options: TestEnqueueOptions = {}
   // `null` removes the key or the queue of the layers before, so it is an option that a layer gave.
   if (params.key !== undefined) options.key = params.key

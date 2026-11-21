@@ -123,6 +123,37 @@ describe("enqueue", () => {
   })
 })
 
+describe("enqueueMany", () => {
+  test("records an enqueue of each payload in their order, and resolves to the id of the pending job of a key and to new ids in that order", async () => {
+    const task = defineTask("t")
+      .withPayload<string | null>()
+      .withOptions(key => ({ key }))
+    const jobs = createTestJobs()
+    const existing = await jobs.enqueue(task, "a")
+    const captured = await jobs.capture(() => jobs.enqueueMany(task, [null, "a", "b"]))
+    expect(captured.result).toEqual([
+      { id: "2", created: true },
+      { id: existing.id, created: false },
+      { id: "3", created: true },
+    ])
+    expect(captured.calls.map(call => call.payload)).toEqual([null, "a", "b"])
+    expect(jobs.calls.map(call => call.options.key)).toEqual(["a", null, "a", "b"])
+  })
+
+  test("rejects two payloads of one key and a payload that JSON cannot serialize as createJobs does, and records nothing, also of the payloads before it", async () => {
+    const task = defineTask("t").withPayload<string | bigint>()
+    const jobs = createTestJobs()
+    const captured = await jobs.capture(async () => {
+      await expect(jobs.enqueueMany(task, ["a", "a"], { key: true })).rejects.toThrow(
+        new RangeError('enqueueMany takes each key once, got "" twice'),
+      )
+      await expect(jobs.enqueueMany(task, ["a", 1n])).rejects.toThrow(TypeError)
+    })
+    expect([captured.calls, jobs.calls]).toEqual([[], []])
+    expect(await jobs.enqueue(task, "a", { key: true })).toEqual({ id: "1", created: true })
+  })
+})
+
 describe("administration", () => {
   test("delete deletes a pending job by its id once, and an enqueue of its key then adds a new one", async () => {
     const jobs = createTestJobs({ scope: "a" })

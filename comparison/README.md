@@ -29,6 +29,7 @@ When changing a project's version, recheck all its comparison items against the 
 ## Topics
 
 - [Tasks](tasks.md)
+- [Enqueue](enqueue.md)
 - [Keys](keys.md)
 - [Queues](queues.md)
 - [Schedules](schedules.md)
