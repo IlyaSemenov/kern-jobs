@@ -10,6 +10,7 @@ stopOnSignals(worker, { close: () => sql.end() })
 
 The worker takes no more jobs and lets the running handlers end for 5 seconds; pass `abortAfter` in seconds to change it.
 Then it [aborts their signals](./handlers#stop-long-handlers) and waits until they end: a job whose handler throws on the abort returns to pending at once without spending an attempt, unless the stop has been forced by then.
+A [`TerminalError` or a `RetryError`](./retries#decide-in-the-handler) that a handler throws on the abort keeps its meaning: the job fails for good, or retries with its attempt spent.
 A job whose outcome the worker cannot record, such as without a database connection, returns once its lease expires, or once a worker with the same [`id`](./leases#return-the-jobs-of-a-restarted-worker-at-once) starts: it runs again, or fails if that was its last attempt.
 
 The process exits within 25 seconds of the signal, also when a handler ignores its abort, a query hangs, or `close` has not ended, since the worker cannot cancel them.
