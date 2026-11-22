@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
-import type { Jobs } from "../jobs/jobs"
+import type { Jobs } from "../producer/jobs"
 import { defineTask } from "../task/task"
 
 import { createTestJobs, type TestJobCall, type TestJobQueries } from "./test-jobs"

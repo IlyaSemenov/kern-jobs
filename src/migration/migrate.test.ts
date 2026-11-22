@@ -6,9 +6,9 @@ import { defineMigrations, getMigrationStatus, migrate } from "kern-migrations"
 import { bindSchema, defineSchema } from "kern-orm"
 import type { Driver } from "kern-orm/db"
 
-import { enqueue } from "../core/enqueue"
-import type { JobTable } from "../core/schema"
-import { createTestSchema, jobs, type TestSchema } from "../core/testing"
+import { enqueue } from "../sql/enqueue"
+import type { JobTable } from "../sql/job-table"
+import { createTestSchema, jobs, type TestSchema } from "../test-harness/database"
 
 import { checkJobSchema, migrateJobs, type MigrateJobsOptions } from "./migrate"
 import { jobMigrations, MIGRATION_TABLE } from "./migrations"

@@ -4,5 +4,5 @@ A check that rejects a value with `RangeError` or `TypeError` formats the value 
 
 Preliminary:
 
-- One helper formats any value for a message without calling its conversions, and every check uses it: the checks of options and backoff in `task/`, of the worker in `worker/`, of counts and storable text in `core/db.ts`, and of ids and `olderThan` in `jobs/jobs.ts`.
+- One helper formats any value for a message without calling its conversions, and every check uses it: the checks of options and backoff in `task/`, of the worker in `worker/`, of counts and storable text in `sql/postgres.ts`, and of ids and `olderThan` in `producer/jobs.ts`.
 - A test per kind of check passes such a value and expects the documented error class.

@@ -10,14 +10,14 @@ import {
   type TextValue,
 } from "kern-orm/db"
 
-import type { ClaimRef } from "../core/job"
-import { createJobTable } from "../core/schema"
-import { query, type TextRow } from "../core/statement"
+import { createJobTable } from "../sql/job-table"
+import { query, type TextRow } from "../sql/statement"
 
+import type { ClaimRef } from "./db/claim"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"
-import { createAcquireOnlyDriver } from "./testing"
+import { createAcquireOnlyDriver } from "./test-harness"
 
 interface Call {
   text: string

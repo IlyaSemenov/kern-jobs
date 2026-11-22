@@ -8,7 +8,7 @@ This promises the creation of the work, not its success: the failure job can spe
 
 ## Failure tasks
 
-- The failure task of a task has its name with `:failure` after it, `FAILURE_TASK_SUFFIX` of `core/failure.ts`, which the insert and `toFailureTaskName` of `task/task.ts` share, and its `scoped`, since a failure job has the scope of the failed job, whose type the context of `onFailure` takes.
+- The failure task of a task has its name with `:failure` after it, `FAILURE_TASK_SUFFIX` of `task/failure.ts`, which the insert and `toFailureTaskName` of `task/task.ts` share, and its `scoped`, since a failure job has the scope of the failed job, whose type the context of `onFailure` takes.
   It has the `maxAttempts`, as its option of an enqueue, and the backoff of an `onFailure` given as an object of them and `handler`, and none of the lease, the backoff, and the options of an enqueue of the task: without them, its jobs run under the lease of the worker and the default backoff, with the default `maxAttempts` of an enqueue, 25 ([decision](../decisions/settlement/failure-jobs.md#a-handler-of-the-implementation)).
 - `implement` with `onFailure` returns the implementation with `failure`, the implementation of the failure task whose handler is `onFailure`; it throws the errors of a task name for the name of the failure task, so a task with `onFailure` has a name of at most 120 bytes.
 - `defineTask` rejects a name that ends with `:failure`, so that a task of the application does not take the failure jobs of another by its name.
@@ -33,7 +33,7 @@ The claim stamps its row for a failure job, rather than an enqueue or a scan of 
 
 ## Insert
 
-`insertFailureJobsSql` of `core/failure.ts` gives the insert, a data-modifying CTE of the statement that makes the row `failed`, so the failure and the insert commit or roll back together, in every path that makes an active row `failed`:
+`insertFailureJobsSql` of `worker/db/failure.ts` gives the insert, a data-modifying CTE of the statement that makes the row `failed`, so the failure and the insert commit or roll back together, in every path that makes an active row `failed`:
 
 - the terminal statement of [fail](settlement.md#fail), with the reason of the worker;
 - the batch statement of the [reaper](leases.md#reaper), its per-row redo, and the return of the jobs of a worker of the same id, with `lease-expired` or `worker-restarted`.

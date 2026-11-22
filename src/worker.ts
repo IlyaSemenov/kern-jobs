@@ -25,4 +25,4 @@ export {
   type WorkerErrorInfo,
   type WorkerOptions,
   type WorkerReaperOptions,
-} from "./worker/worker"
+} from "./worker/start"

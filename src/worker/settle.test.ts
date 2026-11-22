@@ -3,9 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { ConnectionError, type Driver, QueryError } from "kern-orm/db"
 
-import { claimPlain } from "../core/claim"
-import { enqueue } from "../core/enqueue"
-import type { Claim } from "../core/job"
+import { enqueue } from "../sql/enqueue"
 import {
   createTestDriver,
   createTestSchema,
@@ -13,8 +11,9 @@ import {
   jobs,
   only,
   type TestSchema,
-} from "../core/testing"
+} from "../test-harness/database"
 
+import { type Claim, claimPlain } from "./db/claim"
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import type { KeptLease } from "./heartbeat"

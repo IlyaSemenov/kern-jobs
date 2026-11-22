@@ -1,6 +1,6 @@
 // Options of an enqueue: what a task definition and an enqueue give, their merge, and the parameters of the core.
-import { checkCount, checkStorableText, isStorableText, storableTextRule } from "../core/db"
-import type { EnqueueParams } from "../core/enqueue"
+import type { EnqueueParams } from "../sql/enqueue"
+import { checkCount, checkStorableText, isStorableText, storableTextRule } from "../sql/postgres"
 
 import { delayRange, isDelay } from "./delay"
 import type { Task } from "./task"

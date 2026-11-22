@@ -3,7 +3,7 @@ import { test } from "bun:test"
 
 import { verifyMigrations } from "kern-migrations/testing"
 
-import { createTestSchema } from "../core/testing"
+import { createTestSchema } from "../test-harness/database"
 
 import { jobMigrations } from "./migrations"
 

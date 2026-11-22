@@ -7,7 +7,7 @@ Enqueues of the public API run instead on the client of the application ([Produc
 `db/postgres-js.ts` and `db/node-postgres.ts` only re-export the drivers of kern-db.
 `kern-jobs/worker` exports the type `Driver` of kern-db, so that an application names it without depending on kern-db.
 
-`checkDriver` of `core/driver.ts` throws `TypeError` for a value that `isDriver` of kern-db rejects, such as a client passed instead of its driver.
+`checkDriver` of `worker/driver.ts` throws `TypeError` for a value that `isDriver` of kern-db rejects, such as a client passed instead of its driver.
 
 ## Contract
 
@@ -22,17 +22,17 @@ kern-db keeps the [contract of its drivers](https://github.com/IlyaSemenov/kern-
 
 ## Statements
 
-`kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `core/worker-db.ts` to its database in the configured PostgreSQL schema at startup.
+`kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `worker/db/db.ts` to its database in the configured PostgreSQL schema at startup.
 Worker ORM definitions use camelCase keys and map them to snake_case PostgreSQL columns with `toSnakeCase`.
 Simple worker mutations such as complete use typed table queries on this database ([decision](../decisions/drivers/worker-orm.md)).
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, use hand-written SQL.
 Producer statements use SQL that the application client can execute directly.
 
-For raw SQL with named result columns, the core runs its statements through `query` of `core/statement.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
+For raw SQL with named result columns, the core runs its statements through `query` of `sql/statement.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
 A statement that also runs on the executor of an application, such as an enqueue, runs through `queryValues`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
 - Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
-- Hand-written SQL names the job table and its claim sequence by `JobTable` of `core/schema.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
+- Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
 - Hand-written SQL returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
 
 ## Connections of the worker

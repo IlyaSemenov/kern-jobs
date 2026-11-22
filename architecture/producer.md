@@ -1,7 +1,7 @@
 # Producer
 
 An application defines its tasks with `defineTask` and enqueues their jobs with `jobs.enqueue` or `jobs.enqueueMany` of `createJobs`, through its own database client, through which `jobs` also retries and deletes jobs ([Administration](administration.md)).
-`createJobs` builds the jobs API with `createJobsApi` of `jobs/jobs.ts`, which merges and checks the options, checks the arguments, and resolves the scope of each call, over a store of the statements of the core; the [test double](testing.md) builds it over a store in memory.
+`createJobs` builds the jobs API with `createJobsApi` of `producer/jobs.ts`, which merges and checks the options, checks the arguments, and resolves the scope of each call, over a store that runs enqueue and administration statements on the application client; the [test double](testing.md) builds it over a store in memory.
 
 ## Task definitions
 
@@ -34,7 +34,7 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
   `isDelay` of `task/delay.ts` checks this range, which delays of retries share.
   A run time in the past takes `runAt` rather than a negative `delay`.
 - `runAt` is a `Date` in the years 1 to 9999: a statement sends it as `toISOString` gives it, which PostgreSQL reads only for these years.
-- `maxAttempts` is an integer from 1 to 2^31 − 1, the largest `int`, which `checkCount` of `core/db.ts` checks, as it checks the counts of the worker.
+- `maxAttempts` is an integer from 1 to 2^31 − 1, the largest `int`, which `checkCount` of `sql/postgres.ts` checks, as it checks the counts of the worker.
 - `delay` counts from `statement_timestamp()` of the enqueue in SQL, not from the clock of the producer.
 
 ## Many jobs
@@ -55,7 +55,7 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
 - a function that returns one of them, which `jobs` calls for each statement that it runs, such as of an enqueue, so that the statement runs in the transaction that the application holds at the call, such as one in `AsyncLocalStorage`;
 - a `Database` of kern-db or a `Db` of kern-orm, whose `execute` runs the statement of a call of `jobs` in the current transaction of the database.
 
-`toJobsTarget` of `jobs/client.ts` treats a function as a client factory only if it has neither an `unsafe` nor a `query` method.
+`toJobsTarget` of `producer/client.ts` treats a function as a client factory only if it has neither an `unsafe` nor a `query` method.
 It recognizes a `Db` by `$database`, a database by `execute`, a postgres.js client by `unsafe`, and an executor by `query`, in that order, since a database also has a `query` method for templates.
 It throws `TypeError` for a value of another kind when `createJobs` is called, or for a function that returns one when a call of `jobs` calls it.
 The main entry declares the shapes of these clients, such as `JobsDatabase` and `UnsafeClient`, rather than importing them, since it depends on neither kern-db nor a client library.
@@ -63,7 +63,7 @@ The main entry declares the shapes of these clients, such as `JobsDatabase` and 
 ### Executor
 
 - The values are text or `null`, and the statement casts each one from text, so a client that serializes a parameter by its described type sends it as it is ([Drivers](drivers.md#statements)).
-- The client of the application may rename the columns of a result, such as `postgres.camel`, and parse values: the statements on an executor read their rows through `fromExecutor` of `jobs/client.ts` only by position, as `ValuesTarget`, which `query` by the names of columns does not accept, and select only text.
+- The client of the application may rename the columns of a result, such as `postgres.camel`, and parse values: the statements on an executor read their rows through `fromExecutor` of `producer/client.ts` only by position, as `ValuesTarget`, which `query` by the names of columns does not accept, and select only text.
 - A row may be an object of values in the order of the columns or an array of values; `undefined` counts as `null`, and any other value but a string throws `TypeError`, since only a client that transforms text values gives one.
 - The enqueue returns rows of one text column, a JSON array: one row `[id, created]` for one job, and a row `[id, key, created]` for each of many jobs, so that reading them depends neither on the name of the column nor on how the client parses JSON.
 - The errors of the client reach the caller unchanged: an executor gives no `QueryError` or `ConnectionError`, while a database of kern-db gives its own.
@@ -92,7 +92,7 @@ An enqueue of another task gives its job the empty scope ([decision](../decision
 ## Schema
 
 The `schemaName` of `createJobs` names the PostgreSQL schema of the job table, `kern_jobs` by default, which [`migrateJobs`](migrations.md#migratejobs) creates.
-`checkSchemaName` of `core/schema.ts`, which `createJobTable` and `migrateJobs` call, throws `TypeError` for a name that is not [storable text](README.md#terms) of 1 to 63 bytes in UTF-8.
+`checkSchemaName` of `sql/job-table.ts`, which `createJobTable` and `migrateJobs` call, throws `TypeError` for a name that is not [storable text](README.md#terms) of 1 to 63 bytes in UTF-8.
 PostgreSQL of a standard build truncates a longer name, also a quoted one, so two names that differ only after its 63rd byte would name one schema.
 
 ## Open questions

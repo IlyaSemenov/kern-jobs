@@ -1,17 +1,17 @@
 // Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, through `runHandler`, the lease and backoff of its task, and the check of the list; and a worker that runs them.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { claimPlain } from "../core/claim"
-import { enqueue } from "../core/enqueue"
-import type { Claim, JobRow } from "../core/job"
-import { createTestSchema, jobs, only, sleep, type TestSchema } from "../core/testing"
+import { enqueue } from "../sql/enqueue"
+import type { JobRow } from "../sql/job"
 import { fixedBackoff } from "../task/backoff"
 import { RetryError, TerminalError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
 import { defineTask, type HandlerContext, type JobInfo } from "../task/task"
+import { createTestSchema, jobs, only, sleep, type TestSchema } from "../test-harness/database"
 
+import { type Claim, claimPlain } from "./db/claim"
 import { type RunHandlerContext, toWorkerTasks } from "./tasks"
-import { recordEvents, startTestWorker, stopTestWorkers } from "./testing"
+import { recordEvents, startTestWorker, stopTestWorkers } from "./test-harness"
 
 const job: JobRow = {
   id: "1",

@@ -1,7 +1,7 @@
 // Test double of the jobs API: it records the enqueues of the code under test in memory, without a database, and checks them as `createJobs` does.
-import type { EnqueueJob, EnqueueResult } from "../core/enqueue"
-import { encodePayload } from "../core/job"
-import { createJobsApi, getTaskScope, type Jobs, type JobsOptions } from "../jobs/jobs"
+import { createJobsApi, getTaskScope, type Jobs, type JobsOptions } from "../producer/jobs"
+import type { EnqueueJob, EnqueueResult } from "../sql/enqueue"
+import { encodePayload } from "../sql/job"
 import type { Task } from "../task/task"
 
 /** Options of `createTestJobs`. */

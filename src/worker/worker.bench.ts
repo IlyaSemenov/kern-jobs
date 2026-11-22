@@ -1,12 +1,12 @@
 // Measurements of the worker runtime: throughput of no-op handlers by concurrency against a bare claim-and-complete loop of the SQL core, and the cost of a heartbeat by the number of its claims against a plain UPDATE that waits for locks.
 // Run: bun --env-file=.env.test.local src/worker/worker.bench.ts
 
-import { claimCycle, claimPlain, createClaimState } from "../core/claim"
-import { heartbeat } from "../core/lease"
-import { complete } from "../core/settlement"
-import { query } from "../core/statement"
-import { createTestSchema, type TestSchema } from "../core/testing"
+import { query } from "../sql/statement"
+import { createTestSchema, type TestSchema } from "../test-harness/database"
 
+import { claimCycle, claimPlain, createClaimState } from "./db/claim"
+import { heartbeat } from "./db/lease"
+import { complete } from "./db/settlement"
 import { startRuntime } from "./runtime"
 
 const JOBS = 3000

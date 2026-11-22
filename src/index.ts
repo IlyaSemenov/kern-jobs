@@ -1,5 +1,5 @@
-export type { RetryResult } from "./core/administration"
-export type { EnqueueResult } from "./core/enqueue"
+export type { RetryResult } from "./producer/administration"
+export type { EnqueueResult } from "./sql/enqueue"
 export type {
   Executor,
   JobsClient,
@@ -7,7 +7,7 @@ export type {
   JobsDatabase,
   JobsDb,
   UnsafeClient,
-} from "./jobs/client"
+} from "./producer/client"
 export {
   ALL_SCOPES,
   createJobs,
@@ -15,7 +15,7 @@ export {
   type DeletePendingFilter,
   type Jobs,
   type JobsOptions,
-} from "./jobs/jobs"
+} from "./producer/jobs"
 export {
   type Backoff,
   defaultBackoff,

@@ -4,7 +4,7 @@ A worker runs the jobs of the tasks it implements: it claims them into free slot
 
 Claiming, heartbeats, and the reaper run in rounds, each one at a time: the next round starts an interval after the previous one ends, so a slow round delays the next one instead of overlapping it.
 
-`startWorker` of `worker/worker.ts` checks the options of the application, fills their defaults, and starts the runtime of `worker/runtime.ts`, which trusts its options; tests run the runtime directly, with tasks, timings, and events that the application cannot give.
+`startWorker` of `worker/start.ts` checks the options of the application, fills their defaults, and starts the runtime of `worker/runtime.ts`, which trusts its options; tests run the runtime directly, with tasks, timings, and events that the application cannot give.
 
 ## Options
 

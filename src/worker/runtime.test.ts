@@ -7,9 +7,11 @@ import { nodePostgresDriver } from "kern-orm/db/node-postgres"
 import { waitForLockedStatement } from "kern-orm/testing"
 import pg from "pg"
 
-import { claimPlain } from "../core/claim"
-import { enqueue } from "../core/enqueue"
-import { query } from "../core/statement"
+import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
+import { enqueue } from "../sql/enqueue"
+import { query } from "../sql/statement"
+import { RetryError, TerminalError } from "../task/errors"
+import { defineTask } from "../task/task"
 import {
   createTestDriver,
   createTestSchema,
@@ -19,11 +21,9 @@ import {
   only,
   sleep,
   type TestSchema,
-} from "../core/testing"
-import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
-import { RetryError, TerminalError } from "../task/errors"
-import { defineTask } from "../task/task"
+} from "../test-harness/database"
 
+import { claimPlain } from "./db/claim"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
@@ -35,7 +35,7 @@ import {
   stopTestWorkers,
   terminateBackends,
   testTimings,
-} from "./testing"
+} from "./test-harness"
 
 let schema: TestSchema
 const proxies: Proxy[] = []

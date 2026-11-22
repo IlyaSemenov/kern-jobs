@@ -6,10 +6,8 @@ import { join } from "node:path"
 
 import { waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
-import { claimPlain } from "../../core/claim"
-import { enqueue } from "../../core/enqueue"
-import { reap } from "../../core/lease"
-import { query } from "../../core/statement"
+import { enqueue } from "../../sql/enqueue"
+import { query } from "../../sql/statement"
 import {
   createTestSchema,
   databaseUrl,
@@ -17,7 +15,9 @@ import {
   jobs,
   sleep,
   type TestSchema,
-} from "../../core/testing"
+} from "../../test-harness/database"
+import { claimPlain } from "../db/claim"
+import { reap } from "../db/lease"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"

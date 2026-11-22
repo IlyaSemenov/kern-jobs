@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { createRandom } from "../core/testing"
+import { createRandom } from "../test-harness/random"
 
 import { compileCron, hasOccurrence } from "./cron"
 

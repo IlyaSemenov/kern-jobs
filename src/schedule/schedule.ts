@@ -1,4 +1,4 @@
-import { isStorableText, storableTextRule, utf8Length } from "../core/db"
+import { isStorableText, storableTextRule, utf8Length } from "../sql/postgres"
 import { checkEnqueueOverrides, type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
 import { checkTaskName, isTask, type Task } from "../task/task"
 

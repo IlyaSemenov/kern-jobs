@@ -1,7 +1,14 @@
-// Failures of jobs for good, as the `onFailure` of a task implementation gets them: the `JobFailure` that a failure job has as its payload.
-import type { FailureReason } from "../core/failure"
+// Failure task names, terminal failure reasons, and the payload passed to `onFailure`.
+/** Suffix of the name of a failure task after the name of its task. */
+export const FAILURE_TASK_SUFFIX = ":failure"
 
-export type { FailureReason }
+/** Reason of a terminal failure, which the `JobFailure` of its failure job records. */
+export type FailureReason =
+  | "handler-error"
+  | "terminal-error"
+  | "lease-expired"
+  | "worker-restarted"
+  | "late-claim"
 
 /** Recorded failure for good of a job, which `onFailure` gets. */
 export interface JobFailure<Payload = unknown> {

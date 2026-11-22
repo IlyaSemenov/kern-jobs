@@ -12,25 +12,25 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import type { Driver } from "kern-orm/db"
 
-import { enqueue } from "../core/enqueue"
-import type { KeyMode } from "../core/job"
-import { query } from "../core/statement"
+import { enqueue } from "../sql/enqueue"
+import type { KeyMode } from "../sql/job"
+import { query } from "../sql/statement"
+import { TerminalError } from "../task/errors"
+import type { JobFailure } from "../task/failure"
 import {
   type Conn,
-  createRandom,
   createTestDriver,
   createTestSchema,
   databaseUrl,
   sleep,
   type TestSchema,
-} from "../core/testing"
-import { TerminalError } from "../task/errors"
-import type { JobFailure } from "../task/failure"
+} from "../test-harness/database"
+import { createRandom } from "../test-harness/random"
 
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { startRuntime, type Worker, type WorkerTask } from "./runtime"
-import { terminateBackends } from "./testing"
+import { terminateBackends } from "./test-harness"
 
 let schema: TestSchema
 /** Stops the faults and the workers of the test and closes their connections before its schema is dropped, also after a test that failed or timed out. */

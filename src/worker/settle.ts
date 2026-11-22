@@ -1,8 +1,10 @@
 // Settlement of a claim by the worker: complete, fail, or requeue, retried on a new connection while the worker owns the claim.
 import { ConnectionError, isOutcomeUnknown } from "kern-orm/db"
 
-import type { Claim } from "../core/job"
-import type { JobTable } from "../core/schema"
+import type { JobTable } from "../sql/job-table"
+
+import type { Claim } from "./db/claim"
+import type { WorkerDb } from "./db/db"
 import {
   complete,
   fail,
@@ -10,9 +12,7 @@ import {
   type FailOutcome,
   requeue,
   type RequeueOutcome,
-} from "../core/settlement"
-import type { WorkerDb } from "../core/worker-db"
-
+} from "./db/settlement"
 import type { SettleOutcome, WorkerEvent } from "./events"
 import type { KeptLease } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"

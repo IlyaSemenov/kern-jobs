@@ -1,9 +1,8 @@
 // Reaper loop: recovery after connection errors and batches that follow each other.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { claimPlain } from "../core/claim"
-import { enqueue } from "../core/enqueue"
-import { query } from "../core/statement"
+import { enqueue } from "../sql/enqueue"
+import { query } from "../sql/statement"
 import {
   createTestDriver,
   createTestSchema,
@@ -11,12 +10,13 @@ import {
   jobs,
   sleep,
   type TestSchema,
-} from "../core/testing"
+} from "../test-harness/database"
 
+import { claimPlain } from "./db/claim"
 import type { WorkerEvent } from "./events"
 import { proxyTo } from "./faults/proxy"
 import { startReaper } from "./reaper"
-import { recordEvents } from "./testing"
+import { recordEvents } from "./test-harness"
 
 let schema: TestSchema
 beforeEach(async () => {

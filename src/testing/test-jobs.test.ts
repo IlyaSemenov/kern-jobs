@@ -1,7 +1,7 @@
 // The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, and the queries of a capture by task and scope.
 import { describe, expect, mock, test } from "bun:test"
 
-import { ALL_SCOPES } from "../jobs/jobs"
+import { ALL_SCOPES } from "../producer/jobs"
 import { defineTask } from "../task/task"
 
 import { createTestJobs } from "./test-jobs"

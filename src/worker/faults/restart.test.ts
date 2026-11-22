@@ -6,11 +6,11 @@ import { join } from "node:path"
 
 import type { Driver } from "kern-orm/db"
 
-import { claimPlain } from "../../core/claim"
-import { reap } from "../../core/lease"
-import type { JobTable } from "../../core/schema"
-import { query } from "../../core/statement"
-import { createTestSchema, sleep, type TestSchema } from "../../core/testing"
+import type { JobTable } from "../../sql/job-table"
+import { query } from "../../sql/statement"
+import { createTestSchema, sleep, type TestSchema } from "../../test-harness/database"
+import { claimPlain } from "../db/claim"
+import { reap } from "../db/lease"
 
 import type { WorkerConfig } from "./worker"
 

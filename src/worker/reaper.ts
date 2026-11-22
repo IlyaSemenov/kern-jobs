@@ -1,8 +1,8 @@
 // Reaper loop of a worker: returns expired jobs in batches and survives connection errors.
-import { reap } from "../core/lease"
-import type { JobTable } from "../core/schema"
-import type { StatementTarget } from "../core/statement"
+import type { JobTable } from "../sql/job-table"
+import type { StatementTarget } from "../sql/statement"
 
+import { reap } from "./db/lease"
 import type { WorkerEvent } from "./events"
 import { type Loop, startLoop } from "./loop"
 

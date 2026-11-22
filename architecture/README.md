@@ -46,21 +46,29 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 Importing `kern-jobs` or `kern-jobs/testing` loads no database package (kern-db, kern-orm, or kern-migrations) or client library: these entries do not import them at runtime, and the statements of the main entry build their objects without `createStatement` of kern-db.
 The package test enqueues through the main entry, and records an enqueue and runs a handler through `kern-jobs/testing`, in a project that has none of them.
 
+## Database access
+
+The SQL core spans three directories under `src/`.
+
+- `producer/` implements the jobs API and runs retry and deletion through the application's database client.
+- `worker/db/` implements claims, leases, settlement, failure-job insertion, and schedule evaluation on the worker's database.
+- `sql/` contains the shared job model, PostgreSQL helpers for building and executing statements, and the enqueue implementation used by both the jobs API and worker schedules.
+
 ## Map
 
 Module paths are relative to `src/`.
 
-- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `core/schema.ts`, `core/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
+- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `sql/job-table.ts`, `sql/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
-- [Enqueue](enqueue.md): key modes and debounce; `core/enqueue.ts`.
-- [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `jobs/`.
-- [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/`.
-- [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `core/administration.ts`.
-- [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `core/claim.ts`.
-- [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `core/settlement.ts`.
-- [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `core/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.
-- [Leases](leases.md): heartbeat, the reaper, and fencing; `core/lease.ts`.
-- [PostgreSQL](postgresql.md): supported versions, isolation, transactions, and time; `core/db.ts`.
-- [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `db/`, `core/driver.ts`, `core/worker-db.ts`, `core/statement.ts`, and `core/violation.ts`.
+- [Enqueue](enqueue.md): key modes and debounce; `sql/enqueue.ts`.
+- [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `producer/`.
+- [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/` and `worker/db/schedule.ts`.
+- [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts`.
+- [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `worker/db/claim.ts`.
+- [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `worker/db/settlement.ts`.
+- [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `worker/db/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.
+- [Leases](leases.md): heartbeat, the reaper, and fencing; `worker/db/lease.ts`.
+- [PostgreSQL](postgresql.md): supported versions, isolation, transactions, and time; `sql/postgres.ts`.
+- [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `db/`, `worker/driver.ts`, `worker/db/db.ts`, `sql/statement.ts`, and `worker/db/violation.ts`.
 - [Testing](testing.md): the test double of the jobs API and the run of a handler in a test; `testing/`.
 - [Worker](worker.md): the worker of an application and its runtime: options, implementations of tasks and the manifest, handler errors and backoff, the check of the schema, slots, claiming, leases, settlement, the reaper, stopping, and errors; `worker/`, `task/manifest.ts`, `task/errors.ts`, and `task/backoff.ts`.

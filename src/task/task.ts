@@ -1,10 +1,9 @@
 // Task definitions: the name of a task, the type of its payload, the options of its enqueues, and the settings of its workers, which producers and workers import from the same definition; and the implementations of tasks, which only workers import.
-import { checkCount, checkStorableText, utf8Length } from "../core/db"
-import { DEFAULT_MAX_ATTEMPTS } from "../core/enqueue"
-import { FAILURE_TASK_SUFFIX } from "../core/failure"
+import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
+import { checkCount, checkStorableText, utf8Length } from "../sql/postgres"
 
 import type { Backoff } from "./backoff"
-import type { JobFailure } from "./failure"
+import { FAILURE_TASK_SUFFIX, type JobFailure } from "./failure"
 import type { EnqueueOptions, StaticEnqueueOptions } from "./options"
 
 /** Settings of a task, which an enqueue cannot override. */
