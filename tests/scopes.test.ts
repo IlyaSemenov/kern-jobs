@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { AsyncLocalStorage } from "node:async_hooks"
 
 import { createJobs, defineTask, type Task } from "kern-jobs"
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import {
   defineManifest,
   type Driver,

@@ -69,7 +69,7 @@ kern-jobs keeps its jobs in a PostgreSQL schema of its own, `kern_jobs`.
 Create it with `migrateJobs` before your application starts, such as in the script that applies its migrations:
 
 ```ts [src/migrate.ts]
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { migrateJobs } from "kern-jobs/migrations"
 import postgres from "postgres"
 
@@ -161,7 +161,7 @@ export const manifest = defineManifest({ tasks: [sendWelcomeEmail] })
 Start a worker with the manifest in a process of its own:
 
 ```ts [src/worker/start.ts]
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { startWorker, stopOnSignals } from "kern-jobs/worker"
 
 import { sql } from "../jobs"

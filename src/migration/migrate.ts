@@ -14,7 +14,7 @@ export interface MigrateJobsOptions {
 
 /**
  * Creates the PostgreSQL schema of kern-jobs with its tables, or updates the schema that an earlier version of kern-jobs created.
- * It runs on `target`: a driver of kern-db over a database client, such as `postgresJsDriver(sql)` of `kern-jobs/db/postgres-js`, as `startWorker` takes, a database of kern-db of the application, or a `Db` of kern-orm, whose own schema it ignores for `schemaName`.
+ * It runs on `target`: a driver of kern-db over a database client, such as `postgresJsDriver(sql)` of `kern-jobs/drivers/postgres-js`, as `startWorker` takes, a database of kern-db of the application, or a `Db` of kern-orm, whose own schema it ignores for `schemaName`.
  * Inside a transaction of the database, such as of a test, the migrations commit or roll back with that transaction.
  * It does nothing in a schema that is up to date, and processes that call it at once change the schema once.
  * It throws `TypeError` for a wrong target or option before it runs a statement.

@@ -174,7 +174,7 @@ function logError(error: unknown, info: WorkerErrorInfo): void {
 
 /**
  * Starts a worker that runs the jobs of the tasks of a manifest until `stop`.
- * It runs on `driver`, a driver of kern-db over the database client of the worker, such as `postgresJsDriver(sql)` of `kern-jobs/db/postgres-js`, outside the transactions of the application; the worker keeps one connection of its pool for the heartbeats, so the pool needs at least two connections, and with one it never becomes ready.
+ * It runs on `driver`, a driver of kern-db over the database client of the worker, such as `postgresJsDriver(sql)` of `kern-jobs/drivers/postgres-js`, outside the transactions of the application; the worker keeps one connection of its pool for the heartbeats, so the pool needs at least two connections, and with one it never becomes ready.
  * It throws `TypeError` or `RangeError` for a wrong driver or option before it starts anything; a failure of the database later, such as a schema that `migrateJobs` has not created, goes to `onError`, and the worker keeps trying: await `ready` or check `state` to know whether it takes jobs.
  */
 export function startWorker(driver: Driver, options: WorkerOptions): Worker {

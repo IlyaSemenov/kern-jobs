@@ -22,7 +22,7 @@ Create the schema of kern-jobs in your database before your application and its 
 
 ```ts
 // src/migrate.ts
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { migrateJobs } from "kern-jobs/migrations"
 
 import { sql } from "./db"
@@ -59,7 +59,7 @@ Implement the task and start a worker in a process of its own:
 
 ```ts
 // src/worker.ts
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { defineManifest, startWorker, stopOnSignals } from "kern-jobs/worker"
 
 import { sql } from "./db"

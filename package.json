@@ -19,8 +19,8 @@
   "types": "./dist/index.d.mts",
   "exports": {
     ".": "./dist/index.mjs",
-    "./db/node-postgres": "./dist/db/node-postgres.mjs",
-    "./db/postgres-js": "./dist/db/postgres-js.mjs",
+    "./drivers/node-postgres": "./dist/drivers/node-postgres.mjs",
+    "./drivers/postgres-js": "./dist/drivers/postgres-js.mjs",
     "./migrations": "./dist/migrations.mjs",
     "./testing": "./dist/testing.mjs",
     "./worker": "./dist/worker.mjs",

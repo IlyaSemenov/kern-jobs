@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { createJobs, defineTask, type JobsClient } from "kern-jobs"
-import { postgresJsDriver as jobsPostgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver as jobsPostgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { migrateJobs } from "kern-jobs/migrations"
 import { defineManifest, type Driver, startWorker } from "kern-jobs/worker"
 import { bindSchema, createDatabase, defineSchema } from "kern-orm"
@@ -115,7 +115,10 @@ describe("application on kern-orm", () => {
   /** Drivers of the worker: of the database itself, and of kern-jobs over the client of the database. */
   const workerDrivers: [string, (driver: Driver, sql: postgres.Sql) => Driver][] = [
     ["the driver of the database", driver => driver],
-    ["a driver of kern-jobs/db/postgres-js over its client", (_, sql) => jobsPostgresJsDriver(sql)],
+    [
+      "a driver of kern-jobs/drivers/postgres-js over its client",
+      (_, sql) => jobsPostgresJsDriver(sql),
+    ],
   ]
 
   for (const [name, createDriver] of workerDrivers) {

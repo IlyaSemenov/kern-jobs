@@ -4,8 +4,8 @@ The worker and `migrateJobs` take a driver of kern-db.
 kern-jobs gets its database API and drivers from the public database entry points of kern-orm and exposes the drivers through its own subpaths.
 
 ```ts
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 ```
 
 kern-db keeps the drivers and the tests of their contract, which covers what the worker relies on, such as the classes of errors and the release of connections, and the transactions that fail runs in.

@@ -1,10 +1,10 @@
 # Drivers
 
-The worker talks to PostgreSQL through a driver of kern-db, which kern-jobs gives through the database entry points of kern-orm: `postgresJsDriver` of `kern-jobs/db/postgres-js` over a postgres.js 4 client or `nodePostgresDriver` of `kern-jobs/db/node-postgres` over a node-postgres 8 pool ([decision](../decisions/drivers/kern-db-drivers.md)).
+The worker talks to PostgreSQL through a driver of kern-db, which kern-jobs gives through the database entry points of kern-orm: `postgresJsDriver` of `kern-jobs/drivers/postgres-js` over a postgres.js 4 client or `nodePostgresDriver` of `kern-jobs/drivers/node-postgres` over a node-postgres 8 pool ([decision](../decisions/drivers/kern-db-drivers.md)).
 [`migrateJobs`](migrations.md#migratejobs) takes such a driver too.
 Enqueues of the public API run instead on the client of the application ([Producer](producer.md#client)).
 
-`db/postgres-js.ts` and `db/node-postgres.ts` only re-export the drivers of kern-db.
+`drivers/postgres-js.ts` and `drivers/node-postgres.ts` only re-export the drivers of kern-db.
 `kern-jobs/worker` exports the type `Driver` of kern-db, so that an application names it without depending on kern-db.
 
 `checkDriver` of `worker/driver.ts` throws `TypeError` for a value that `isDriver` of kern-db rejects, such as a client passed instead of its driver.

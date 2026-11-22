@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { createJobs, defineTask } from "kern-jobs"
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import { migrateJobs } from "kern-jobs/migrations"
 import { createDatabase, createStatement } from "kern-orm/db"
 import type pg from "pg"

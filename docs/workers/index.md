@@ -41,7 +41,7 @@ Implement each task in one of the merged manifests only, and give each schedule 
 Start a worker with the manifest and a driver of your database client:
 
 ```ts [src/worker/start.ts]
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { startWorker } from "kern-jobs/worker"
 import postgres from "postgres"
 

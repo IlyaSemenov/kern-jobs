@@ -5,7 +5,7 @@ import { type Driver, isDriver } from "kern-orm/db"
 export function checkDriver(driver: unknown): asserts driver is Driver {
   if (!isDriver(driver)) {
     throw new TypeError(
-      "driver must be a driver of kern-db, such as postgresJsDriver(sql) of kern-jobs/db/postgres-js",
+      "driver must be a driver of kern-db, such as postgresJsDriver(sql) of kern-jobs/drivers/postgres-js",
     )
   }
 }

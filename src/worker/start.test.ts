@@ -505,7 +505,7 @@ describe("options", () => {
     // A client instead of its driver.
     expect(() => startWorker({ query: call } as unknown as Driver, { manifest })).toThrow(
       new TypeError(
-        "driver must be a driver of kern-db, such as postgresJsDriver(sql) of kern-jobs/db/postgres-js",
+        "driver must be a driver of kern-db, such as postgresJsDriver(sql) of kern-jobs/drivers/postgres-js",
       ),
     )
     const cases: [Record<string, unknown>, ErrorConstructor, string][] = [

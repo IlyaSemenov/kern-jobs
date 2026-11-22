@@ -1,5 +1,5 @@
 // Shared harness of the package tests: the test database, and a schema of kern-jobs per test, created by `migrateJobs` as applications create it.
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import { migrateJobs } from "kern-jobs/migrations"
 import pg from "pg"
 

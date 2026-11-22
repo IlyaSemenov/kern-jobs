@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { createJobs, defineTask, fixedBackoff, type JobInfo } from "kern-jobs"
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import {
   defineManifest,
   type Driver,

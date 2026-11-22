@@ -1,5 +1,5 @@
 import { createJobs, defineTask } from "kern-jobs"
-import { postgresJsDriver } from "kern-jobs/db/postgres-js"
+import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { migrateJobs } from "kern-jobs/migrations"
 import { defineManifest, startWorker } from "kern-jobs/worker"
 import postgres from "postgres"

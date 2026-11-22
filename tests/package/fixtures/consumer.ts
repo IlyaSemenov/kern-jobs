@@ -1,5 +1,5 @@
 // Migrates a schema of its own, enqueues one job in it through node-postgres and postgres.js, checks the manifest and runs a handler of the worker, and prints the results as JSON.
-import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
+import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import { migrateJobs } from "kern-jobs/migrations"
 import { defineManifest, RetryError } from "kern-jobs/worker"
 import pg from "pg"
