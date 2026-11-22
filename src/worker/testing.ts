@@ -1,5 +1,5 @@
 // Test helpers of the worker runtime: recorded events, a worker of a test schema with short timings, a driver that only reserves connections, and terminating the backends of a pool.
-import type { Connection, Driver } from "kern-db"
+import type { Connection, Driver } from "kern-orm/db"
 
 import { reap } from "../core/lease"
 import { query, type StatementTarget } from "../core/statement"

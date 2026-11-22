@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
-import type { Database } from "kern-db"
 import type { AnyDb } from "kern-orm"
+import type { Database } from "kern-orm/db"
 import type pg from "pg"
 import type postgres from "postgres"
 

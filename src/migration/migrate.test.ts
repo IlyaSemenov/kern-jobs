@@ -2,9 +2,9 @@
 // How kern-migrations applies a history, such as its lock, is tested there.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import type { Driver } from "kern-db"
 import { defineMigrations, getMigrationStatus, migrate } from "kern-migrations"
 import { bindSchema, defineSchema } from "kern-orm"
+import type { Driver } from "kern-orm/db"
 
 import { enqueue } from "../core/enqueue"
 import type { JobTable } from "../core/schema"

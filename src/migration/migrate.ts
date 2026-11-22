@@ -1,6 +1,6 @@
-// Migration of the schema of kern-jobs by an application, and the check of the schema by a worker at its start.
-import type { Database } from "kern-db"
 import { getMigrationStatus, migrate, type MigrationTarget } from "kern-migrations"
+// Migration of the schema of kern-jobs by an application, and the check of the schema by a worker at its start.
+import type { Database } from "kern-orm/db"
 
 import { checkSchemaName, DEFAULT_SCHEMA } from "../core/schema"
 

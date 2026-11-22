@@ -8,7 +8,7 @@ import {
   type DriverResult,
   QueryError,
   type TextValue,
-} from "kern-db"
+} from "kern-orm/db"
 
 import type { ClaimRef } from "../core/job"
 import { createJobTable } from "../core/schema"

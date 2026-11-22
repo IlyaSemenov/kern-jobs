@@ -1,5 +1,6 @@
 // Measurements of the SQL core: hot-key upsert churn, claim latency under backlog, idle cycle cost, reaper and fail latency, and the cost of failure jobs.
 // Run: bun --env-file=.env.test.local src/core/core.bench.ts
+
 import { claimCycle, claimPlain, claimQueued } from "./claim"
 import { enqueue } from "./enqueue"
 import type { KeyMode } from "./job"
@@ -79,7 +80,7 @@ async function claimBacklog() {
       claimPlain(schema.admin, schema.table, { worker: "w", tasks: ["t"], limit: 4 }),
     )
     lat.push(ms)
-    for (const c of claims) await complete(schema.admin, schema.table, c)
+    for (const c of claims) await complete(schema.db, c)
   }
   console.log(`claimPlain, 100k future + 10k ready plain rows, limit 4: ${fmt(lat)}`)
   await schema.dispose()
@@ -101,7 +102,7 @@ async function queueBacklog(queues: number) {
         claimQueued(schema.admin, schema.table, { worker: "w", tasks: ["t"] }),
       )
       lat.push(ms)
-      if (r.kind === "job") await complete(schema.admin, schema.table, r.claim)
+      if (r.kind === "job") await complete(schema.db, r.claim)
     }
     console.log(`claimQueued, 100k ready rows in ${queues} queues, ${label}: ${fmt(lat)}`)
   }
@@ -110,17 +111,17 @@ async function queueBacklog(queues: number) {
   const busy = await claimQueued(schema.admin, schema.table, { worker: "long", tasks: ["t"] })
   await measure("first queue busy")
   const cycles: number[] = []
-  const conns = await Promise.all(Array.from({ length: 8 }, () => schema.connect()))
+  const workers = Array.from({ length: 8 }, () => schema.createDb({ max: 1 }))
   let done = 0
   const [ms] = await time(() =>
     Promise.all(
-      conns.map(async (c, wi) => {
+      workers.map(async (db, wi) => {
         for (let i = 0; i < 25; i++) {
           const [t, claims] = await time(() =>
-            claimCycle(c, schema.table, { worker: `w${wi}`, tasks: ["t"], slots: 4 }),
+            claimCycle(db.$database, schema.table, { worker: `w${wi}`, tasks: ["t"], slots: 4 }),
           )
           cycles.push(t)
-          for (const cl of claims) if (await complete(c, schema.table, cl)) done++
+          for (const cl of claims) if (await complete(db, cl)) done++
         }
       }),
     ),
@@ -209,7 +210,7 @@ async function failureJobs() {
     const [q, r] = await time(() => claimQueued(schema.admin, schema.table, o))
     queued[variant].push(q)
     for (const c of [...claims, ...(r.kind === "job" ? [r.claim] : [])])
-      await complete(schema.admin, schema.table, c)
+      await complete(schema.db, c)
   }
   console.log(
     `claimPlain, limit 4, without stamps: ${fmt(plain.without)}; with: ${fmt(plain.with)}`,

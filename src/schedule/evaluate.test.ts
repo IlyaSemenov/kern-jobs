@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { createDatabase } from "kern-db"
+import { createDatabase } from "kern-orm/db"
 
 import { claimPlain } from "../core/claim"
 import { enqueue } from "../core/enqueue"
@@ -135,7 +135,7 @@ test("a scheduled enqueue that keeps a pending job consumes the occurrence", asy
       now: due,
     }),
   )
-  await complete(schema.driver, schema.table, claim)
+  await complete(schema.db, claim)
   await run(schedule)
   expect(await jobs(schema)).toEqual([])
 })
@@ -157,7 +157,7 @@ test("three replicas with equivalent calendars enqueue once, including after a f
       now: due,
     }),
   )
-  await complete(schema.driver, schema.table, claim)
+  await complete(schema.db, claim)
   await evaluateSchedule(replica(), schema.table, toWorkerSchedule(text), { now: due })
   expect(await jobs(schema)).toEqual([])
 })

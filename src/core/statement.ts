@@ -1,5 +1,5 @@
 // Statements of the core: parameters encoded as text, and rows read by the names of their columns on a driver, or by the position of their values on a driver or the executor of an application.
-import type { Connection, SqlStatement, TextValue } from "kern-db"
+import type { Connection, SqlStatement, TextValue } from "kern-orm/db"
 
 /** Target of the statements of the core: a driver, which runs them on any connection of its pool, or a connection. */
 export type StatementTarget = Pick<Connection, "execute">

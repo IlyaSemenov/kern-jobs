@@ -1,10 +1,10 @@
 // Enqueues through the public API: the schema that `migrateJobs` creates, task definitions, and a transaction of the application.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { createDatabase, createStatement } from "kern-db"
 import { createJobs, defineTask } from "kern-jobs"
 import { nodePostgresDriver } from "kern-jobs/db/node-postgres"
 import { migrateJobs } from "kern-jobs/migrations"
+import { createDatabase, createStatement } from "kern-orm/db"
 import type pg from "pg"
 
 import { createTestSchema, type TestSchema } from "../testing/database"

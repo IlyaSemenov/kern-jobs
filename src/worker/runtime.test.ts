@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
 
-import { type Connection, type Driver, QueryError } from "kern-db"
-import { nodePostgresDriver } from "kern-db/node-postgres"
-import { waitForLockedStatement } from "kern-db/testing"
+import { type Connection, type Driver, QueryError } from "kern-orm/db"
+import { nodePostgresDriver } from "kern-orm/db/node-postgres"
+import { waitForLockedStatement } from "kern-orm/testing"
 import pg from "pg"
 
 import { claimPlain } from "../core/claim"

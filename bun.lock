@@ -5,8 +5,8 @@
     "": {
       "name": "kern-jobs",
       "dependencies": {
-        "kern-db": "^0.7.0",
-        "kern-migrations": "^0.7.0",
+        "kern-migrations": "^0.7.1",
+        "kern-orm": "^0.20.0",
       },
       "devDependencies": {
         "@arethetypeswrong/core": "^0.18.5",
@@ -16,7 +16,6 @@
         "@types/bun": "^1.4.4",
         "@types/pg": "^8.23.1",
         "changesets-release": "^2.1.1",
-        "kern-orm": "^0.19.0",
         "orchid-orm": "^1.78.47",
         "oxfmt": "^0.77.0",
         "oxlint": "^1.92.0",
@@ -692,11 +691,11 @@
 
     "jsonc-parser": ["jsonc-parser@3.3.1", "", {}, "sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ=="],
 
-    "kern-db": ["kern-db@0.7.0", "", { "peerDependencies": { "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/pg", "pg", "postgres"] }, "sha512-HoCSDoMwYjlnO+eJ9GzV3zpaablSszCKgOj9+sZtaHRAdKEOHAudDhNSAGLwtdA21ZdUx+F1pv9Yrys1tCK5Jg=="],
+    "kern-db": ["kern-db@0.8.0", "", { "peerDependencies": { "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/pg", "pg", "postgres"] }, "sha512-I6cIKUijpAuQos0rFRwoyGZ/56qsOVJAfMsHtZi4EBRYNkpDNOiZ76GzY53MtqnGRmGww5pjSOMKaPSHbOu9ZA=="],
 
-    "kern-migrations": ["kern-migrations@0.7.0", "", { "peerDependencies": { "kern-db": "^0.7.0" } }, "sha512-t/NfCKfhKpaKoa2qcv3TC/VWbTWJQ3ERymO+xgqqPpNmoAyzFUkrnsv5/y2Dgcz+gFivhwfC61YvPUO9Z5YnaA=="],
+    "kern-migrations": ["kern-migrations@0.7.1", "", { "peerDependencies": { "kern-db": "^0.8.0" } }, "sha512-Jgnzf5w5eUQ5jRyRG7OR73pKLlztRX+ZsgCMsF1F91VuRd77dz9VVWIG+4JgBc6Dk2FuQNiTHB+FEDZMmzOnGA=="],
 
-    "kern-orm": ["kern-orm@0.19.0", "", { "dependencies": { "kern-db": "^0.7.0" } }, "sha512-bp6LGoLb60HhPyCNC9NJLSgtW0ipH9esj+ZepYJMrkk3SVWRrDV/x2dxKzAXsVSIDh6yhV+97EM+5WAjEn2RnQ=="],
+    "kern-orm": ["kern-orm@0.20.0", "", { "dependencies": { "kern-db": "^0.8.0" } }, "sha512-wJOPWr23KDQVjKc+TQiMBDt8co3x0f1aQAUuMr9p2JdmrvyDpGOgnPcy5RC4V94Dj6G8iFzQ4kioRo2epFzE6w=="],
 
     "keyv": ["keyv@5.6.0", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw=="],
 

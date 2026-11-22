@@ -1,5 +1,5 @@
 // Settlement of a claim by the worker: complete, fail, or requeue, retried on a new connection while the worker owns the claim.
-import { ConnectionError, type Database, isOutcomeUnknown } from "kern-db"
+import { ConnectionError, isOutcomeUnknown } from "kern-orm/db"
 
 import type { Claim } from "../core/job"
 import type { JobTable } from "../core/schema"
@@ -11,6 +11,7 @@ import {
   requeue,
   type RequeueOutcome,
 } from "../core/settlement"
+import type { WorkerDb } from "../core/worker-db"
 
 import type { SettleOutcome, WorkerEvent } from "./events"
 import type { KeptLease } from "./heartbeat"
@@ -27,8 +28,8 @@ export type SettleAction =
 
 /** Options of a settlement. */
 export interface SettleOptions {
-  /** Database of the worker, whose pool runs complete and whose transaction runs fail. */
-  database: Pick<Database, "execute" | "transaction">
+  /** Worker database whose pool runs complete and whose transactions run fail and requeue. */
+  db: WorkerDb
   table: JobTable
   claim: Claim
   /** Lease of the claim, which the heartbeat keeps during the settlement. */
@@ -73,10 +74,10 @@ export async function settle(o: SettleOptions): Promise<SettleOutcome> {
 async function run(o: SettleOptions): Promise<"completed" | FailOutcome | RequeueOutcome> {
   switch (o.action.type) {
     case "complete":
-      return (await complete(o.database, o.table, o.claim)) ? "completed" : "fenced"
+      return (await complete(o.db, o.claim)) ? "completed" : "fenced"
     case "fail":
-      return await fail(o.database, o.table, o.claim, o.action.options)
+      return await fail(o.db.$database, o.table, o.claim, o.action.options)
     case "requeue":
-      return await requeue(o.database, o.table, o.claim)
+      return await requeue(o.db.$database, o.table, o.claim)
   }
 }

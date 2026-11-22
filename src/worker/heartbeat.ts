@@ -1,5 +1,5 @@
 // Leases of the claims of a worker: heartbeats in a session of their own, which holds the lock of the worker id, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
-import { type Database, type OpenedSession, QueryError } from "kern-db"
+import { type Database, type OpenedSession, QueryError } from "kern-orm/db"
 
 import type { ClaimRef } from "../core/job"
 import { heartbeat } from "../core/lease"

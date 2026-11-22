@@ -2,8 +2,8 @@
 // Configured by the FAULT_CONFIG environment variable.
 import { appendFileSync, existsSync } from "node:fs"
 
-import { type Driver, TransactionConnectionError } from "kern-db"
-import { getBackendPid } from "kern-db/testing"
+import { type Driver, TransactionConnectionError } from "kern-orm/db"
+import { getBackendPid } from "kern-orm/testing"
 
 import { createJobTable } from "../../core/schema"
 import { createTestDriver } from "../../core/testing"

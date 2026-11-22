@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
 
-import { createDatabase } from "kern-db"
-import { postgresJsDriver } from "kern-db/postgres-js"
 import { bindSchema, defineSchema } from "kern-orm"
+import { createDatabase } from "kern-orm/db"
+import { postgresJsDriver } from "kern-orm/db/postgres-js"
 import pg from "pg"
 import postgres from "postgres"
 

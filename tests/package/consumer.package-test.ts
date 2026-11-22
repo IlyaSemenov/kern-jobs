@@ -27,8 +27,8 @@ beforeAll(async () => {
   await writeFile(join(producer, "package.json"), JSON.stringify({ type: "module" }))
   // The dependencies, the clients, and the types come from the repository, without network.
   for (const name of [
-    "kern-db",
     "kern-migrations",
+    "kern-orm",
     "pg",
     "@types/pg",
     "postgres",

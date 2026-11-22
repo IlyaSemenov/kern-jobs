@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import type { Driver } from "kern-db"
+import type { Driver } from "kern-orm/db"
 
 import { claimPlain } from "../../core/claim"
 import { reap } from "../../core/lease"

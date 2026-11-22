@@ -1,7 +1,7 @@
 // Settlement by the worker: retries after connection loss with known and unknown outcomes, a lost claim, rejected statements, and giving up past the confirmed lease.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { ConnectionError, createDatabase, type Driver, QueryError } from "kern-db"
+import { ConnectionError, type Driver, QueryError } from "kern-orm/db"
 
 import { claimPlain } from "../core/claim"
 import { enqueue } from "../core/enqueue"
@@ -72,10 +72,10 @@ const failAction = { type: "fail", options: { error: "boom", backoff: 3600 } } a
 async function run({
   driver,
   ...o
-}: Partial<Omit<SettleOptions, "database">> & Pick<SettleOptions, "claim"> & { driver: Driver }) {
+}: Partial<Omit<SettleOptions, "db">> & Pick<SettleOptions, "claim"> & { driver: Driver }) {
   const events: WorkerEvent[] = []
   const outcome = await settle({
-    database: createDatabase({ driver }),
+    db: schema.createDb(driver),
     table: schema.table,
     lease: keptLease(o.claim),
     action: { type: "complete" },
@@ -92,7 +92,7 @@ for (const mode of ["before", "after"] as const) {
   test(`complete cut ${mode} it reaches the server: retried on a new connection, ${mode === "before" ? "completed" : "unknown"}`, async () => {
     const { proxy, driver } = await proxied()
     const claim = await claimJob()
-    proxy.cutNext(/^\s*delete from \S+\.job\b/, mode)
+    proxy.cutNext(/^delete from\s/i, mode)
     expect(await run({ driver, claim })).toEqual({
       outcome: mode === "before" ? "completed" : "unknown",
       errors: 1,
@@ -156,10 +156,10 @@ for (const unsent of [true, false]) {
     const { proxy, driver } = await proxied()
     const claim = await claimJob()
     if (unsent) proxy.refuse = true
-    else proxy.cutNext(/^\s*delete from \S+\.job\b/, "after")
+    else proxy.cutNext(/^delete from\s/i, "after")
     const events: WorkerEvent[] = []
     const outcome = await settle({
-      database: createDatabase({ driver }),
+      db: schema.createDb(driver),
       table: schema.table,
       claim,
       lease: keptLease(claim),
@@ -183,7 +183,7 @@ test("a statement that PostgreSQL keeps rejecting is given up after three retrie
   const rejecting: Driver = {
     ...schema.driver,
     execute: async statement => {
-      if (/^\s*delete from \S+\.job\b/.test(statement.text))
+      if (/^delete from\s/i.test(statement.text))
         throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
       return schema.driver.execute(statement)
     },
@@ -198,8 +198,7 @@ test("rejections after a statement of unknown outcome give up the settlement wit
   const driver: Driver = {
     ...schema.driver,
     execute: async statement => {
-      if (!/^\s*delete from \S+\.job\b/.test(statement.text))
-        return schema.driver.execute(statement)
+      if (!/^delete from\s/i.test(statement.text)) return schema.driver.execute(statement)
       if (deletes++ === 0) throw new ConnectionError("connection reset")
       throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
     },

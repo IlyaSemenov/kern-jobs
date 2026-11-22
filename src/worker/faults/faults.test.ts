@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { waitForLock, waitForLockedStatement } from "kern-db/testing"
+import { waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { claimPlain } from "../../core/claim"
 import { enqueue } from "../../core/enqueue"

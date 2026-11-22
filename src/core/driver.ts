@@ -1,5 +1,5 @@
 // Check of the driver of kern-db that an application passes.
-import { type Driver, isDriver } from "kern-db"
+import { type Driver, isDriver } from "kern-orm/db"
 
 /** Throws `TypeError` for a value that is not a driver of kern-db, such as a database client passed instead of its driver. */
 export function checkDriver(driver: unknown): asserts driver is Driver {

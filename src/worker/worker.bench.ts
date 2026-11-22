@@ -1,5 +1,6 @@
 // Measurements of the worker runtime: throughput of no-op handlers by concurrency against a bare claim-and-complete loop of the SQL core, and the cost of a heartbeat by the number of its claims against a plain UPDATE that waits for locks.
 // Run: bun --env-file=.env.test.local src/worker/worker.bench.ts
+
 import { claimCycle, claimPlain, createClaimState } from "../core/claim"
 import { heartbeat } from "../core/lease"
 import { complete } from "../core/settlement"
@@ -51,6 +52,7 @@ async function bareThroughput(concurrency: number): Promise<number> {
   const schema = await createTestSchema()
   await fill(schema, JOBS)
   const driver = schema.createDriver({ max: concurrency + 1 })
+  const db = schema.createDb(driver)
   const state = createClaimState()
   let left = JOBS
   const started = performance.now()
@@ -62,7 +64,7 @@ async function bareThroughput(concurrency: number): Promise<number> {
       undefined,
       state,
     )
-    await Promise.all(claims.map(c => complete(driver, schema.table, c)))
+    await Promise.all(claims.map(c => complete(db, c)))
     left -= claims.length
   }
   const ms = performance.now() - started

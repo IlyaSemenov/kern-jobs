@@ -1,5 +1,5 @@
 // Settlement of a claimed job: complete, fail with retry, merge, or a final failure, and requeue of a job whose attempt is given back.
-import type { Database } from "kern-db"
+import type { Database } from "kern-orm/db"
 
 import { NOW } from "./db"
 import { type FailureReason, insertFailureJobsSql } from "./failure"
@@ -7,19 +7,14 @@ import type { ClaimRef } from "./job"
 import type { JobTable } from "./schema"
 import { query, type StatementTarget } from "./statement"
 import { isUniqueViolation } from "./violation"
+import type { WorkerDb } from "./worker-db"
 
 /** Completes a job by deleting its active row; `false` means the claim was lost. */
-export async function complete(
-  db: StatementTarget,
-  table: JobTable,
-  c: ClaimRef,
-): Promise<boolean> {
-  const rows = await query(
-    db,
-    `delete from ${table.name} where id = $1::text::bigint and claim_id = $2::text::bigint and state = 'active' returning id`,
-    [c.id, c.claimId],
-  )
-  return rows.length === 1
+export async function complete(db: WorkerDb, c: ClaimRef): Promise<boolean> {
+  const count = await db.job
+    .where({ id: BigInt(c.id), claimId: BigInt(c.claimId), state: "active" })
+    .delete()
+  return count === 1
 }
 
 /** Outcome of a fail. */

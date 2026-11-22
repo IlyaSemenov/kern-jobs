@@ -32,10 +32,11 @@ Measurements come from single runs on one local machine without network, so they
 
 ## Drivers
 
+- [Typed table queries for simple worker mutations](drivers/worker-orm.md).
 - [Parameters and results as text](drivers/text-values.md).
 - [A transaction owns its connection](drivers/transaction-connection.md): a worker needs a pool.
 - [Enqueues through the client of the application](drivers/executor.md): its results are read by position, as text.
-- [The worker runs on the drivers of kern-db](drivers/kern-db-drivers.md): kern-db is a dependency, and kern-jobs gives its drivers in subpaths.
+- [The worker runs on the drivers of kern-db](drivers/kern-db-drivers.md): kern-jobs exposes the drivers supplied by kern-orm through its own subpaths.
 - [The worker takes a driver, not the database of the application](drivers/worker-takes-driver.md): its transactions stay out of those of the application.
 
 ## Migrations

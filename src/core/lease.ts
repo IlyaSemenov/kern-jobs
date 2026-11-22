@@ -1,5 +1,5 @@
 // Leases of claimed jobs: heartbeats that extend them, and the reaper that returns expired jobs or the jobs of a worker that has ended.
-import { isQueryError } from "kern-db"
+import { isQueryError } from "kern-orm/db"
 
 import { hook, NOW } from "./db"
 import { type FailureReason, insertFailureJobsSql } from "./failure"

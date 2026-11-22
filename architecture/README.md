@@ -43,7 +43,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - `kern-jobs/worker`, `worker.ts`, gives what only a worker process runs: `startWorker`, `waitForSignalAndStop` and `stopOnSignals`, the manifest and its check, the errors of handlers, the reason of an abort, and the type of a driver.
 - `kern-jobs/db/postgres-js` and `kern-jobs/db/node-postgres`, `db/postgres-js.ts` and `db/node-postgres.ts`, give the driver of kern-db over each client, which the worker and `migrateJobs` take.
 
-Importing `kern-jobs` or `kern-jobs/testing` loads neither kern-db, kern-migrations, nor a client library: these entries do not import them at runtime, and the statements of the main entry build their objects without `createStatement` of kern-db.
+Importing `kern-jobs` or `kern-jobs/testing` loads no database package (kern-db, kern-orm, or kern-migrations) or client library: these entries do not import them at runtime, and the statements of the main entry build their objects without `createStatement` of kern-db.
 The package test enqueues through the main entry, and records an enqueue and runs a handler through `kern-jobs/testing`, in a project that has none of them.
 
 ## Map
@@ -61,6 +61,6 @@ Module paths are relative to `src/`.
 - [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `core/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.
 - [Leases](leases.md): heartbeat, the reaper, and fencing; `core/lease.ts`.
 - [PostgreSQL](postgresql.md): supported versions, isolation, transactions, and time; `core/db.ts`.
-- [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `db/`, `core/driver.ts`, `core/statement.ts`, and `core/violation.ts`.
+- [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `db/`, `core/driver.ts`, `core/worker-db.ts`, `core/statement.ts`, and `core/violation.ts`.
 - [Testing](testing.md): the test double of the jobs API and the run of a handler in a test; `testing/`.
 - [Worker](worker.md): the worker of an application and its runtime: options, implementations of tasks and the manifest, handler errors and backoff, the check of the schema, slots, claiming, leases, settlement, the reaper, stopping, and errors; `worker/`, `task/manifest.ts`, `task/errors.ts`, and `task/backoff.ts`.

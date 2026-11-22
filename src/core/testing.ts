@@ -1,3 +1,4 @@
+import { migrate } from "kern-migrations"
 // Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, breakpoints inside statements, virtual time, and seeded random inputs.
 // Test connections do not add the test schema to `search_path`, so statements must qualify their names.
 import {
@@ -6,11 +7,11 @@ import {
   createStatement,
   type Database,
   type Driver,
+  isDriver,
   type SqlStatement,
-} from "kern-db"
-import { postgresJsDriver } from "kern-db/postgres-js"
-import { getBackendPid } from "kern-db/testing"
-import { migrate } from "kern-migrations"
+} from "kern-orm/db"
+import { postgresJsDriver } from "kern-orm/db/postgres-js"
+import { getBackendPid } from "kern-orm/testing"
 import postgres from "postgres"
 import { uniformFloat64 } from "pure-rand/distribution/uniformFloat64"
 import { uniformInt } from "pure-rand/distribution/uniformInt"
@@ -22,6 +23,7 @@ import { quoteIdentifier } from "./db"
 import { jobColumns, type JobRow, toJob } from "./job"
 import { createJobTable, type JobTable } from "./schema"
 import { query, type StatementTarget } from "./statement"
+import { bindWorkerDb, type WorkerDb } from "./worker-db"
 
 /** Returns the URL of the test database. */
 export function databaseUrl(): string {
@@ -143,8 +145,12 @@ export interface TestSchema {
   driver: Driver
   /** Database over `driver`, for fail, which runs in its transaction; closing it would close `driver`. */
   database: Database
+  /** Worker ORM schema bound to `database`. */
+  db: WorkerDb
   /** Creates another pool of the schema, which `dispose` ends. */
   createDriver(options?: TestDriverOptions): Driver
+  /** Creates a worker database over the given driver or a new pool with the given options. */
+  createDb(source: Driver | TestDriverOptions): WorkerDb
   connect(options?: TestDriverOptions): Promise<Conn>
   /** Connection for setup, checks, and observation. */
   admin: Conn
@@ -167,6 +173,11 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
     return c
   }
   const drivers = [createTestDriver(url, schemaName)]
+  function createDriver(options?: TestDriverOptions): Driver {
+    const driver = createTestDriver(url, schemaName, options)
+    drivers.push(driver)
+    return driver
+  }
   const database = createDatabase({ driver: drivers[0]! })
   await migrate(database, jobMigrations, { schemaName })
   const admin = await connect()
@@ -176,10 +187,11 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
     table: createJobTable(schemaName),
     driver: drivers[0]!,
     database,
-    createDriver(options) {
-      const driver = createTestDriver(url, schemaName, options)
-      drivers.push(driver)
-      return driver
+    db: bindWorkerDb(database, schemaName),
+    createDriver,
+    createDb(source) {
+      const driver = isDriver(source) ? source : createDriver(source)
+      return bindWorkerDb(createDatabase({ driver }), schemaName)
     },
     connect,
     admin,

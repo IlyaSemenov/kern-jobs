@@ -1,8 +1,8 @@
 // Claiming: the tasks of the worker, the queue mutex by (scope, queue), start order, skipping a busy head, a stale snapshot under a breakpoint, a stress test that checks the actual overlap of handlers, fairness of the claim cycle under a continuous inflow, claims committed before a later statement of their cycle fails, and the advisory locks of claimQueued under different plans.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { ConnectionError } from "kern-db"
-import { waitForLock } from "kern-db/testing"
+import { ConnectionError } from "kern-orm/db"
+import { waitForLock } from "kern-orm/testing"
 
 import { claimCycle, type ClaimCycleStats, claimQueued, createClaimState } from "./claim"
 import { enqueue } from "./enqueue"
@@ -10,7 +10,6 @@ import type { Claim } from "./job"
 import { complete } from "./settlement"
 import { query, type StatementTarget } from "./statement"
 import {
-  type Conn,
   createRandom,
   createTestSchema,
   holdHook,
@@ -23,6 +22,7 @@ import {
   type TestSchema,
 } from "./testing"
 import { isUniqueViolation } from "./violation"
+import type { WorkerDb } from "./worker-db"
 
 let schema: TestSchema
 beforeEach(async () => {
@@ -131,7 +131,7 @@ describe("start order", () => {
     await query(a, "commit")
     expect((await claimQueued(b, schema.table, { ...W("b"), now: T(5) })).kind).toBe("none")
     if (ra.kind !== "job") throw new Error()
-    expect(await complete(a, schema.table, ra.claim)).toBe(true)
+    expect(await complete(schema.db, ra.claim)).toBe(true)
     const rb2 = await claimQueued(b, schema.table, { ...W("b"), now: T(5) })
     expect(rb2.kind === "job" && rb2.claim.id).toBe(j2.id)
   })
@@ -305,11 +305,11 @@ describe("start order", () => {
   })
 })
 
-/** Serializes access to one connection from several async paths. */
-function serial(conn: Conn) {
+/** Serializes statements on one worker database across concurrent handlers. */
+function serial(db: WorkerDb) {
   let chain: Promise<unknown> = Promise.resolve()
-  return <T>(fn: (c: Conn) => Promise<T>): Promise<T> => {
-    const p = chain.then(() => fn(conn))
+  return <T>(fn: (db: WorkerDb) => Promise<T>): Promise<T> => {
+    const p = chain.then(() => fn(db))
     chain = p.catch(() => {})
     return p
   }
@@ -359,16 +359,16 @@ describe("stress", () => {
     const started = performance.now()
     await Promise.all(
       Array.from({ length: 8 }, async (_, wi) => {
-        const run = serial(await schema.connect())
+        const run = serial(schema.createDb({ max: 1 }))
         const inflight = new Set<Promise<void>>()
         const claimState = createClaimState()
         while (done < queued + plain) {
           const free = 4 - inflight.size
           const claims =
             free > 0
-              ? await run(c =>
+              ? await run(db =>
                   claimCycle(
-                    c,
+                    db.$database,
                     schema.table,
                     { worker: `w${wi}`, tasks: ["t"], slots: free },
                     stats,
@@ -382,7 +382,7 @@ describe("stress", () => {
             const p = (async () => {
               await handle(claim)
               // The handler ended before complete is sent: the next claim of the queue is possible only after the commit.
-              if (await run(c => complete(c, schema.table, claim))) {
+              if (await run(db => complete(db, claim))) {
                 completed.set(claim.id, (completed.get(claim.id) ?? 0) + 1)
                 done++
               }
@@ -449,7 +449,7 @@ async function simulate(o: {
         const wait = step - (c.job.run_at.getTime() - T(0).getTime()) / 1000
         maxWait.set(c.job.queue, Math.max(maxWait.get(c.job.queue) ?? 0, wait))
       } else plain++
-      await complete(schema.admin, schema.table, c)
+      await complete(schema.db, c)
     }
   }
   return { plain, queued, perQueue, maxWait }
@@ -522,7 +522,7 @@ describe("queue references", () => {
         ),
       )
       order.push(claim.job.queue)
-      await complete(schema.admin, schema.table, claim)
+      await complete(schema.db, claim)
     }
     expect(order).toEqual(["a\x1fb", "c", "a\x1fb", "c"])
   })

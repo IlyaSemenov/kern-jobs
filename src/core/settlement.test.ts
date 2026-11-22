@@ -1,8 +1,8 @@
-// Fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
+// Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { createDatabase, type Driver, TransactionConnectionError } from "kern-db"
-import { getBackendPid, waitForLock } from "kern-db/testing"
+import { createDatabase, type Driver, TransactionConnectionError } from "kern-orm/db"
+import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { claimCycle, claimPlain } from "./claim"
 import { enqueue } from "./enqueue"
@@ -29,6 +29,19 @@ afterEach(async () => {
 })
 
 const W = { worker: "w1", tasks: ["t"] }
+
+test("complete matches both bigint ids beyond the safe integer range", async () => {
+  await query(
+    schema.admin,
+    `alter table ${schema.table.name} alter column id restart with 9007199254740993`,
+  )
+  await query(schema.admin, `alter sequence ${schema.table.sequence} restart with 9007199254740995`)
+  await enqueue(schema.admin, schema.table, { task: "t" })
+  const claim = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1 }))
+  expect([claim.id, claim.claimId]).toEqual(["9007199254740993", "9007199254740995"])
+  expect(await complete(schema.db, { ...claim, claimId: "9007199254740994" })).toBe(false)
+  expect(await complete(schema.db, claim)).toBe(true)
+})
 
 /** A is active, and B is pending with the same key. */
 async function activeWithPending(o: { maxAttempts?: number; mode?: KeyMode } = {}) {
@@ -534,11 +547,14 @@ describe("settlements of different handlers on one driver", () => {
     const claims = await claimPlain(schema.driver, schema.table, { ...W, limit: 2, now: T(0) })
     const a = claims.find(c => c.id === keyed.id)
     const b = claims.find(c => c.id !== keyed.id)
-    let completed: boolean | undefined
+    // A different handler starts its settlement outside the ambient fail transaction.
+    const start = Promise.withResolvers<void>()
+    const completed = start.promise.then(() => complete(schema.db, b!))
     const outcome = await failRolledBackOnce(a!, async () => {
-      completed = await complete(schema.driver, schema.table, b!)
+      start.resolve()
+      await completed
     })
-    expect([completed, outcome]).toEqual([true, "superseded"])
+    expect([await completed, outcome]).toEqual([true, "superseded"])
     expect(await jobs(schema, `id = ${b!.id}`)).toEqual([])
   })
 

@@ -1,7 +1,7 @@
 // Leases: the reaper with an existing pending job, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { waitForLock, waitForLockedStatement } from "kern-db/testing"
+import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { claimCycle, claimPlain } from "./claim"
 import { enqueue } from "./enqueue"
@@ -361,8 +361,8 @@ describe("fencing", () => {
       confirmed: [],
       busy: [],
     })
-    expect(await complete(schema.admin, schema.table, a)).toBe(false)
-    expect(await complete(schema.admin, schema.table, again)).toBe(true)
+    expect(await complete(schema.db, a)).toBe(false)
+    expect(await complete(schema.db, again)).toBe(true)
   })
 
   test("ABA: same worker reclaims after reap and resetAttempts; (id, worker, attempts) would match, claim_id does not", async () => {
@@ -385,8 +385,8 @@ describe("fencing", () => {
       first.job.locked_by,
       first.job.attempts,
     ])
-    expect(await complete(schema.admin, schema.table, first)).toBe(false)
-    expect(await complete(schema.admin, schema.table, second)).toBe(true)
+    expect(await complete(schema.db, first)).toBe(false)
+    expect(await complete(schema.db, second)).toBe(true)
   })
 
   test("heartbeat in flight: reaper skips the locked row, lease is extended", async () => {
@@ -408,7 +408,8 @@ describe("fencing", () => {
   test("reaper in flight: heartbeat reports the claim busy without waiting, complete waits; then both see it lost", async () => {
     const { a } = await expiredWithPending({ withPending: false })
     const reaper = await schema.connect()
-    const worker = await schema.connect()
+    const worker = schema.createDb({ max: 1 })
+    const workerPid = await getBackendPid(worker.$database)
     await query(reaper, "begin")
     await reap(reaper, schema.table, { now: T(11) })
     const claims = [{ ...a, lease: 10 }]
@@ -416,8 +417,8 @@ describe("fencing", () => {
       confirmed: [],
       busy: [a.claimId],
     })
-    const done = complete(worker, schema.table, a)
-    await waitForLock(schema.admin, worker.pid)
+    const done = complete(worker, a)
+    await waitForLock(schema.admin, workerPid)
     await query(reaper, "commit")
     expect(await done).toBe(false)
     expect(await heartbeat(schema.admin, schema.table, { claims, now: T(11) })).toEqual({
@@ -537,7 +538,7 @@ describe("ownership after lease expiry and before reclaim", () => {
       schema.admin,
       `update ${schema.table.name} set lease_until = now() - interval '1 second'`,
     )
-    expect(await complete(schema.admin, schema.table, a)).toBe(true)
+    expect(await complete(schema.db, a)).toBe(true)
   })
 
   test("heartbeat after lease expiry revives the lease and the reaper skips the row", async () => {

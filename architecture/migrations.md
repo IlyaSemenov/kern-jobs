@@ -3,6 +3,8 @@
 The schema of kern-jobs, the job table with its claim sequence and its indexes ([Data model](data-model.md)), is created and changed by migrations of [kern-migrations](https://github.com/IlyaSemenov/kern-orm/blob/kern-migrations%400.4.1/architecture/migrations.md).
 kern-jobs keeps their history and applies it itself, on a driver of kern-db, rather than give their SQL to the migration tool of the application ([decision](../decisions/migrations/own-history.md)).
 
+The column names, types, and nullability declared in `core/worker-db.ts` must match the job table created by the migrations.
+
 ## History
 
 - `migration/migrations.ts` defines the history from loaders of the migrations of `migration/migrations/`, each the default export of a module named by its key, such as `0001_create_job`, so that a worker that checks the schema loads none of them.
@@ -37,7 +39,8 @@ kern-jobs keeps their history and applies it itself, on a driver of kern-db, rat
 
 ## Dependencies
 
-- kern-migrations and kern-db are dependencies of kern-jobs; kern-migrations requires kern-db as a peer, which the dependency of kern-jobs gives.
+- kern-jobs depends on kern-migrations and kern-orm.
+  The kern-db version used by kern-orm must satisfy the peer dependency of kern-migrations.
 - `kern-jobs/migrations` and `kern-jobs/worker` load kern-migrations, and the main entry does not.
 
 ## Tests

@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { hostname } from "node:os"
 
-import { type Driver, isQueryError, QueryError } from "kern-db"
-import { waitForLockedStatement } from "kern-db/testing"
+import { type Driver, isQueryError, QueryError } from "kern-orm/db"
+import { waitForLockedStatement } from "kern-orm/testing"
 
 import { claimPlain } from "../core/claim"
 import { enqueue } from "../core/enqueue"

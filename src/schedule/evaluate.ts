@@ -1,4 +1,4 @@
-import type { Database } from "kern-db"
+import type { Database } from "kern-orm/db"
 
 import { quoteIdentifier } from "../core/db"
 import { enqueue } from "../core/enqueue"

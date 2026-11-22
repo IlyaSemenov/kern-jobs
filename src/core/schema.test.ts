@@ -10,6 +10,7 @@ import { enqueue } from "./enqueue"
 import { checkSchemaName } from "./schema"
 import { complete } from "./settlement"
 import { createTestSchema, only } from "./testing"
+import { bindWorkerDb } from "./worker-db"
 
 test("the statements of the core run in a schema whose name needs quoting", async () => {
   const schema = await createTestSchema()
@@ -21,7 +22,7 @@ test("the statements of the core run in a schema whose name needs quoting", asyn
       await claimPlain(schema.admin, table, { worker: "w", tasks: ["t"], limit: 1 }),
     )
     expect(claim.id).toBe(id)
-    expect(await complete(schema.admin, table, claim)).toBe(true)
+    expect(await complete(bindWorkerDb(schema.database, table.schemaName), claim)).toBe(true)
   } finally {
     await schema.dispose()
   }

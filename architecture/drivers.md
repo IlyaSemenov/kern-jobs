@@ -1,6 +1,6 @@
 # Drivers
 
-The worker talks to PostgreSQL through a driver of kern-db, which kern-jobs gives from its dependency on kern-db: `postgresJsDriver` of `kern-jobs/db/postgres-js` over a postgres.js 4 client or `nodePostgresDriver` of `kern-jobs/db/node-postgres` over a node-postgres 8 pool ([decision](../decisions/drivers/kern-db-drivers.md)).
+The worker talks to PostgreSQL through a driver of kern-db, which kern-jobs gives through the database entry points of kern-orm: `postgresJsDriver` of `kern-jobs/db/postgres-js` over a postgres.js 4 client or `nodePostgresDriver` of `kern-jobs/db/node-postgres` over a node-postgres 8 pool ([decision](../decisions/drivers/kern-db-drivers.md)).
 [`migrateJobs`](migrations.md#migratejobs) takes such a driver too.
 Enqueues of the public API run instead on the client of the application ([Producer](producer.md#client)).
 
@@ -22,12 +22,18 @@ kern-db keeps the [contract of its drivers](https://github.com/IlyaSemenov/kern-
 
 ## Statements
 
-The core runs its statements through `query` of `core/statement.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
+`kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `core/worker-db.ts` to its database in the configured PostgreSQL schema at startup.
+Worker ORM definitions use camelCase keys and map them to snake_case PostgreSQL columns with `toSnakeCase`.
+Simple worker mutations such as complete use typed table queries on this database ([decision](../decisions/drivers/worker-orm.md)).
+Operations that depend on the shape of a statement, including the locks and index scans of a claim, use hand-written SQL.
+Producer statements use SQL that the application client can execute directly.
+
+For raw SQL with named result columns, the core runs its statements through `query` of `core/statement.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
 A statement that also runs on the executor of an application, such as an enqueue, runs through `queryValues`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
-- Every statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
-- A statement names the job table and its claim sequence by `JobTable` of `core/schema.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
-- A statement returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
+- Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
+- Hand-written SQL names the job table and its claim sequence by `JobTable` of `core/schema.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
+- Hand-written SQL returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
 
 ## Connections of the worker
 

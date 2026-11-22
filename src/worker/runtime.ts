@@ -1,6 +1,6 @@
 // Runtime of a worker: checks its schema, returns the jobs of a previous worker of its id, claims jobs of its tasks into free slots, runs their handlers under kept leases, settles them, runs the reaper, and tells its readiness and state.
 // Claims and settlements use the pool of the worker; heartbeats use a connection of their own.
-import { createDatabase, type Database, type Driver } from "kern-db"
+import { createDatabase, type Database, type Driver } from "kern-orm/db"
 
 import { claimCycle, createClaimState } from "../core/claim"
 import type { Claim, JobRow } from "../core/job"
@@ -8,6 +8,7 @@ import { reap } from "../core/lease"
 import type { JobTable } from "../core/schema"
 import type { FailOptions } from "../core/settlement"
 import { query, type StatementTarget } from "../core/statement"
+import { bindWorkerDb } from "../core/worker-db"
 import { evaluateSchedule } from "../schedule/evaluate"
 import type { WorkerSchedule } from "../schedule/schedule"
 import { type Backoff, defaultBackoff } from "../task/backoff"
@@ -215,6 +216,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
   // The worker never closes it, since that would close the driver.
   const onReleaseError = (error: unknown) => emit({ type: "release-error", error })
   const database = createDatabase({ driver: o.driver, onReleaseError })
+  const db = bindWorkerDb(database, o.table.schemaName)
 
   interface Execution {
     lease: KeptLease
@@ -321,7 +323,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
     execution.done = (async () => {
       const action = await run()
       const outcome = await settle({
-        database,
+        db,
         table: o.table,
         claim,
         lease: kept,

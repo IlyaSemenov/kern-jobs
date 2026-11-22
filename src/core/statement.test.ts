@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
 
-import { postgresJsDriver } from "kern-db/postgres-js"
+import { postgresJsDriver } from "kern-orm/db/postgres-js"
 import postgres from "postgres"
 
 import { query, queryValues } from "./statement"

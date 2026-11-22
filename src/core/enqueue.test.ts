@@ -1,7 +1,7 @@
 // Enqueue: key modes, the uniqueness of pending keys under concurrent producers, events during `active`, the pending row held by an uncommitted enqueue, and trailing-edge debounce with maxWait on virtual time.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { waitForLock } from "kern-db/testing"
+import { waitForLock } from "kern-orm/testing"
 
 import { claimPlain } from "./claim"
 import { enqueue, enqueueMany, type EnqueueParams } from "./enqueue"
@@ -401,7 +401,7 @@ describe("event during active", () => {
       ["active", "k", 1],
       ["pending", "k", 2],
     ])
-    expect(await complete(schema.admin, schema.table, claim)).toBe(true)
+    expect(await complete(schema.db, claim)).toBe(true)
     expect((await jobs(schema)).map(r => r.id)).toEqual([b.id])
   })
 
@@ -563,7 +563,7 @@ async function runTicks(
         const r = (await o.onClaim?.(claim, tick)) ?? "done"
         if (r === "done") {
           ledger.execute(claim, tick)
-          expect(await complete(conn, schema.table, claim)).toBe(true)
+          expect(await complete(schema.db, claim)).toBe(true)
         }
       }
     }
@@ -861,7 +861,7 @@ describe("debounce under concurrency", () => {
             now: T(tick),
           })) {
             ledger.executions.push({ id: claim.id, key: keyOf(claim), start: tick, events: [] })
-            await complete(worker, schema.table, claim)
+            await complete(schema.db, claim)
           }
         })(),
       ])

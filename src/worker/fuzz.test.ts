@@ -10,7 +10,7 @@
 // - after the drain, each failure job completed after a handler of it returned, or failed for good by its own budget.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import type { Driver } from "kern-db"
+import type { Driver } from "kern-orm/db"
 
 import { enqueue } from "../core/enqueue"
 import type { KeyMode } from "../core/job"
