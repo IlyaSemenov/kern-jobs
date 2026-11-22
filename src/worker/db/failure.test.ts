@@ -7,7 +7,6 @@ import { waitForLock } from "kern-orm/testing"
 import { retryFailedJob } from "../../producer/administration"
 import { enqueue } from "../../sql/enqueue"
 import type { JobRow, KeyMode } from "../../sql/job"
-import { query } from "../../sql/statement"
 import {
   createTestSchema,
   holdHook,
@@ -19,6 +18,7 @@ import {
 
 import { type Claim, claimCycle, type ClaimOptions, claimPlain } from "./claim"
 import { reap } from "./lease"
+import { query } from "./query"
 import { fail, requeue } from "./settlement"
 
 let schema: TestSchema

@@ -11,9 +11,10 @@ import {
 } from "kern-orm/db"
 
 import { createJobTable } from "../sql/job-table"
-import { query, type TextRow } from "../sql/statement"
+import type { TextRow } from "../sql/statement"
 
 import type { ClaimRef } from "./db/claim"
+import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"

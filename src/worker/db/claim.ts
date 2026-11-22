@@ -4,8 +4,9 @@
 import { jobColumns, type JobRow, toJob } from "../../sql/job"
 import type { JobTable } from "../../sql/job-table"
 import { hook, NOW } from "../../sql/postgres"
-import { query, type StatementTarget, type TextRow } from "../../sql/statement"
+import type { TextRow } from "../../sql/statement"
 
+import { query, type StatementTarget } from "./query"
 import { isUniqueViolation } from "./violation"
 
 /** Claimed job with its claim id, which every heartbeat and settlement of the claim must match. */

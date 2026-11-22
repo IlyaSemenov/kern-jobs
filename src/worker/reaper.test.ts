@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { enqueue } from "../sql/enqueue"
-import { query } from "../sql/statement"
 import {
   createTestDriver,
   createTestSchema,
@@ -13,6 +12,7 @@ import {
 } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
+import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { proxyTo } from "./faults/proxy"
 import { startReaper } from "./reaper"

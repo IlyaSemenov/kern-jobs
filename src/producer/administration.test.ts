@@ -5,7 +5,6 @@ import { waitForLock } from "kern-orm/testing"
 
 import { enqueue, type EnqueueParams } from "../sql/enqueue"
 import type { KeyMode } from "../sql/job"
-import { query } from "../sql/statement"
 import {
   type Conn,
   createTestSchema,
@@ -17,6 +16,7 @@ import {
 } from "../test-harness/database"
 import { claimCycle, claimPlain } from "../worker/db/claim"
 import { reap } from "../worker/db/lease"
+import { query } from "../worker/db/query"
 import { fail } from "../worker/db/settlement"
 import { isUniqueViolation } from "../worker/db/violation"
 

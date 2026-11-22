@@ -2,10 +2,10 @@
 import { type Database, type OpenedSession, QueryError } from "kern-orm/db"
 
 import type { JobTable } from "../sql/job-table"
-import { query, type StatementTarget } from "../sql/statement"
 
 import type { ClaimRef } from "./db/claim"
 import { heartbeat } from "./db/lease"
+import { query, type StatementTarget } from "./db/query"
 import type { AbortReason, WorkerEvent } from "./events"
 import { type Loop, maxTimerDelay, monotonicNow, startLoop } from "./loop"
 

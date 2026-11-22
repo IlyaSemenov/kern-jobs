@@ -4,7 +4,6 @@ import { createDatabase } from "kern-orm/db"
 
 import { defineSchedule, type Schedule, toWorkerSchedule } from "../../schedule/schedule"
 import { enqueue } from "../../sql/enqueue"
-import { query } from "../../sql/statement"
 import { defineTask } from "../../task/task"
 import {
   createTestDriver,
@@ -17,6 +16,7 @@ import {
 import { proxyTo } from "../faults/proxy"
 
 import { claimPlain } from "./claim"
+import { query } from "./query"
 import { evaluateSchedule } from "./schedule"
 import { complete } from "./settlement"
 

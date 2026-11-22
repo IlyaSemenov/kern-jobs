@@ -9,7 +9,6 @@ import pg from "pg"
 
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { enqueue } from "../sql/enqueue"
-import { query } from "../sql/statement"
 import { RetryError, TerminalError } from "../task/errors"
 import { defineTask } from "../task/task"
 import {
@@ -24,6 +23,7 @@ import {
 } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
+import { query } from "./db/query"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"

@@ -3,11 +3,12 @@ import { isQueryError } from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
 import { hook, NOW } from "../../sql/postgres"
-import { type Param, query, type StatementTarget } from "../../sql/statement"
+import type { Param } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import { insertFailureJobsSql } from "./failure"
+import { query, type StatementTarget } from "./query"
 import { isUniqueViolation } from "./violation"
 
 /** Claim that a heartbeat extends, with its lease in seconds. */

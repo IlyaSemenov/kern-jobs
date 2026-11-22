@@ -14,7 +14,6 @@ import type { Driver } from "kern-orm/db"
 
 import { enqueue } from "../sql/enqueue"
 import type { KeyMode } from "../sql/job"
-import { query } from "../sql/statement"
 import { TerminalError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
 import {
@@ -27,6 +26,7 @@ import {
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 
+import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { startRuntime, type Worker, type WorkerTask } from "./runtime"

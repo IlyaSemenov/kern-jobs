@@ -5,8 +5,9 @@ import type { WorkerSchedule } from "../../schedule/schedule"
 import { enqueue } from "../../sql/enqueue"
 import type { JobTable } from "../../sql/job-table"
 import { quoteIdentifier } from "../../sql/postgres"
-import { query } from "../../sql/statement"
 import { getTaskEnqueueParams } from "../../task/options"
+
+import { query } from "./query"
 
 /** Options of `evaluateSchedule`. */
 export interface EvaluateOptions {

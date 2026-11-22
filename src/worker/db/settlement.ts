@@ -3,12 +3,12 @@ import type { Database } from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
 import { NOW } from "../../sql/postgres"
-import { query, type StatementTarget } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import type { WorkerDb } from "./db"
 import { insertFailureJobsSql } from "./failure"
+import { query, type StatementTarget } from "./query"
 import { isUniqueViolation } from "./violation"
 
 /** Completes a job by deleting its active row; `false` means the claim was lost. */

@@ -5,7 +5,6 @@ import { ConnectionError } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
-import { query, type StatementTarget } from "../../sql/statement"
 import {
   createTestSchema,
   holdHook,
@@ -27,6 +26,7 @@ import {
   createClaimState,
 } from "./claim"
 import type { WorkerDb } from "./db"
+import { query, type StatementTarget } from "./query"
 import { complete } from "./settlement"
 import { isUniqueViolation } from "./violation"
 

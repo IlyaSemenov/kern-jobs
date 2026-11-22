@@ -9,7 +9,6 @@ import pg from "pg"
 import postgres from "postgres"
 
 import type { EnqueueResult } from "../sql/enqueue"
-import { query } from "../sql/statement"
 import { defineTask } from "../task/task"
 import {
   createTestSchema,
@@ -18,6 +17,7 @@ import {
   only,
   type TestSchema,
 } from "../test-harness/database"
+import { query } from "../worker/db/query"
 
 import type { JobsClient } from "./client"
 import {

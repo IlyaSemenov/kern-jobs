@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
-import { query } from "../../sql/statement"
 import {
   createTestSchema,
   holdHook,
@@ -18,6 +17,7 @@ import {
 
 import { claimCycle, claimPlain } from "./claim"
 import { heartbeat, reap } from "./lease"
+import { query } from "./query"
 import { complete, fail } from "./settlement"
 import { isUniqueViolation } from "./violation"
 

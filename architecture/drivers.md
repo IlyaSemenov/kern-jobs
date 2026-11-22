@@ -28,8 +28,8 @@ Simple worker mutations such as complete use typed table queries on this databas
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, use hand-written SQL.
 Producer statements use SQL that the application client can execute directly.
 
-For raw SQL with named result columns, the core runs its statements through `query` of `sql/statement.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
-A statement that also runs on the executor of an application, such as an enqueue, runs through `queryValues`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
+For raw SQL with named result columns, the worker runs its statements through `query` of `worker/db/query.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
+A statement that also runs on the executor of an application, such as an enqueue, runs through `queryValues` of `sql/statement.ts`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
 - Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
 - Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).

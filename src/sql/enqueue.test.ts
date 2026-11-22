@@ -15,11 +15,12 @@ import {
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { type Claim, claimPlain } from "../worker/db/claim"
+import { query } from "../worker/db/query"
 import { complete, fail } from "../worker/db/settlement"
 
 import { enqueue, enqueueMany, type EnqueueParams } from "./enqueue"
 import type { KeyMode } from "./job"
-import { query, type ValuesTarget } from "./statement"
+import type { ValuesTarget } from "./statement"
 
 let schema: TestSchema
 beforeEach(async () => {

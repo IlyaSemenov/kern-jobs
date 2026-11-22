@@ -7,7 +7,6 @@ import { join } from "node:path"
 import { waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
-import { query } from "../../sql/statement"
 import {
   createTestSchema,
   databaseUrl,
@@ -18,6 +17,7 @@ import {
 } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
+import { query } from "../db/query"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"

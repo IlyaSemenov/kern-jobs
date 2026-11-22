@@ -7,10 +7,10 @@ import { join } from "node:path"
 import type { Driver } from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
-import { query } from "../../sql/statement"
 import { createTestSchema, sleep, type TestSchema } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
+import { query } from "../db/query"
 
 import type { WorkerConfig } from "./worker"
 

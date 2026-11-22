@@ -18,8 +18,8 @@ import { jobMigrations } from "../migration/migrations"
 import { jobColumns, type JobRow, toJob } from "../sql/job"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier } from "../sql/postgres"
-import { query, type StatementTarget } from "../sql/statement"
 import { bindWorkerDb, type WorkerDb } from "../worker/db/db"
+import { query, type StatementTarget } from "../worker/db/query"
 
 /** Returns the URL of the test database. */
 export function databaseUrl(): string {

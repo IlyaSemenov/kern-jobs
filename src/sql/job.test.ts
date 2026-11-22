@@ -6,10 +6,10 @@ import { isQueryError } from "kern-orm/db"
 import { createTestSchema, jobs, only, T, type TestSchema } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimQueued } from "../worker/db/claim"
+import { query } from "../worker/db/query"
 import { fail } from "../worker/db/settlement"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
-import { query } from "./statement"
 
 let schema: TestSchema
 beforeEach(async () => {

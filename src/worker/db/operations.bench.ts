@@ -3,11 +3,11 @@
 
 import { enqueue } from "../../sql/enqueue"
 import type { KeyMode } from "../../sql/job"
-import { query } from "../../sql/statement"
 import { createTestSchema, type TestSchema } from "../../test-harness/database"
 
 import { claimCycle, claimPlain, claimQueued } from "./claim"
 import { reap } from "./lease"
+import { query } from "./query"
 import { complete, fail } from "./settlement"
 
 const percentile = (xs: number[], p: number) =>

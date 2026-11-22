@@ -2,9 +2,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { createTestSchema, type TestSchema } from "../test-harness/database"
+import { query } from "../worker/db/query"
 
 import { quoteIdentifier } from "./postgres"
-import { query, type TextRow } from "./statement"
+import type { TextRow } from "./statement"
 
 let schema: TestSchema
 beforeEach(async () => {

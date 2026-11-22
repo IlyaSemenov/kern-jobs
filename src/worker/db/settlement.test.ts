@@ -6,7 +6,6 @@ import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
 import type { KeyMode } from "../../sql/job"
-import { query } from "../../sql/statement"
 import {
   createTestDriver,
   createTestSchema,
@@ -19,6 +18,7 @@ import {
 
 import { type Claim, claimCycle, claimPlain } from "./claim"
 import { reap } from "./lease"
+import { query } from "./query"
 import { complete, fail, requeue } from "./settlement"
 
 let schema: TestSchema

@@ -1,14 +1,17 @@
-// Statements of the core: parameters encoded as text, and rows read by the names of their columns on a driver, or by the position of their values on a driver or the executor of an application.
-import type { Connection, SqlStatement, TextValue } from "kern-orm/db"
+// Statements of the core: parameters encoded as text, and rows read by the position of their values on a driver, a database, or the executor of an application.
+// The main entry runs these statements, so this module must not import kern-db or kern-orm, not even their types.
 
-/** Target of the statements of the core: a driver, which runs them on any connection of its pool, or a connection. */
-export type StatementTarget = Pick<Connection, "execute">
+/** Statement of the core: its text and the text of each parameter, which a driver or a database of kern-db takes as its `SqlStatement`. */
+export interface Statement {
+  readonly text: string
+  readonly parameters: readonly (string | null)[]
+}
 
 /**
- * Target of a statement whose rows the core reads by the position of their values: a statement target, or the executor of an application through `fromExecutor`, whose client may rename the columns.
+ * Target of a statement whose rows the core reads by the position of their values: a driver, a connection, or a database of kern-db, or the executor of an application through `fromExecutor`, whose client may rename the columns.
  */
 export interface ValuesTarget {
-  execute(statement: SqlStatement): Promise<{ readonly rows: readonly (readonly TextValue[])[] }>
+  execute(statement: Statement): Promise<{ readonly rows: readonly (readonly (string | null)[])[] }>
 }
 
 /** Value of a statement parameter, which `encodeParam` turns into text. */
@@ -30,29 +33,9 @@ export function encodeParam(value: Param): string | null {
   return `{${value.map(item => `"${item.replace(/[\\"]/g, "\\$&")}"`).join(",")}}`
 }
 
-/**
- * Builds a statement with parameters that `encodeParam` turns into text.
- *
- * It builds the object itself rather than with `createStatement` of kern-db, so that the enqueue of the main entry does not load kern-db.
- */
-function toStatement(text: string, params: readonly Param[]): SqlStatement {
+/** Builds a statement with parameters that `encodeParam` turns into text. */
+export function toStatement(text: string, params: readonly Param[]): Statement {
   return { text, parameters: params.map(encodeParam) }
-}
-
-/**
- * Executes a statement with parameters that `encodeParam` turns into text, and returns its rows by the names of their columns; of several columns of one name, the last one wins.
- */
-export async function query(
-  target: StatementTarget,
-  text: string,
-  params: readonly Param[] = [],
-): Promise<TextRow[]> {
-  const { columns, rows } = await target.execute(toStatement(text, params))
-  return rows.map(values => {
-    const row: TextRow = {}
-    columns.forEach(({ name }, i) => (row[name] = values[i] ?? null))
-    return row
-  })
 }
 
 /** Executes a statement with parameters that `encodeParam` turns into text, and returns its rows as arrays of values. */
@@ -60,6 +43,6 @@ export async function queryValues(
   target: ValuesTarget,
   text: string,
   params: readonly Param[] = [],
-): Promise<readonly (readonly TextValue[])[]> {
+): Promise<readonly (readonly (string | null)[])[]> {
   return (await target.execute(toStatement(text, params))).rows
 }
