@@ -72,7 +72,7 @@ function pauseMidFail(driver: Driver): Driver {
         ...connection,
         async execute(statement) {
           const result = await connection.execute(statement)
-          if (statement.text.includes(`key_mode from ${table.name} where state = 'pending'`)) {
+          if (statement.text.includes('"key_mode" AS "keyMode"')) {
             log("paused", { at: "mid-fail" })
             await hang()
           }

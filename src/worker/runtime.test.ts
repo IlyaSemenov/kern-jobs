@@ -453,7 +453,7 @@ describe("slots", () => {
     await query(producer, "begin")
     await enqueue(producer, schema.table, { task: "fail", key: "k", runAt: far() })
     failGate.resolve()
-    await waitForLockedStatement(schema.admin, "for update")
+    await waitForLockedStatement(schema.admin, "FOR UPDATE")
     const d = await enqueue(schema.admin, schema.table, { task: "wait" })
     const beats = log.all("heartbeat").length
     await sleep(2.5 * lease * 1000)

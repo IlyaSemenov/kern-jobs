@@ -1,16 +1,22 @@
 // ORM schema for typed worker queries.
 import { bindSchema, createTableFactory, type DbOf, defineSchema, toSnakeCase } from "kern-orm"
 import type { Database } from "kern-orm/db"
-import { bigint, text } from "kern-orm/types"
+import * as t from "kern-orm/types"
 
 const { defineTable } = createTableFactory({ columnName: toSnakeCase })
 
 // Declare only the columns used by typed worker queries.
 const schema = defineSchema({
   job: defineTable("job", {
-    id: bigint.primaryKey(),
-    claimId: bigint.nullable(),
-    state: text,
+    id: t.bigint.primaryKey(),
+    claimId: t.bigint.nullable(),
+    state: t.text,
+    scope: t.text,
+    task: t.text,
+    key: t.text.nullable(),
+    keyMode: t.text,
+    attempts: t.integer,
+    maxAttempts: t.integer,
   }),
 })
 

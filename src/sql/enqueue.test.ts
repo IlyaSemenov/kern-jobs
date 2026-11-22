@@ -625,7 +625,7 @@ describe("debounce on virtual time", () => {
         if (failed) return "done"
         failed = true
         expect(
-          await fail(schema.database, schema.table, claim, {
+          await fail(schema.db, schema.table, claim, {
             error: "boom",
             backoff: 30,
             now: T(tick),

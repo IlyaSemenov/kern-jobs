@@ -24,8 +24,8 @@ kern-db keeps the [contract of its drivers](https://github.com/IlyaSemenov/kern-
 
 `kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `worker/db/db.ts` to its database in the configured PostgreSQL schema at startup.
 Worker ORM definitions use camelCase keys and map them to snake_case PostgreSQL columns with `toSnakeCase`.
-Simple worker mutations such as complete use typed table queries on this database ([decision](../decisions/drivers/worker-orm.md)).
-Operations that depend on the shape of a statement, including the locks and index scans of a claim, use hand-written SQL.
+Simple worker statements use typed table queries on this database, such as complete and the row locks and deletes of fail and requeue ([decision](../decisions/drivers/worker-orm.md)).
+Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, and the return to pending, use hand-written SQL, which in fail and requeue runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
 
 For raw SQL with named result columns, the worker runs its statements through `query` of `worker/db/query.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.

@@ -1,6 +1,4 @@
 // Settlement of a claimed job: complete, fail with retry, merge, or a final failure, and requeue of a job whose attempt is given back.
-import type { Database } from "kern-orm/db"
-
 import type { JobTable } from "../../sql/job-table"
 import { NOW } from "../../sql/postgres"
 import type { FailureReason } from "../../task/failure"
@@ -51,13 +49,13 @@ export interface FailOptions {
  * A lost connection throws `TransactionConnectionError` and is never retried on.
  */
 export async function fail(
-  database: Pick<Database, "execute" | "transaction">,
+  db: WorkerDb,
   table: JobTable,
   c: ClaimRef,
   o: FailOptions,
   stats: { uniqueViolations: number } = { uniqueViolations: 0 },
 ): Promise<FailOutcome> {
-  return await returnClaim(database, table, c, { ...o, refund: false }, stats)
+  return await returnClaim(db, table, c, { ...o, refund: false }, stats)
 }
 
 /** Outcome of a requeue. */
@@ -72,14 +70,14 @@ export type RequeueOptions = Pick<FailOptions, "now" | "maxRetries" | "pause">
  * Runs the transaction of fail, with its retries after a `23505`.
  */
 export async function requeue(
-  database: Pick<Database, "execute" | "transaction">,
+  db: WorkerDb,
   table: JobTable,
   c: ClaimRef,
   o: RequeueOptions = {},
   stats: { uniqueViolations: number } = { uniqueViolations: 0 },
 ): Promise<RequeueOutcome> {
   const outcome = await returnClaim(
-    database,
+    db,
     table,
     c,
     { ...o, error: null, backoff: 0, refund: true },
@@ -98,7 +96,7 @@ interface ReturnOptions extends Omit<FailOptions, "error"> {
 
 /** Runs the transaction of fail or requeue, and retries it after a `23505` on the pending-key index. */
 async function returnClaim(
-  database: Pick<Database, "execute" | "transaction">,
+  db: WorkerDb,
   table: JobTable,
   c: ClaimRef,
   o: ReturnOptions,
@@ -106,10 +104,10 @@ async function returnClaim(
 ): Promise<FailOutcome> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await database.transaction(
+      return await db.$transaction(
         async () => {
-          const outcome = await returnOnce(database, table, c, o)
-          await o.pause?.beforeCommit?.(database)
+          const outcome = await returnOnce(db, table, c, o)
+          await o.pause?.beforeCommit?.(db.$database)
           return outcome
         },
         // A statement that waits for the lock of a row that a concurrent transaction changes then rechecks the new row, where a higher level fails with a serialization error.
@@ -128,27 +126,25 @@ async function returnClaim(
 
 /** Runs the statements of one transaction of fail or requeue. */
 async function returnOnce(
-  tx: StatementTarget,
+  db: WorkerDb,
   table: JobTable,
   c: ClaimRef,
   o: ReturnOptions,
 ): Promise<FailOutcome> {
+  // Raw statements on the database of `db` join the ambient transaction of `db.$transaction`, as its typed queries do.
+  const tx = db.$database
   const now = o.now ?? null
-  const own = await query(
-    tx,
-    `select id, scope, task, key, attempts, max_attempts from ${table.name}
-     where id = $1::text::bigint and claim_id = $2::text::bigint and state = 'active' for update`,
-    [c.id, c.claimId],
-  )
-  const a = own[0]
+  const a = await db.job
+    .where({ id: BigInt(c.id), claimId: BigInt(c.claimId), state: "active" })
+    .select("id", "scope", "task", "key", "attempts", "maxAttempts")
+    .forUpdate()
+    .take()
+    .optional()
   if (!a) return "fenced"
   await o.pause?.afterOwnLock?.(tx)
   // A terminal outcome is always recorded as failed and never merged away; failed rows are outside key uniqueness.
   // The failure job is inserted by the statement that fails the job, so both commit or roll back together, and only a claim that commits its own transition from active inserts one.
-  if (
-    o.reason === "terminal-error" ||
-    (!o.refund && Number(a.attempts) >= Number(a.max_attempts))
-  ) {
+  if (o.reason === "terminal-error" || (!o.refund && a.attempts >= a.maxAttempts)) {
     await query(
       tx,
       `with s as (
@@ -175,29 +171,29 @@ async function returnOnce(
        where id = $2::text::bigint`,
       [now, c.id, o.backoff, o.error, o.refund ? 1 : 0],
     )
-  if (a.key == null) {
+  if (a.key === null) {
     await toPending()
     return "retry"
   }
-  const competitor = await query(
-    tx,
-    `select id, key_mode from ${table.name} where state = 'pending' and scope = $1::text and task = $2::text and key = $3::text
-     for update`,
-    [a.scope, a.task, a.key],
-  )
+  // The pending-key index allows at most one competitor.
+  const b = await db.job
+    .where({ state: "pending", scope: a.scope, task: a.task, key: a.key })
+    .select("id", "keyMode")
+    .forUpdate()
+    .take()
+    .optional()
   await o.pause?.afterCompetitorCheck?.(tx)
-  const b = competitor[0]
   if (!b) {
     await toPending()
     return "retry"
   }
   // The pending row carries the mode of the latest enqueue, which is the newest producer code during a rolling deploy.
   // Attempts stay with their rows: neither branch moves them.
-  if (b.key_mode === "keep") {
-    await query(tx, `delete from ${table.name} where id = $1::text::bigint`, [b.id])
+  if (b.keyMode === "keep") {
+    await db.job.find(b.id).delete()
     await toPending()
     return "replaced-pending"
   }
-  await query(tx, `delete from ${table.name} where id = $1::text::bigint`, [c.id])
+  await db.job.find(a.id).delete()
   return "superseded"
 }

@@ -175,9 +175,7 @@ async function reapAndFail() {
     await enqueue(schema.admin, schema.table, { task: "t", key: `k${i + 1}` })
   const lat: number[] = []
   for (const c of claims) {
-    const [t] = await time(() =>
-      fail(schema.database, schema.table, c, { error: "e", backoff: 10 }),
-    )
+    const [t] = await time(() => fail(schema.db, schema.table, c, { error: "e", backoff: 10 }))
     lat.push(t)
   }
   console.log(
@@ -241,9 +239,7 @@ async function failureJobs() {
       failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
     }
     const [c] = await claimPlain(schema.admin, schema.table, { ...o, limit: 1 })
-    const [t] = await time(() =>
-      fail(schema.database, schema.table, c!, { error: "e", backoff: 10 }),
-    )
+    const [t] = await time(() => fail(schema.db, schema.table, c!, { error: "e", backoff: 10 }))
     fails[variant].push(t)
   }
   console.log(`terminal fail without stamps: ${fmt(fails.without)}; with: ${fmt(fails.with)}`)

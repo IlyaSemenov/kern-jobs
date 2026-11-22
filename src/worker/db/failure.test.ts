@@ -47,7 +47,7 @@ async function claimed(
 }
 
 const failAt = (claim: Claim, o: Partial<Parameters<typeof fail>[3]> = {}) =>
-  fail(schema.database, schema.table, claim, { error: "boom", backoff: 30, now: T(2), ...o })
+  fail(schema.db, schema.table, claim, { error: "boom", backoff: 30, now: T(2), ...o })
 
 /** Returns the failure jobs of task `t`. */
 const failureJobs = (): Promise<JobRow[]> => jobs(schema, "task = 't:failure'")
@@ -63,7 +63,7 @@ describe("claim stamps", () => {
       const claim = await claimed({ queue, maxAttempts: 5 })
       expect(only(await jobs(schema)).failure_max_attempts).toBe(7)
       // A requeue keeps the stamp on the pending row, where nothing reads it.
-      await requeue(schema.database, schema.table, claim, { now: T(1) })
+      await requeue(schema.db, schema.table, claim, { now: T(1) })
       const plain = { ...stamping, failureMaxAttempts: {} }
       await claimCycle(schema.admin, schema.table, { ...plain, slots: 1, now: T(2) })
       const cleared = only(await jobs(schema))
@@ -276,7 +276,7 @@ describe("outcomes without a failure job", () => {
 
   test("a requeue on the last attempt and a later fail of its stale claim insert nothing", async () => {
     const last = await claimed({ maxAttempts: 1 })
-    expect(await requeue(schema.database, schema.table, last, { now: T(1) })).toBe("requeued")
+    expect(await requeue(schema.db, schema.table, last, { now: T(1) })).toBe("requeued")
     expect(await failAt(last)).toBe("fenced")
     expect(await failureJobs()).toEqual([])
   })

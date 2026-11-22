@@ -76,8 +76,8 @@ async function run(o: SettleOptions): Promise<"completed" | FailOutcome | Requeu
     case "complete":
       return (await complete(o.db, o.claim)) ? "completed" : "fenced"
     case "fail":
-      return await fail(o.db.$database, o.table, o.claim, o.action.options)
+      return await fail(o.db, o.table, o.claim, o.action.options)
     case "requeue":
-      return await requeue(o.db.$database, o.table, o.claim)
+      return await requeue(o.db, o.table, o.claim)
   }
 }

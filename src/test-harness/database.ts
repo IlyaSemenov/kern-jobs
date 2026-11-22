@@ -139,7 +139,7 @@ export interface TestSchema {
   table: JobTable
   /** Pool of the schema, for operations that reserve connections, such as the heartbeat of a worker. */
   driver: Driver
-  /** Database over `driver`, for fail, which runs in its transaction; closing it would close `driver`. */
+  /** Database over `driver`, for operations that run in its transactions, such as schedule evaluation; closing it would close `driver`. */
   database: Database
   /** Worker ORM schema bound to `database`. */
   db: WorkerDb

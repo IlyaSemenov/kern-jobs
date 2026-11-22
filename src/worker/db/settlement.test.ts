@@ -1,7 +1,7 @@
 // Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { createDatabase, type Driver, TransactionConnectionError } from "kern-orm/db"
+import { type Driver, TransactionConnectionError } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -67,7 +67,7 @@ async function activeWithPending(o: { maxAttempts?: number; mode?: KeyMode } = {
 }
 
 const failA = (a: Claim, o: Partial<Parameters<typeof fail>[3]> = {}) =>
-  fail(schema.database, schema.table, a, { error: "boom", backoff: 30, now: T(2), ...o })
+  fail(schema.db, schema.table, a, { error: "boom", backoff: 30, now: T(2), ...o })
 
 describe("last attempt and terminal error", () => {
   test("A on its last attempt with B pending: A failed with its key at the time of the fail, B unchanged", async () => {
@@ -182,9 +182,9 @@ describe("merge policy is read from the rows, not from the caller", () => {
       mode: "keep",
       now: T(1),
     })
-    expect(
-      await fail(schema.database, schema.table, a, { error: "boom", backoff: 30, now: T(2) }),
-    ).toBe("replaced-pending")
+    expect(await fail(schema.db, schema.table, a, { error: "boom", backoff: 30, now: T(2) })).toBe(
+      "replaced-pending",
+    )
     expect((await jobs(schema)).map(r => [r.id, r.payload])).toEqual([[a.id, "a"]])
   })
 
@@ -204,9 +204,9 @@ describe("merge policy is read from the rows, not from the caller", () => {
       mode: "replace",
       now: T(1),
     })
-    expect(
-      await fail(schema.database, schema.table, a, { error: "boom", backoff: 30, now: T(2) }),
-    ).toBe("superseded")
+    expect(await fail(schema.db, schema.table, a, { error: "boom", backoff: 30, now: T(2) })).toBe(
+      "superseded",
+    )
     expect((await jobs(schema)).map(r => r.id)).toEqual([b.id])
   })
 
@@ -291,7 +291,7 @@ describe("attempt budget", () => {
       )
       expect(a.job.attempts).toBe(i + 1)
       outcomes.push(
-        await fail(schema.database, schema.table, a, {
+        await fail(schema.db, schema.table, a, {
           error: `e${i}`,
           backoff: 1,
           now: T(100 * i + 50),
@@ -327,7 +327,7 @@ describe("attempt budget", () => {
 
 describe("requeue", () => {
   const requeueA = (a: Claim, o: Parameters<typeof requeue>[3] = {}) =>
-    requeue(schema.database, schema.table, a, { now: T(2), ...o })
+    requeue(schema.db, schema.table, a, { now: T(2), ...o })
 
   test("on its last attempt: pending at once with the attempt given back and the error of the latest failure", async () => {
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", maxAttempts: 2, now: T(0) })
@@ -370,7 +370,7 @@ describe("requeue", () => {
     const stats = { uniqueViolations: 0 }
     let once = false
     const outcome = await requeue(
-      schema.database,
+      schema.db,
       schema.table,
       a,
       {
@@ -409,7 +409,7 @@ describe("races of the return to pending with enqueues", () => {
     const stats = { uniqueViolations: 0 }
     let once = false
     const outcome = await fail(
-      schema.database,
+      schema.db,
       schema.table,
       a,
       {
@@ -447,7 +447,7 @@ describe("races of the return to pending with enqueues", () => {
       await enqueue(producer, schema.table, { task: "t", key: "k", payload: "b", now: T(1) })
       const stats = { uniqueViolations: 0 }
       const outcome = fail(
-        createDatabase({ driver: worker }),
+        schema.createDb(worker),
         schema.table,
         a,
         { error: "boom", backoff: 30, now: T(2) },
@@ -470,7 +470,7 @@ describe("races of the return to pending with enqueues", () => {
     const producer = await schema.connect()
     const a = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(0) }))
     let event: Promise<{ id: string; created: boolean }> | undefined
-    const outcome = await fail(schema.database, schema.table, a, {
+    const outcome = await fail(schema.db, schema.table, a, {
       error: "boom",
       backoff: 30,
       now: T(2),
@@ -496,9 +496,9 @@ describe("races of the return to pending with enqueues", () => {
   test("fail runs at READ COMMITTED, on which these races rely, also where the default isolation is higher", async () => {
     await enqueue(schema.admin, schema.table, { task: "t", now: T(0) })
     const a = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(0) }))
-    const serializable = schema.createDriver({ defaultIsolation: "serializable" })
+    const serializable = schema.createDb({ defaultIsolation: "serializable" })
     let isolation: string | null | undefined
-    const outcome = await fail(createDatabase({ driver: serializable }), schema.table, a, {
+    const outcome = await fail(serializable, schema.table, a, {
       error: "boom",
       backoff: 30,
       now: T(2),
@@ -516,7 +516,7 @@ describe("settlements of different handlers on one driver", () => {
   // The spike worker sent the statements of all its handlers through one connection, so a complete or a claim cycle that ran while a fail transaction of another handler was open became part of it and rolled back with it.
   const failRolledBackOnce = (a: Claim, during: () => Promise<void>) => {
     let once = false
-    return fail(schema.database, schema.table, a, {
+    return fail(schema.db, schema.table, a, {
       error: "boom",
       backoff: 30,
       now: T(1),
@@ -593,7 +593,7 @@ function countingBegins(driver: Driver) {
       }
     },
   }
-  return { counter, database: createDatabase({ driver: counted }) }
+  return { counter, db: schema.createDb(counted) }
 }
 
 describe("connection loss in fail", () => {
@@ -612,8 +612,8 @@ describe("connection loss in fail", () => {
 
   test("before COMMIT: TransactionConnectionError(commit), no retry, row rolled back and later reaped", async () => {
     const claim = await claimed()
-    const { counter, database } = countingBegins(schema.driver)
-    const err = await fail(database, schema.table, claim, {
+    const { counter, db } = countingBegins(schema.driver)
+    const err = await fail(db, schema.table, claim, {
       error: "boom",
       backoff: 30,
       now: T(2),
@@ -629,7 +629,7 @@ describe("connection loss in fail", () => {
   test("mid-transaction: TransactionConnectionError(transaction), rollback failure does not mask it", async () => {
     const claim = await claimed()
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(1) })
-    const err = await fail(schema.database, schema.table, claim, {
+    const err = await fail(schema.db, schema.table, claim, {
       error: "boom",
       backoff: 30,
       now: T(2),
@@ -643,7 +643,7 @@ describe("connection loss in fail", () => {
   test("unreachable server before BEGIN: TransactionConnectionError(begin)", async () => {
     const claim = await claimed()
     const unreachable = createTestDriver("postgres://127.0.0.1:1/none", schema.name)
-    const err = await fail(createDatabase({ driver: unreachable }), schema.table, claim, {
+    const err = await fail(schema.createDb(unreachable), schema.table, claim, {
       error: "boom",
       backoff: 30,
       now: T(2),

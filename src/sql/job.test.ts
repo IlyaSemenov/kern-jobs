@@ -186,7 +186,7 @@ describe("names", () => {
     })
     if (claimed.kind !== "job") throw new Error(`expected a job, got ${claimed.kind}`)
     expect(
-      await fail(schema.database, schema.table, claimed.claim, {
+      await fail(schema.db, schema.table, claimed.claim, {
         error: "e",
         backoff: 0,
         now: T(2),

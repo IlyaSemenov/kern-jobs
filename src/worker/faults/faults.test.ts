@@ -317,7 +317,7 @@ describe("slots and heartbeats", () => {
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: far() })
     const c = await enqueue(schema.admin, schema.table, { task: "t" })
     writeFileSync(gateFile, "")
-    await waitForLockedStatement(schema.admin, "for update")
+    await waitForLockedStatement(schema.admin, "FOR UPDATE")
     await sleep(500)
     const startedEarly = w.events().some(e => e.ev === "start" && e.id === c.id)
     await query(producer, "commit")

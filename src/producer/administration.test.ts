@@ -52,7 +52,7 @@ async function createFailedJob(o: Partial<EnqueueParams> = {}, failedAt = 11): P
     await claimCycle(schema.admin, schema.table, { ...W, tasks, slots: 1, now: T(failedAt - 1) }),
   )
   expect(
-    await fail(schema.database, schema.table, claim, {
+    await fail(schema.db, schema.table, claim, {
       error: "boom",
       reason: "terminal-error",
       backoff: 0,
@@ -96,7 +96,7 @@ async function deleteDuringFail<R>(
   })
   const operator = await schema.connect()
   let deletion: Promise<R> | undefined
-  const outcome = await fail(schema.database, schema.table, claim, {
+  const outcome = await fail(schema.db, schema.table, claim, {
     error: "boom",
     backoff: 30,
     now: T(3),
@@ -137,9 +137,9 @@ describe("retry", () => {
       now: T(0),
     })
     const first = only(await claimCycle(schema.admin, schema.table, { ...W, slots: 1, now: T(1) }))
-    await fail(schema.database, schema.table, first, { error: "first", backoff: 3, now: T(2) })
+    await fail(schema.db, schema.table, first, { error: "first", backoff: 3, now: T(2) })
     const last = only(await claimCycle(schema.admin, schema.table, { ...W, slots: 1, now: T(5) }))
-    await fail(schema.database, schema.table, last, { error: "boom", backoff: 3, now: T(6) })
+    await fail(schema.db, schema.table, last, { error: "boom", backoff: 3, now: T(6) })
     const failed = only(await jobs(schema))
     expect(failed).toMatchObject({
       state: "failed",
@@ -203,7 +203,7 @@ describe("retry", () => {
       const claim = only(
         await claimCycle(schema.admin, schema.table, { ...W, slots: 1, now: T(30) }),
       )
-      await fail(schema.database, schema.table, claim, {
+      await fail(schema.db, schema.table, claim, {
         error: "retrying",
         backoff: 40,
         now: T(31),
@@ -352,7 +352,7 @@ describe("retry", () => {
     const stats = { uniqueViolations: 0 }
     let once = false
     const outcome = await fail(
-      schema.database,
+      schema.db,
       schema.table,
       claim,
       {

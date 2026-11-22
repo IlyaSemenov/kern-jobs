@@ -439,12 +439,12 @@ describe("fencing", () => {
     const producer = await schema.connect()
     await query(producer, "begin")
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: T(20), now: T(1) })
-    const failing = fail(schema.database, schema.table, a!, {
+    const failing = fail(schema.db, schema.table, a!, {
       error: "boom",
       backoff: 30,
       now: T(2),
     })
-    await waitForLockedStatement(schema.admin, "for update")
+    await waitForLockedStatement(schema.admin, "FOR UPDATE")
     const beat = heartbeat(schema.admin, schema.table, {
       claims: [a!, c!].map(x => ({ ...x, lease: 10 })),
       now: T(3),
