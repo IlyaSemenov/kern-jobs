@@ -1,3 +1,4 @@
+import { checkStorableText, utf8Length } from "../limits"
 // Jobs API of an application: enqueues of its tasks, and retries and deletes of its jobs, through the database client of the application.
 import {
   type EnqueueBatch,
@@ -6,7 +7,6 @@ import {
   prepareEnqueueMany,
 } from "../sql/enqueue"
 import { createJobTable, DEFAULT_SCHEMA } from "../sql/job-table"
-import { checkStorableText, utf8Length } from "../sql/postgres"
 import { delayRange, isDelay } from "../task/delay"
 import {
   checkEnqueueOverrides,

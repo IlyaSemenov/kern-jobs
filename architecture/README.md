@@ -63,7 +63,7 @@ Module paths are relative to `src/`.
 - [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `sql/job-table.ts`, `sql/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
 - [Enqueue](enqueue.md): key modes and debounce; `sql/enqueue.ts`.
-- [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, and `producer/`.
+- [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, `limits.ts`, and `producer/`.
 - [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/` and `worker/db/schedule.ts`.
 - [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `worker/db/claim.ts`.

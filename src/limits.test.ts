@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 
-import { checkStorableText } from "./postgres"
+import { checkStorableText } from "./limits"
 
 test("checkStorableText throws TypeError for U+0000, a lone surrogate, or a value other than a string, and accepts a surrogate pair", () => {
   for (const [value, got] of [

@@ -1,6 +1,6 @@
+import { checkCount, checkStorableText, utf8Length } from "../limits"
 // Task definitions: the name of a task, the type of its payload, the options of its enqueues, and the settings of its workers, which producers and workers import from the same definition; and the implementations of tasks, which only workers import.
 import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
-import { checkCount, checkStorableText, utf8Length } from "../sql/postgres"
 
 import type { Backoff } from "./backoff"
 import { FAILURE_TASK_SUFFIX, type JobFailure } from "./failure"

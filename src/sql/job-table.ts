@@ -1,5 +1,7 @@
+import { isStorableText, storableTextRule, utf8Length } from "../limits"
+
 // Job table of the SQL core with its claim sequence, named in a PostgreSQL schema of their own.
-import { isStorableText, quoteIdentifier, storableTextRule, utf8Length } from "./postgres"
+import { quoteIdentifier } from "./postgres"
 
 /**
  * Job table of the SQL core with its claim sequence, in a PostgreSQL schema of their own.

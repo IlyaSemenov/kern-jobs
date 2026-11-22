@@ -34,7 +34,7 @@ An enqueue merges the options of `defineTask`, those of `withOptions` for its pa
   `isDelay` of `task/delay.ts` checks this range, which delays of retries share.
   A run time in the past takes `runAt` rather than a negative `delay`.
 - `runAt` is a `Date` in the years 1 to 9999: a statement sends it as `toISOString` gives it, which PostgreSQL reads only for these years.
-- `maxAttempts` is an integer from 1 to 2^31 − 1, the largest `int`, which `checkCount` of `sql/postgres.ts` checks, as it checks the counts of the worker.
+- `maxAttempts` is an integer from 1 to 2^31 − 1, the largest `int`, which `checkCount` of `limits.ts` checks, as it checks the counts of the worker.
 - `delay` counts from `statement_timestamp()` of the enqueue in SQL, not from the clock of the producer.
 
 ## Many jobs
