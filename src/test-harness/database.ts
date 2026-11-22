@@ -54,6 +54,10 @@ export interface TestDriverOptions {
   applicationName?: string
   /** `default_transaction_isolation` of the connections. */
   defaultIsolation?: "read committed" | "repeatable read" | "serializable"
+  /** `DateStyle` of the connections, such as `SQL, DMY`. */
+  dateStyle?: string
+  /** `TimeZone` of the connections, such as `Asia/Kathmandu`. */
+  timeZone?: string
 }
 
 /** Creates a postgres.js driver of a test database whose breakpoints call the hook function of its schema. */
@@ -73,6 +77,8 @@ export function createTestDriver(
       ...(options.defaultIsolation
         ? { default_transaction_isolation: options.defaultIsolation }
         : {}),
+      ...(options.dateStyle ? { DateStyle: options.dateStyle } : {}),
+      ...(options.timeZone ? { TimeZone: options.timeZone } : {}),
     },
   })
   const driver = postgresJsDriver(sql)

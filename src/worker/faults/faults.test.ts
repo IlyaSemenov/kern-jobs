@@ -18,6 +18,7 @@ import {
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
 import { query } from "../db/query"
+import { competitorLockComment } from "../db/settlement"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
@@ -317,7 +318,7 @@ describe("slots and heartbeats", () => {
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: far() })
     const c = await enqueue(schema.admin, schema.table, { task: "t" })
     writeFileSync(gateFile, "")
-    await waitForLockedStatement(schema.admin, "FOR UPDATE")
+    await waitForLockedStatement(schema.admin, competitorLockComment)
     await sleep(500)
     const startedEarly = w.events().some(e => e.ev === "start" && e.id === c.id)
     await query(producer, "commit")

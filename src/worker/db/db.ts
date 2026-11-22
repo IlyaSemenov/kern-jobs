@@ -18,6 +18,10 @@ const schema = defineSchema({
     attempts: t.integer,
     maxAttempts: t.integer,
   }),
+  schedule: defineTable("schedule", {
+    id: t.text.primaryKey(),
+    evaluatedThrough: t.timestamptz,
+  }),
 })
 
 /** Worker database with its ORM schema bound. */

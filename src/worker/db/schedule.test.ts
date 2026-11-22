@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { createDatabase } from "kern-orm/db"
+import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { defineSchedule, type Schedule, toWorkerSchedule } from "../../schedule/schedule"
 import { enqueue } from "../../sql/enqueue"
@@ -31,7 +31,7 @@ const nightly = defineSchedule(task, { cron: { minute: 0, hour: 3 } })
 const instant = (time: string) => new Date(`2030-01-02T${time}Z`)
 const due = instant("03:00:40")
 const run = (schedule: Schedule = nightly, now = due) =>
-  evaluateSchedule(schema.database, schema.table, toWorkerSchedule(schedule), { now })
+  evaluateSchedule(schema.db, schema.table, toWorkerSchedule(schedule), { now })
 
 test("catch-up includes the boundary and enqueues at most once, including in the current minute", async () => {
   const scenarios = [
@@ -82,6 +82,35 @@ test("catch-up resolves task options at enqueue time and applies schedule overri
     payload: { region: "eu" },
     run_at: instant("03:15:10"),
   })
+})
+
+test("a check reads the cursor and the clock exactly on a pool whose DateStyle and TimeZone are not the defaults", async () => {
+  // In Asia/Kathmandu, these instants of January 2 fall on January 3, which SQL, DMY writes day first.
+  const db = schema.createDb({ dateStyle: "SQL, DMY", timeZone: "Asia/Kathmandu" })
+  const now = new Date("2030-01-02T20:00:40.123Z")
+  const covered = defineSchedule(defineTask("covered"), {
+    cron: { minute: 59, hour: 19 },
+    catchUp: { within: 3600 },
+  })
+  // Adding one minute to this cursor puts the lower bound one microsecond past the 19:59 occurrence.
+  await query(
+    schema.admin,
+    `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, '2030-01-02 19:58:00.000001+00')`,
+    [covered.id],
+  )
+  const current = defineSchedule(defineTask("current"), { cron: { minute: 0, hour: 20 } })
+  for (const schedule of [covered, current]) {
+    await evaluateSchedule(db, schema.table, toWorkerSchedule(schedule), { now })
+  }
+  expect((await jobs(schema)).map(job => [job.task, job.run_at])).toEqual([["current", now]])
+  const cursors = await query(
+    schema.admin,
+    `select id, extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule order by id`,
+  )
+  expect(cursors.map(row => [row.id, Number(row.cursor)])).toEqual([
+    [covered.id, Date.parse("2030-01-02T20:00:00Z")],
+    [current.id, Date.parse("2030-01-02T20:00:00Z")],
+  ])
 })
 
 test("an option function that throws rolls the check back, so a later check in the minute enqueues", async () => {
@@ -141,7 +170,7 @@ test("a scheduled enqueue that keeps a pending job consumes the occurrence", asy
 })
 
 test("three replicas with equivalent calendars enqueue once, including after a fast handler completes and a replica restarts", async () => {
-  const replica = () => createDatabase({ driver: schema.createDriver() })
+  const replica = () => schema.createDb({})
   const text = defineSchedule(task, { cron: "0 3 * * *" })
   await Promise.all(
     [nightly, text, nightly].map(s =>
@@ -160,6 +189,37 @@ test("three replicas with equivalent calendars enqueue once, including after a f
   await complete(schema.db, claim)
   await evaluateSchedule(replica(), schema.table, toWorkerSchedule(text), { now: due })
   expect(await jobs(schema)).toEqual([])
+})
+
+test("a check whose registration waits for a concurrent one locks the committed row and sets the run_at of its job to the start time of its transaction", async () => {
+  const every = defineSchedule(task, { cron: { minute: "*" } })
+  const registrar = await schema.connect()
+  await query(registrar, "begin")
+  await query(
+    registrar,
+    `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, date_trunc('minute', now()) - interval '1 minute')`,
+    [every.id],
+  )
+  // The default isolation of the pool is serializable, so the check must choose READ COMMITTED itself.
+  // A pool of one connection, so that the backend of the check is known.
+  const db = schema.createDb({ max: 1, defaultIsolation: "serializable" })
+  const pid = await getBackendPid(db.$database)
+  const check = evaluateSchedule(db, schema.table, toWorkerSchedule(every))
+  await waitForLock(schema.admin, pid)
+  const [started] = await query(
+    schema.admin,
+    `select floor(extract(epoch from xact_start) * 1000) as ms from pg_stat_activity where pid = $1::text::int`,
+    [pid],
+  )
+  await query(registrar, "commit")
+  await check
+  const job = only(await jobs(schema))
+  expect(job.run_at.getTime()).toBe(Number(started!.ms))
+  const [row] = await query(
+    schema.admin,
+    `select extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule`,
+  )
+  expect(Number(row!.cursor)).toBe(Math.floor(job.run_at.getTime() / 60000) * 60000)
 })
 
 test("a replica skips a locked schedule and a later evaluation can still enqueue it", async () => {
@@ -186,7 +246,7 @@ for (const mode of ["before", "after"] as const) {
     try {
       proxy.cutNext(/^\s*commit\b/i, mode)
       await expect(
-        evaluateSchedule(createDatabase({ driver }), schema.table, toWorkerSchedule(nightly), {
+        evaluateSchedule(schema.createDb(driver), schema.table, toWorkerSchedule(nightly), {
           now: due,
         }),
       ).rejects.toThrow()

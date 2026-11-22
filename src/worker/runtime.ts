@@ -365,7 +365,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
           for (const schedule of schedules) {
             if (stopping) break
             try {
-              await evaluateSchedule(database, o.table, schedule, { proceed: () => !givenUp })
+              await evaluateSchedule(db, o.table, schedule, { proceed: () => !givenUp })
             } catch (error) {
               emit({ type: "schedule-error", id: schedule.id, error })
             }

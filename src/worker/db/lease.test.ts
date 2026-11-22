@@ -18,7 +18,7 @@ import {
 import { claimCycle, claimPlain } from "./claim"
 import { heartbeat, reap } from "./lease"
 import { query } from "./query"
-import { complete, fail } from "./settlement"
+import { competitorLockComment, complete, fail } from "./settlement"
 import { isUniqueViolation } from "./violation"
 
 let schema: TestSchema
@@ -444,7 +444,7 @@ describe("fencing", () => {
       backoff: 30,
       now: T(2),
     })
-    await waitForLockedStatement(schema.admin, "FOR UPDATE")
+    await waitForLockedStatement(schema.admin, competitorLockComment)
     const beat = heartbeat(schema.admin, schema.table, {
       claims: [a!, c!].map(x => ({ ...x, lease: 10 })),
       now: T(3),

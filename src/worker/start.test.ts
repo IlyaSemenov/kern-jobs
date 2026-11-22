@@ -253,7 +253,7 @@ describe("a running worker", () => {
       catchUp: { within: 7200 },
       payload: { productId: "scheduled" },
     })
-    await evaluateSchedule(schema.database, schema.table, toWorkerSchedule(schedule), {
+    await evaluateSchedule(schema.db, schema.table, toWorkerSchedule(schedule), {
       now: new Date(at.getTime() - 60000),
     })
     const handled = Promise.withResolvers<void>()

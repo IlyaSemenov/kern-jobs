@@ -24,8 +24,8 @@ kern-db keeps the [contract of its drivers](https://github.com/IlyaSemenov/kern-
 
 `kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `worker/db/db.ts` to its database in the configured PostgreSQL schema at startup.
 Worker ORM definitions use camelCase keys and map them to snake_case PostgreSQL columns with `toSnakeCase`.
-Simple worker statements use typed table queries on this database, such as complete and the row locks and deletes of fail and requeue ([decision](../decisions/drivers/worker-orm.md)).
-Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, and the return to pending, use hand-written SQL, which in fail and requeue runs in the same transaction as their typed queries.
+Simple worker statements use typed table queries on this database, such as complete, the row locks and deletes of fail and requeue, and the registration, lock, and advance of the cursor of a schedule ([decision](../decisions/drivers/worker-orm.md)).
+Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, the return to pending, and an enqueue, use hand-written SQL, which in fail, requeue, and the check of a schedule runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
 
 For raw SQL with named result columns, the worker runs its statements through `query` of `worker/db/query.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
@@ -34,6 +34,8 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
 - Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
 - Hand-written SQL returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
+- A typed worker query that tests or monitoring find in PostgreSQL activity carries a label of `comment`, such as the competitor lock of fail and requeue.
+- A typed worker query selects a timestamp as seconds since the epoch, `extract(epoch from …)`, since kern-orm decodes `timestamptz` only under the `DateStyle` `ISO`, which the pool of the application may not have.
 
 ## Connections of the worker
 

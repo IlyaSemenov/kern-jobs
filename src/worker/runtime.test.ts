@@ -24,6 +24,7 @@ import {
 
 import { claimPlain } from "./db/claim"
 import { query } from "./db/query"
+import { competitorLockComment } from "./db/settlement"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
@@ -453,7 +454,7 @@ describe("slots", () => {
     await query(producer, "begin")
     await enqueue(producer, schema.table, { task: "fail", key: "k", runAt: far() })
     failGate.resolve()
-    await waitForLockedStatement(schema.admin, "FOR UPDATE")
+    await waitForLockedStatement(schema.admin, competitorLockComment)
     const d = await enqueue(schema.admin, schema.table, { task: "wait" })
     const beats = log.all("heartbeat").length
     await sleep(2.5 * lease * 1000)
@@ -1476,7 +1477,7 @@ describe("stop", () => {
     expect([statements - sent, log.all("settled"), log.all("start")]).toEqual([0, [], []])
   })
 
-  test.each(["its connection", "the response to SET LOCAL lock_timeout"])(
+  test.each(["its connection", "confirmation that its lock timeout was set"])(
     "a check of a schedule that gets %s after the timeout of stop writes nothing",
     async gated => {
       const reached = Promise.withResolvers<void>()
@@ -1501,7 +1502,7 @@ describe("stop", () => {
             return {
               async execute(statement) {
                 const result = await connection.execute(statement)
-                if (gated !== "its connection" && statement.text.includes("lock_timeout")) {
+                if (gated !== "its connection" && statement.parameters.includes("lock_timeout")) {
                   await hold()
                 }
                 return result

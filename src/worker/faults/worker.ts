@@ -7,6 +7,7 @@ import { getBackendPid } from "kern-orm/testing"
 
 import { createJobTable } from "../../sql/job-table"
 import { createTestDriver } from "../../test-harness/database"
+import { competitorLockComment } from "../db/settlement"
 import type { WorkerEvent } from "../events"
 import { startRuntime, type WorkerTask } from "../runtime"
 import { stopOnSignals } from "../shutdown"
@@ -72,7 +73,7 @@ function pauseMidFail(driver: Driver): Driver {
         ...connection,
         async execute(statement) {
           const result = await connection.execute(statement)
-          if (statement.text.includes('"key_mode" AS "keyMode"')) {
+          if (statement.text.includes(competitorLockComment)) {
             log("paused", { at: "mid-fail" })
             await hang()
           }

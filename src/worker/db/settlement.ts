@@ -17,6 +17,9 @@ export async function complete(db: WorkerDb, c: ClaimRef): Promise<boolean> {
   return count === 1
 }
 
+/** Label of the statement of fail and requeue that locks the pending job of the key, by which PostgreSQL activity and logs show it. */
+export const competitorLockComment = "kern-jobs:competitor-lock"
+
 /** Outcome of a fail. */
 export type FailOutcome = "fenced" | "failed" | "retry" | "superseded" | "replaced-pending"
 
@@ -182,6 +185,7 @@ async function returnOnce(
     .forUpdate()
     .take()
     .optional()
+    .comment(competitorLockComment)
   await o.pause?.afterCompetitorCheck?.(tx)
   if (!b) {
     await toPending()
