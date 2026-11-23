@@ -4,7 +4,7 @@
 import { jobColumns, type JobRow, toJob } from "../../sql/job"
 import type { JobTable } from "../../sql/job-table"
 import { hook, NOW } from "../../sql/postgres"
-import type { TextRow } from "../../sql/statement"
+import { labelSql, type TextRow } from "../../sql/statement"
 
 import { query, type StatementTarget } from "./query"
 import { isUniqueViolation } from "./violation"
@@ -61,7 +61,9 @@ export async function claimPlain(
 ): Promise<Claim[]> {
   const rows = await query(
     db,
-    `with c as (
+    labelSql(
+      "claim:plain",
+      `with c as (
        select id from ${table.name}
        where state = 'pending' and queue is null and run_at <= ${NOW} and task = any($2::text::text[])
          and ${hook("claim_plain")}
@@ -73,6 +75,7 @@ export async function claimPlain(
        attempts = j.attempts + 1, lease_until = ${LEASE}, ${stampFailure(7)}
      from c where j.id = c.id
      returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds`,
+    ),
     [
       o.now ?? null,
       o.tasks,
@@ -112,7 +115,9 @@ export async function claimQueued(
   const skip = o.skip ?? []
   const rows = await query(
     db,
-    `with recursive qs as (
+    labelSql(
+      "claim:queued",
+      `with recursive qs as (
        -- Loose index scan over distinct (scope, queue) of pending rows: O(queues · log n), independent of backlog size.
        -- Starts after the worker's cursor (round-robin over queues); the caller wraps around on "none".
        (select scope, queue from ${table.name}
@@ -160,6 +165,7 @@ export async function claimQueued(
        returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds
      )
      select q.scope as q_scope, q.queue as q_queue, c.* from q left join claimed c on true`,
+    ),
     [
       o.now ?? null,
       o.tasks,

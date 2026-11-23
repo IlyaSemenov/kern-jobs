@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
+import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
   databaseUrl,
@@ -18,7 +19,6 @@ import {
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
 import { query } from "../db/query"
-import { competitorLockComment } from "../db/settlement"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
@@ -318,7 +318,7 @@ describe("slots and heartbeats", () => {
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: far() })
     const c = await enqueue(schema.admin, schema.table, { task: "t" })
     writeFileSync(gateFile, "")
-    await waitForLockedStatement(schema.admin, competitorLockComment)
+    await waitForLockedStatement(schema.admin, toStatementLabel("settle:lock-competitor"))
     await sleep(500)
     const startedEarly = w.events().some(e => e.ev === "start" && e.id === c.id)
     await query(producer, "commit")

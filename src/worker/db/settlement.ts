@@ -1,6 +1,7 @@
 // Settlement of a claimed job: complete, fail with retry, merge, or a final failure, and requeue of a job whose attempt is given back.
 import type { JobTable } from "../../sql/job-table"
 import { NOW } from "../../sql/postgres"
+import { labelSql, toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
@@ -13,12 +14,10 @@ import { isUniqueViolation } from "./violation"
 export async function complete(db: WorkerDb, c: ClaimRef): Promise<boolean> {
   const count = await db.job
     .where({ id: BigInt(c.id), claimId: BigInt(c.claimId), state: "active" })
+    .comment(toStatementLabel("settle:complete"))
     .delete()
   return count === 1
 }
-
-/** Label of the statement of fail and requeue that locks the pending job of the key, by which PostgreSQL activity and logs show it. */
-export const competitorLockComment = "kern-jobs:competitor-lock"
 
 /** Outcome of a fail. */
 export type FailOutcome = "fenced" | "failed" | "retry" | "superseded" | "replaced-pending"
@@ -143,6 +142,7 @@ async function returnOnce(
     .forUpdate()
     .take()
     .optional()
+    .comment(toStatementLabel("settle:lock-claim"))
   if (!a) return "fenced"
   await o.pause?.afterOwnLock?.(tx)
   // A terminal outcome is always recorded as failed and never merged away; failed rows are outside key uniqueness.
@@ -150,7 +150,9 @@ async function returnOnce(
   if (o.reason === "terminal-error" || (!o.refund && a.attempts >= a.maxAttempts)) {
     await query(
       tx,
-      `with s as (
+      labelSql(
+        "settle:fail",
+        `with s as (
          update ${table.name} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = $3::text,
            failed_at = ${NOW}
          where id = $2::text::bigint
@@ -159,6 +161,7 @@ async function returnOnce(
          ${insertFailureJobsSql(table, "s", "$5::text")}
        )
        select from s`,
+      ),
       [now, c.id, o.error, c.claimId, o.reason ?? "handler-error"],
     )
     return "failed"
@@ -167,11 +170,14 @@ async function returnOnce(
   const toPending = () =>
     query(
       tx,
-      `update ${table.name} set state = 'pending', attempts = attempts - $5::text::int,
+      labelSql(
+        "settle:to-pending",
+        `update ${table.name} set state = 'pending', attempts = attempts - $5::text::int,
          run_at = n.t + make_interval(secs => $3::text::float8), not_before = n.t + make_interval(secs => $3::text::float8),
          window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null, last_error = coalesce($4::text, last_error)
        from (select ${NOW} as t) n
        where id = $2::text::bigint`,
+      ),
       [now, c.id, o.backoff, o.error, o.refund ? 1 : 0],
     )
   if (a.key === null) {
@@ -185,7 +191,7 @@ async function returnOnce(
     .forUpdate()
     .take()
     .optional()
-    .comment(competitorLockComment)
+    .comment(toStatementLabel("settle:lock-competitor"))
   await o.pause?.afterCompetitorCheck?.(tx)
   if (!b) {
     await toPending()
@@ -194,10 +200,10 @@ async function returnOnce(
   // The pending row carries the mode of the latest enqueue, which is the newest producer code during a rolling deploy.
   // Attempts stay with their rows: neither branch moves them.
   if (b.keyMode === "keep") {
-    await db.job.find(b.id).delete()
+    await db.job.find(b.id).comment(toStatementLabel("settle:delete-competitor")).delete()
     await toPending()
     return "replaced-pending"
   }
-  await db.job.find(a.id).delete()
+  await db.job.find(a.id).comment(toStatementLabel("settle:delete-claim")).delete()
   return "superseded"
 }

@@ -6,8 +6,8 @@ import { type Driver, TransactionConnectionError } from "kern-orm/db"
 import { getBackendPid } from "kern-orm/testing"
 
 import { createJobTable } from "../../sql/job-table"
+import { toStatementLabel } from "../../sql/statement"
 import { createTestDriver } from "../../test-harness/database"
-import { competitorLockComment } from "../db/settlement"
 import type { WorkerEvent } from "../events"
 import { startRuntime, type WorkerTask } from "../runtime"
 import { stopOnSignals } from "../shutdown"
@@ -73,7 +73,7 @@ function pauseMidFail(driver: Driver): Driver {
         ...connection,
         async execute(statement) {
           const result = await connection.execute(statement)
-          if (statement.text.includes(competitorLockComment)) {
+          if (statement.text.includes(toStatementLabel("settle:lock-competitor"))) {
             log("paused", { at: "mid-fail" })
             await hang()
           }

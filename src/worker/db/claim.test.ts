@@ -5,12 +5,14 @@ import { ConnectionError } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
+import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
   holdHook,
   isPending,
   jobs,
   only,
+  recordLabels,
   secondsOf,
   sleep,
   T,
@@ -22,6 +24,7 @@ import {
   type Claim,
   claimCycle,
   type ClaimCycleStats,
+  claimPlain,
   claimQueued,
   createClaimState,
 } from "./claim"
@@ -39,6 +42,13 @@ afterEach(async () => {
 })
 
 const W = (worker: string) => ({ worker, tasks: ["t"] })
+
+test("plain and queued claims have distinct statement labels", async () => {
+  const { target, labels } = recordLabels(schema.admin)
+  await claimPlain(target, schema.table, { ...W("a"), limit: 1, now: T(0) })
+  await claimQueued(target, schema.table, { ...W("a"), now: T(0) })
+  expect(labels).toEqual((["claim:plain", "claim:queued"] as const).map(toStatementLabel))
+})
 
 describe("tasks of the worker", () => {
   test("a worker claims only jobs of its tasks, and a queue starts its earliest job of them, also behind a job of another task", async () => {

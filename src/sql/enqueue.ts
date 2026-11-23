@@ -2,7 +2,7 @@
 import { encodePayload, type KeyMode } from "./job"
 import type { JobTable } from "./job-table"
 import { NOW } from "./postgres"
-import { queryValues, type ValuesTarget } from "./statement"
+import { labelSql, queryValues, type ValuesTarget } from "./statement"
 
 /** Attempts of a job whose enqueue gives no `maxAttempts`. */
 export const DEFAULT_MAX_ATTEMPTS = 25
@@ -204,11 +204,14 @@ async function insertOne(
     db,
     // `xmax = 0` tells an inserted row from an updated one.
     // The statement runs on connections of the application too, whose client may serialize a parameter by its type and rename the columns of the result, so every parameter is cast from text, and the result is one text column.
-    `insert into ${table.name} as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
+    labelSql(
+      "enqueue:one",
+      `insert into ${table.name} as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
      select $2::text, $3::text, $4::text, $5::text, $7::text, $6::text::jsonb, ${insertedRunAt(job, "n.t")}, n.t, n.t, $11::text::int
      from (select ${NOW} as t) n
      ${mergeIntoPendingJob(job)}
      returning json_build_array(j.id::text, j.xmax = 0)::text`,
+    ),
     [
       now,
       task,
@@ -252,7 +255,9 @@ async function insertMany(
     // The rows are inserted in the order of the jobs, so the identity of the table gives the new rows ids in that order, and a queue starts them in that order at an equal `run_at`.
     // The keys are locked in that order too, so transactions that enqueue overlapping keys in different orders can deadlock, as single enqueues in a transaction can.
     // Each row of the result is one text column, as that of `insertOne`.
-    `with conflict as (select $5::text::jsonb as params)
+    labelSql(
+      "enqueue:many",
+      `with conflict as (select $5::text::jsonb as params)
      insert into ${table.name} as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
      select $2::text, $3::text, i.queue, i.key, i.mode, i.payload::jsonb, ${insertedRunAt(job, "n.t")}, n.t, n.t, i.max_attempts
      from (select ${NOW} as t) n,
@@ -269,6 +274,7 @@ async function insertMany(
        resetAttempts: `${conflictValue(2)}::boolean`,
      })}
      returning json_build_array(j.id::text, j.key, j.xmax = 0)::text`,
+    ),
     [now, task, scope, rows, conflicts],
   )
   return values.map(([text]) => JSON.parse(text!) as EnqueuedRow)

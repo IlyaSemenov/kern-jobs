@@ -34,7 +34,9 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
 - Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
 - Hand-written SQL returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
-- A typed worker query that tests or monitoring find in PostgreSQL activity carries a label of `comment`, such as the competitor lock of fail and requeue.
+- Each statement that kern-jobs writes starts with its label in a comment, `/* kern-jobs:<area>:<statement> */`: hand-written SQL through `labelSql` and a typed query through `comment` with `toStatementLabel`, both of `sql/statement.ts`, whose `StatementOperation` lists the names, none of which is a prefix of another.
+  Statements of kern-db and kern-migrations, such as `BEGIN`, the settings of a transaction, advisory locks, and migrations, carry none.
+  A test finds a statement of kern-jobs by its label, followed by its hand-written SQL where it must tell the statement of its schema from those of others, and never by SQL that kern-orm generates.
 - A typed worker query selects a timestamp as seconds since the epoch, `extract(epoch from …)`, since kern-orm decodes `timestamptz` only under the `DateStyle` `ISO`, which the pool of the application may not have.
 
 ## Connections of the worker

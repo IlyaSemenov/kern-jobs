@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
+import type { Driver } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { defineSchedule, type Schedule, toWorkerSchedule } from "../../schedule/schedule"
 import { enqueue } from "../../sql/enqueue"
+import { toStatementLabel } from "../../sql/statement"
 import { defineTask } from "../../task/task"
 import {
   createTestDriver,
   createTestSchema,
   databaseUrl,
+  getStatementLabel,
   jobs,
   only,
   type TestSchema,
@@ -82,6 +85,32 @@ test("catch-up resolves task options at enqueue time and applies schedule overri
     payload: { region: "eu" },
     run_at: instant("03:15:10"),
   })
+})
+
+test("a check labels the registration, the lock, and the advance of the cursor, and its enqueue", async () => {
+  const texts: string[] = []
+  const recording: Driver = {
+    ...schema.driver,
+    async acquire() {
+      const connection = await schema.driver.acquire()
+      return {
+        ...connection,
+        execute: statement => {
+          texts.push(statement.text)
+          return connection.execute(statement)
+        },
+      }
+    },
+  }
+  await evaluateSchedule(schema.createDb(recording), schema.table, toWorkerSchedule(nightly), {
+    now: due,
+  })
+  // Transaction control and its settings carry no label.
+  expect(texts.map(getStatementLabel).filter(label => label !== null)).toEqual(
+    (["schedule:register", "schedule:lock", "enqueue:one", "schedule:advance"] as const).map(
+      toStatementLabel,
+    ),
+  )
 })
 
 test("a check reads the cursor and the clock exactly on a pool whose DateStyle and TimeZone are not the defaults", async () => {

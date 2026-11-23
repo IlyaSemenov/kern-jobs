@@ -5,6 +5,7 @@ import { hasOccurrence } from "../../schedule/cron"
 import type { WorkerSchedule } from "../../schedule/schedule"
 import { enqueue } from "../../sql/enqueue"
 import type { JobTable } from "../../sql/job-table"
+import { toStatementLabel } from "../../sql/statement"
 import { getTaskEnqueueParams } from "../../task/options"
 
 import type { WorkerDb } from "./db"
@@ -39,6 +40,7 @@ export async function evaluateSchedule(
         })
         .onConflict("id")
         .doNothing()
+        .comment(toStatementLabel("schedule:register"))
       // READ COMMITTED sees a concurrently registered row after the insert waited for its transaction, so the lock is a statement of its own.
       // Epoch seconds keep the reading independent of the DateStyle of the pool, which the decoding of timestamptz by kern-orm requires to be ISO.
       const row = await db.schedule
@@ -49,6 +51,7 @@ export async function evaluateSchedule(
         }))
         .forUpdate({ skipLocked: true })
         .optional()
+        .comment(toStatementLabel("schedule:lock"))
       // A replica holding this row owns the decision for now.
       if (!row) {
         return
@@ -67,7 +70,10 @@ export async function evaluateSchedule(
           await enqueue(db.$database, table, { ...params, now: new Date(time) })
         }
       }
-      await db.schedule.find(schedule.id).update({ evaluatedThrough: new Date(minute) })
+      await db.schedule
+        .find(schedule.id)
+        .comment(toStatementLabel("schedule:advance"))
+        .update({ evaluatedThrough: new Date(minute) })
     },
     // The timeout bounds every lock wait of the transaction, such as registration behind an uncommitted insert and an enqueue behind a producer holding its pending key.
     { isolation: "read committed", lockTimeout: 1000 },

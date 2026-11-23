@@ -130,3 +130,20 @@ grant select on kern_jobs.job_summary to monitoring;
 ```
 
 The role reads the view without access to the job table, so it sees neither payloads nor errors of jobs.
+
+## Find the statements of kern-jobs
+
+To tell the statements of kern-jobs from those of your application, such as in `pg_stat_activity` or in the log of slow statements, filter by the comment that starts each of them:
+
+```sql
+select pid, wait_event_type, now() - query_start as running, query
+from pg_stat_activity
+where state = 'active' and query like '/* kern-jobs:%'
+```
+
+Run it as a role that sees the statements of the roles of your application, such as one granted `pg_read_all_stats`: PostgreSQL shows another role `<insufficient privilege>` in place of their text.
+
+The comment names the statement, such as `/* kern-jobs:claim:plain */` of a worker that takes jobs, or `/* kern-jobs:enqueue:one */` of an enqueue on a connection of your client.
+To find the statements of one area, filter by its name, such as `'/* kern-jobs:settle:%'` for the statements that record the results of jobs; the areas are `enqueue`, `admin`, `claim`, `heartbeat`, `worker`, `reap`, `settle`, and `schedule`.
+
+Transaction control, such as `BEGIN` and `COMMIT`, the settings of a transaction or a connection, the lock of the worker `id`, migrations, and the check of the schema when a worker starts carry no comment.

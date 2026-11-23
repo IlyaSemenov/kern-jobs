@@ -5,7 +5,7 @@ import postgres from "postgres"
 
 import { databaseUrl } from "../test-harness/database"
 
-import { queryValues } from "./statement"
+import { labelSql, queryValues } from "./statement"
 
 const driver = postgresJsDriver(postgres(databaseUrl(), { max: 1 }))
 afterAll(() => driver.close())
@@ -29,4 +29,13 @@ test("rejects a number parameter that is not finite", async () => {
   await expect(queryValues(driver, `select $1::text::float8`, [Number.NaN])).rejects.toBeInstanceOf(
     TypeError,
   )
+})
+
+test("starts a statement with its label in a comment, which PostgreSQL activity shows", async () => {
+  const text = labelSql(
+    "worker:ping",
+    "select query from pg_stat_activity where pid = pg_backend_pid()",
+  )
+  expect(await queryValues(driver, text)).toEqual([[text]])
+  expect(text.startsWith("/* kern-jobs:worker:ping */ ")).toBe(true)
 })

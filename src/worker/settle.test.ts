@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { ConnectionError, type Driver, QueryError } from "kern-orm/db"
 
 import { enqueue } from "../sql/enqueue"
+import { toStatementLabel } from "../sql/statement"
 import {
   createTestDriver,
   createTestSchema,
@@ -91,7 +92,7 @@ for (const mode of ["before", "after"] as const) {
   test(`complete cut ${mode} it reaches the server: retried on a new connection, ${mode === "before" ? "completed" : "unknown"}`, async () => {
     const { proxy, driver } = await proxied()
     const claim = await claimJob()
-    proxy.cutNext(/^delete from\s/i, mode)
+    proxy.cutNext(new RegExp(toStatementLabel("settle:complete")), mode)
     expect(await run({ driver, claim })).toEqual({
       outcome: mode === "before" ? "completed" : "unknown",
       errors: 1,
@@ -155,7 +156,7 @@ for (const unsent of [true, false]) {
     const { proxy, driver } = await proxied()
     const claim = await claimJob()
     if (unsent) proxy.refuse = true
-    else proxy.cutNext(/^delete from\s/i, "after")
+    else proxy.cutNext(new RegExp(toStatementLabel("settle:complete")), "after")
     const events: WorkerEvent[] = []
     const outcome = await settle({
       db: schema.createDb(driver),
@@ -182,7 +183,7 @@ test("a statement that PostgreSQL keeps rejecting is given up after three retrie
   const rejecting: Driver = {
     ...schema.driver,
     execute: async statement => {
-      if (/^delete from\s/i.test(statement.text))
+      if (statement.text.includes(toStatementLabel("settle:complete")))
         throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
       return schema.driver.execute(statement)
     },
@@ -197,7 +198,8 @@ test("rejections after a statement of unknown outcome give up the settlement wit
   const driver: Driver = {
     ...schema.driver,
     execute: async statement => {
-      if (!/^delete from\s/i.test(statement.text)) return schema.driver.execute(statement)
+      if (!statement.text.includes(toStatementLabel("settle:complete")))
+        return schema.driver.execute(statement)
       if (deletes++ === 0) throw new ConnectionError("connection reset")
       throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
     },

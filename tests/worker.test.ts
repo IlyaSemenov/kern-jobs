@@ -190,11 +190,7 @@ for (const [name, createDriver] of drivers) {
       const slow: Driver = {
         async execute(statement) {
           const result = await driver.execute(statement)
-          if (
-            !slowed &&
-            result.rows.length > 0 &&
-            statement.text.includes("attempts = j.attempts + 1")
-          ) {
+          if (!slowed && result.rows.length > 0 && statement.text.includes("/* kern-jobs:claim:")) {
             slowed = true
             await new Promise(resolve => setTimeout(resolve, 1000))
           }

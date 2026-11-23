@@ -227,6 +227,28 @@ export function only<T>(xs: T[]): T {
   return xs[0]!
 }
 
+/** Returns the label of kern-jobs that starts the text of a statement, or `null` for a statement without one, such as `BEGIN`. */
+export function getStatementLabel(text: string): string | null {
+  return /^\/\* (kern-jobs:\S+) \*\//.exec(text)?.[1] ?? null
+}
+
+/** Wraps a target of statements so that it records the label of each statement that it executes, as `getStatementLabel` gives it, in `labels`. */
+export function recordLabels(target: StatementTarget): {
+  target: StatementTarget
+  labels: (string | null)[]
+} {
+  const labels: (string | null)[] = []
+  return {
+    labels,
+    target: {
+      execute: statement => {
+        labels.push(getStatementLabel(statement.text))
+        return target.execute(statement)
+      },
+    },
+  }
+}
+
 /** Checks that a promise has not settled within `ms`. */
 export async function isPending(p: Promise<unknown>, ms = 50): Promise<boolean> {
   const marker = Symbol()

@@ -2,6 +2,7 @@
 import { type Database, type OpenedSession, QueryError } from "kern-orm/db"
 
 import type { JobTable } from "../sql/job-table"
+import { labelSql } from "../sql/statement"
 
 import type { ClaimRef } from "./db/claim"
 import { heartbeat } from "./db/lease"
@@ -113,7 +114,8 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
       // A stop that began while the lock was taken sends no heartbeat; it waits for this round and then closes the session.
       if (stopping) return
       const kept = [...entries].filter(e => !e.lost)
-      if (kept.length === 0) await session.run(() => query(database, "select 1"))
+      if (kept.length === 0)
+        await session.run(() => query(database, labelSql("heartbeat:ping", "select 1")))
       else {
         o.onEvent({ type: "heartbeat", claims: kept.map(e => e.claim.claimId) })
         const claims = kept.map(e => ({ id: e.claim.id, claimId: e.claim.claimId, lease: e.lease }))

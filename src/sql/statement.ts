@@ -20,6 +20,45 @@ export type Param = string | number | boolean | Date | readonly string[] | null 
 /** Row of a result: the text of each column by its name, or null. */
 export type TextRow = Record<string, string | null>
 
+/**
+ * Statement of kern-jobs that its label names, as `<area>:<statement>`, such as `claim:plain`.
+ * No name is a prefix of another, so that a filter by the label of a statement finds no other, and a filter by `kern-jobs:<area>:` finds the statements of an area.
+ */
+export type StatementOperation =
+  | "enqueue:one"
+  | "enqueue:many"
+  | "admin:retry-failed"
+  | "admin:delete-job"
+  | "admin:delete-pending"
+  | "admin:delete-failed"
+  | "claim:plain"
+  | "claim:queued"
+  | "heartbeat:extend"
+  | "heartbeat:ping"
+  | "worker:ping"
+  | "reap:batch"
+  | "reap:ids"
+  | "settle:complete"
+  | "settle:lock-claim"
+  | "settle:fail"
+  | "settle:to-pending"
+  | "settle:lock-competitor"
+  | "settle:delete-competitor"
+  | "settle:delete-claim"
+  | "schedule:register"
+  | "schedule:lock"
+  | "schedule:advance"
+
+/** Returns the label of a statement, `kern-jobs:<area>:<statement>`, which starts its text in a comment, so that PostgreSQL activity and logs show it. */
+export function toStatementLabel(operation: StatementOperation): string {
+  return `kern-jobs:${operation}`
+}
+
+/** Starts the text of a statement with its label in a comment, as `comment` of kern-orm writes the label of a query. */
+export function labelSql(operation: StatementOperation, text: string): string {
+  return `/* ${toStatementLabel(operation)} */ ${text}`
+}
+
 /** Converts a parameter into the text that PostgreSQL reads by the type that the SQL casts it to. */
 export function encodeParam(value: Param): string | null {
   if (value == null) return null

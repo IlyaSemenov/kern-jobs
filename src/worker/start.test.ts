@@ -9,6 +9,7 @@ import { waitForLockedStatement } from "kern-orm/testing"
 import { migrateJobs } from "../migration/migrate"
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { enqueue } from "../sql/enqueue"
+import { labelSql } from "../sql/statement"
 import { fixedBackoff } from "../task/backoff"
 import { TerminalError } from "../task/errors"
 import { defineManifest } from "../task/manifest"
@@ -334,7 +335,11 @@ describe("a running worker", () => {
     try {
       await enqueue(producer, schema.table, { task: indexProduct.name, key: "shared" })
       launch()
-      await waitForLockedStatement(schema.admin, `insert into ${schema.table.name} as j`)
+      // The fragment includes the table of the test schema, so a blocked enqueue of another schema does not end the wait.
+      await waitForLockedStatement(
+        schema.admin,
+        labelSql("enqueue:one", `insert into ${schema.table.name}`),
+      )
       launch()
       // Keep the producer transaction open until the error and the unrelated delivery are both observed.
       const deadline = AbortSignal.timeout(4000)

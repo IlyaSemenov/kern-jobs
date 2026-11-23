@@ -1,7 +1,13 @@
 // Administration of jobs by the application: retry of a failed job, and delete of pending or failed jobs by id or by a filter, each in one statement on the client of the application.
 import type { JobTable } from "../sql/job-table"
 import { hook, NOW } from "../sql/postgres"
-import { type Param, queryValues, type ValuesTarget } from "../sql/statement"
+import {
+  labelSql,
+  type Param,
+  queryValues,
+  type StatementOperation,
+  type ValuesTarget,
+} from "../sql/statement"
 
 /** Result of a retry of a failed job: it returned to pending, or a pending job of its key kept it from returning. */
 export type RetryResult = { retried: true } | { retried: false; pendingId: string }
@@ -31,7 +37,9 @@ export async function retryFailedJob(
     // One statement, since the client of the application gives no transaction of its own.
     // The pending job of the key is locked, so that a claim that holds it is waited for and, once it commits, no longer conflicts; the unique index of pending keys still rejects one that the snapshot misses.
     // The run time, the window, and the absent backoff are those of a new enqueue; the other columns stay.
-    `with f as (
+    labelSql(
+      "admin:retry-failed",
+      `with f as (
        select id, scope, task, key from ${table.name}
        where id = $2::text::bigint and state = 'failed' and ($3::text is null or scope = $3::text) and ${hook("retry")}
        for update
@@ -47,6 +55,7 @@ export async function retryFailedJob(
        returning j.id
      )
      select json_build_array((select id::text from c), exists (select from u))::text from f`,
+    ),
     [o.now ?? null, o.id, o.scope ?? null],
   )
   if (rows.length === 0) return null
@@ -66,9 +75,12 @@ export async function deleteJob(
 ): Promise<boolean> {
   const rows = await queryValues(
     db,
-    `delete from ${table.name}
+    labelSql(
+      "admin:delete-job",
+      `delete from ${table.name}
      where id = $1::text::bigint and state in ('pending', 'failed') and ($2::text is null or scope = $2::text)
      returning id::text`,
+    ),
     [o.id, o.scope ?? null],
   )
   return rows.length === 1
@@ -94,7 +106,7 @@ export async function deletePendingJobs(
   const values: Param[] = []
   const conditions = ["state = 'pending'"]
   addEqualityConditions(conditions, values, filter)
-  return deleteJobsWhere(db, table, conditions, values)
+  return deleteJobsWhere(db, table, "admin:delete-pending", conditions, values)
 }
 
 /** Filter of the failed jobs that `deleteFailedJobs` deletes: each given condition must hold. */
@@ -126,7 +138,7 @@ export async function deleteFailedJobs(
     conditions.push(`failed_at + make_interval(secs => $2::text::float8) < ${NOW}`)
   }
   addEqualityConditions(conditions, values, filter)
-  return deleteJobsWhere(db, table, conditions, values)
+  return deleteJobsWhere(db, table, "admin:delete-failed", conditions, values)
 }
 
 /**
@@ -146,17 +158,21 @@ function addEqualityConditions(
   }
 }
 
-/** Deletes the jobs that match all conditions in one statement, and returns their count. */
+/** Deletes the jobs that match all conditions in one statement of `operation`, and returns their count. */
 async function deleteJobsWhere(
   db: ValuesTarget,
   table: JobTable,
+  operation: Extract<StatementOperation, "admin:delete-pending" | "admin:delete-failed">,
   conditions: readonly string[],
   values: readonly Param[],
 ): Promise<number> {
   const rows = await queryValues(
     db,
-    `with d as (delete from ${table.name} where ${conditions.join(" and ")} returning 1)
+    labelSql(
+      operation,
+      `with d as (delete from ${table.name} where ${conditions.join(" and ")} returning 1)
      select count(*)::text from d`,
+    ),
     values,
   )
   return Number(rows[0]![0])

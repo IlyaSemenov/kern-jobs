@@ -9,12 +9,14 @@ import pg from "pg"
 
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { enqueue } from "../sql/enqueue"
+import { toStatementLabel } from "../sql/statement"
 import { RetryError, TerminalError } from "../task/errors"
 import { defineTask } from "../task/task"
 import {
   createTestDriver,
   createTestSchema,
   databaseUrl,
+  getStatementLabel,
   holdHook,
   jobs,
   only,
@@ -24,7 +26,6 @@ import {
 
 import { claimPlain } from "./db/claim"
 import { query } from "./db/query"
-import { competitorLockComment } from "./db/settlement"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
@@ -84,7 +85,7 @@ function createGates(o: { honorAbort?: boolean } = {}) {
 }
 
 /**
- * Heartbeat driver over `base` whose connections record the text of each statement in `texts` when it is sent and in `answered` when it succeeds, and reject `select 1` with a `QueryError` at once while `failing` is set.
+ * Heartbeat driver over `base` whose connections record the text of each statement in `texts` when it is sent and in `answered` when it succeeds, and reject its `heartbeat:ping` statement with a `QueryError` at once while `failing` is set.
  * `released` resolves once a connection is released.
  */
 function createWatchedHeartbeat(base: Driver) {
@@ -103,7 +104,7 @@ function createWatchedHeartbeat(base: Driver) {
       return {
         execute(statement) {
           watched.texts.push(statement.text)
-          if (watched.failing && statement.text === "select 1")
+          if (watched.failing && statement.text.includes(toStatementLabel("heartbeat:ping")))
             return Promise.reject(new QueryError("canceling statement", { code: "57014" }))
           return connection.execute(statement).then(result => {
             watched.answered.push(statement.text)
@@ -350,7 +351,7 @@ describe("state", () => {
     await worker.ready
     // Claim cycles would run every poll interval.
     await sleep(100)
-    expect(statements).toEqual(["select 1"])
+    expect(statements.map(getStatementLabel)).toEqual([toStatementLabel("worker:ping")])
   })
 
   test.each(["without tasks", "whose only slot runs the job it claimed"])(
@@ -454,7 +455,7 @@ describe("slots", () => {
     await query(producer, "begin")
     await enqueue(producer, schema.table, { task: "fail", key: "k", runAt: far() })
     failGate.resolve()
-    await waitForLockedStatement(schema.admin, competitorLockComment)
+    await waitForLockedStatement(schema.admin, toStatementLabel("settle:lock-competitor"))
     const d = await enqueue(schema.admin, schema.table, { task: "wait" })
     const beats = log.all("heartbeat").length
     await sleep(2.5 * lease * 1000)
@@ -853,7 +854,7 @@ describe("worker id", () => {
         heartbeatSource: heartbeat.driver,
         tasks: { t: { handler: () => {} } },
       })
-      await waitForLockedStatement(schema.admin, "set_config('lock_timeout'")
+      await waitForLockedStatement(schema.admin, toStatementLabel("reap:batch"))
       const sent = heartbeat.texts.length
       const stopped = worker.stop({ force })
       if (force) await expect(stopped).rejects.toThrow("The worker stop was forced")
@@ -899,7 +900,8 @@ describe("worker id", () => {
     await release()
     await log.waitFor("recover")
     // The second batch returns none and ends the return, after which the claim cycle would claim at once.
-    const isBatch = (text: string) => text.includes("'worker restarted'")
+    // With the periodic reaper disabled, every reap batch observed here belongs to the return of the jobs of the worker.
+    const isBatch = (text: string) => getStatementLabel(text) === toStatementLabel("reap:batch")
     while (heartbeat.answered.filter(isBatch).length < 2) await sleep(10)
     await timers.setImmediate()
     expect(statements).toBe(0)

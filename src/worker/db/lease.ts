@@ -3,7 +3,7 @@ import { isQueryError } from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
 import { hook, NOW } from "../../sql/postgres"
-import type { Param } from "../../sql/statement"
+import { labelSql, type Param } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
@@ -37,7 +37,9 @@ export async function heartbeat(
 ): Promise<HeartbeatResult> {
   const rows = await query(
     db,
-    `with x as (
+    labelSql(
+      "heartbeat:extend",
+      `with x as (
        select * from unnest($2::text::bigint[], $3::text::bigint[], $4::text::float8[]) as x(id, claim_id, lease)
      ), owned as (
        select j.claim_id from ${table.name} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
@@ -51,6 +53,7 @@ export async function heartbeat(
        returning j.claim_id
      )
      select o.claim_id, (o.claim_id in (select claim_id from extended))::text as extended from owned o`,
+    ),
     [
       o.now ?? null,
       o.claims.map(c => c.id),
@@ -122,7 +125,10 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
         error: "lease expired",
         reason: "lease-expired",
         ids: {
-          text: `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
+          text: labelSql(
+            "reap:ids",
+            `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
+          ),
           params: [o.now ?? null, limit],
         },
       }
@@ -132,7 +138,10 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
         error: "worker restarted",
         reason: "worker-restarted",
         ids: {
-          text: `select id from ${table.name} where state = 'active' and locked_by = $2::text order by id limit $1::text::int`,
+          text: labelSql(
+            "reap:ids",
+            `select id from ${table.name} where state = 'active' and locked_by = $2::text order by id limit $1::text::int`,
+          ),
           params: [limit, o.worker],
         },
       }
@@ -142,7 +151,10 @@ function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
 // Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
 // Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
 // A row that becomes failed with the stamp of a failure job inserts it in the same statement, from the claim id that the update clears, so the batch applies both or neither.
-const reapSql = (table: JobTable, target: ReapTarget) => `with timeout as materialized (
+const reapSql = (table: JobTable, target: ReapTarget) =>
+  labelSql(
+    "reap:batch",
+    `with timeout as materialized (
     select set_config('lock_timeout', $5::text, true)
   ), candidates as (
     select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${table.name} j, timeout
@@ -170,7 +182,8 @@ const reapSql = (table: JobTable, target: ReapTarget) => `with timeout as materi
   ), inserted as (
     ${insertFailureJobsSql(table, "returned", `'${target.reason}'`)}
   )
-  select id, state, detached from returned`
+  select id, state, detached from returned`,
+  )
 
 /**
  * Returns expired active jobs, or the active jobs of `o.worker`: `failed` on the last attempt, otherwise `pending`.

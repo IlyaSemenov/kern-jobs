@@ -5,6 +5,7 @@ import { createDatabase, type Database, type Driver } from "kern-orm/db"
 import type { WorkerSchedule } from "../schedule/schedule"
 import type { JobRow } from "../sql/job"
 import type { JobTable } from "../sql/job-table"
+import { labelSql } from "../sql/statement"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
 
@@ -441,7 +442,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
         }
         // A worker without tasks claims nothing; one statement proves a connection of the pool beside the heartbeat's.
         if (taskNames.length === 0) {
-          if (!poolProven) await query(database, "select 1")
+          if (!poolProven) await query(database, labelSql("worker:ping", "select 1"))
         } else {
           await claimCycle(
             timedDriver,

@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
+import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
   holdHook,
   isPending,
   jobs,
   only,
+  recordLabels,
   secondsOf,
   T,
   type TestSchema,
@@ -18,7 +20,7 @@ import {
 import { claimCycle, claimPlain } from "./claim"
 import { heartbeat, reap } from "./lease"
 import { query } from "./query"
-import { competitorLockComment, complete, fail } from "./settlement"
+import { complete, fail } from "./settlement"
 import { isUniqueViolation } from "./violation"
 
 let schema: TestSchema
@@ -347,6 +349,15 @@ describe("heartbeat", () => {
     await heartbeat(schema.admin, schema.table, { claims: [{ ...a, lease: longest }], now: T(5) })
     expect(secondsOf((await jobs(schema))[0]!.lease_until!)).toBe(longest + 5)
   })
+
+  test("labels its statement", async () => {
+    const { target, labels } = recordLabels(schema.admin)
+    await heartbeat(target, schema.table, {
+      claims: [{ id: "1", claimId: "1", lease: 10 }],
+      now: T(0),
+    })
+    expect(labels).toEqual([toStatementLabel("heartbeat:extend")])
+  })
 })
 
 describe("fencing", () => {
@@ -444,7 +455,7 @@ describe("fencing", () => {
       backoff: 30,
       now: T(2),
     })
-    await waitForLockedStatement(schema.admin, competitorLockComment)
+    await waitForLockedStatement(schema.admin, toStatementLabel("settle:lock-competitor"))
     const beat = heartbeat(schema.admin, schema.table, {
       claims: [a!, c!].map(x => ({ ...x, lease: 10 })),
       now: T(3),

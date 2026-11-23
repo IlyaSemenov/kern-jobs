@@ -5,12 +5,14 @@ import { waitForLock } from "kern-orm/testing"
 
 import { enqueue, type EnqueueParams } from "../sql/enqueue"
 import type { KeyMode } from "../sql/job"
+import { toStatementLabel } from "../sql/statement"
 import {
   type Conn,
   createTestSchema,
   holdHook,
   jobs,
   only,
+  recordLabels,
   T,
   type TestSchema,
 } from "../test-harness/database"
@@ -589,4 +591,22 @@ describe("delete failed", () => {
     expect(await deleted).toBe(0)
     expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[failed, "pending"]])
   })
+})
+
+test("each administrative operation labels its statement", async () => {
+  const { target, labels } = recordLabels(schema.admin)
+  await retryFailedJob(target, schema.table, { id: "1" })
+  await deleteJob(target, schema.table, { id: "1" })
+  await deletePendingJobs(target, schema.table, {})
+  await deleteFailedJobs(target, schema.table, {})
+  expect(labels).toEqual(
+    (
+      [
+        "admin:retry-failed",
+        "admin:delete-job",
+        "admin:delete-pending",
+        "admin:delete-failed",
+      ] as const
+    ).map(toStatementLabel),
+  )
 })
