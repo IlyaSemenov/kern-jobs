@@ -62,3 +62,51 @@ It resolves to an array of `{ id, created }`, one for each payload in their orde
 - The new jobs get ids in the order of the payloads, so a [queue](./queues) starts those that are due at the same time in that order.
 - `enqueueMany` locks the pending jobs of the keys in the order of the payloads, so two transactions that enqueue the same keys in different orders can deadlock.
   PostgreSQL then aborts one of them with a deadlock error, `40P01`: retry its whole transaction.
+
+## Enqueueing from SQL
+
+To enqueue jobs from SQL, such as in a migration of your application that indexes the existing products, call the function `enqueue` in the schema of kern-jobs, `kern_jobs` by default:
+
+```sql
+select kern_jobs.enqueue(
+  task => 'search.indexProduct',
+  payload => jsonb_build_object('productId', p.id::text),
+  key => 'product:' || p.id,
+  delay => 5
+)
+from product p
+where p.active;
+```
+
+[`migrateJobs`](../getting-started#create-the-schema) creates the function, so run it before the migrations of your application that call it.
+
+It enqueues a job as `jobs.enqueue` does, in the transaction of the statement, and takes the options under these names: `payload`, `scope`, `key`, `queue`, `key_mode`, `run_at`, `delay` and `max_wait` in seconds, `max_attempts`, and `reset_attempts`.
+
+- It does not know your task definitions: pass the name of the task and every option that the task would give, such as the key of its `withOptions`, and a payload of the type of the task, which nothing checks.
+  For a task with `key: true`, pass `key => ''`.
+- For a [scoped](./scopes) task, pass the scope of the job as `scope`, which must not be empty: a worker fails a job of a scoped task without a scope without running its handler.
+  For another task, omit `scope`, which makes the job unscoped, as `''` does.
+- An option passed as NULL is the same as an omitted one, so a column that is NULL omits its option, such as the key; `task` and `scope` reject NULL.
+- An omitted payload reaches the handler as `undefined`; pass `'null'::jsonb` for `null`.
+- The rows of one key merge into its pending job one after another, as separate enqueues do.
+
+It returns a composite value with two fields: the `id` of the job and whether it was `created`.
+To read them as columns, call it in `FROM` with arguments that take values of the row:
+
+```sql
+select p.id as product_id, e.id as job_id, e.created
+from product p
+cross join lateral kern_jobs.enqueue(
+  task => 'search.indexProduct',
+  payload => jsonb_build_object('productId', p.id::text),
+  key => 'product:' || p.id,
+  delay => 5
+) e
+where p.active;
+```
+
+PostgreSQL may call a function in `FROM` whose arguments take no value of the row only once for all rows, so call such a function in the select list to enqueue a job for each row.
+
+Do not expand it as `(kern_jobs.enqueue(…)).*`, which PostgreSQL evaluates once for each column, enqueueing each job twice.
+
+The function runs with the privileges of the role that calls it, which needs `USAGE` on the schema of kern-jobs, `SELECT`, `INSERT`, and `UPDATE` on its table `job`, and `EXECUTE` on its functions `enqueue` and `check_enqueue`, which PostgreSQL grants to every role unless you revoked it.

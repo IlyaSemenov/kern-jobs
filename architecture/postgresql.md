@@ -5,14 +5,14 @@
 kern-jobs supports PostgreSQL 15 and newer.
 
 The minimum follows the community support window rather than features: PostgreSQL 14 reaches its end of life on 2026-11-12.
-The SQL needs nothing newer than identity columns of PostgreSQL 10, but the plans of the claim statements, which decide how many advisory locks they take, are verified only on PostgreSQL 15 and 18.
+The SQL needs nothing newer than the SQL-standard function bodies of PostgreSQL 14, but the plans of the claim statements, which decide how many advisory locks they take, are verified only on PostgreSQL 15 and 18.
 The optional `client_connection_check_interval` comes from PostgreSQL 14.
 
 CI runs the tests on PostgreSQL 15 and 18, except the restart scenario, which starts its temporary cluster from the PostgreSQL binaries of the runner, whatever their version.
 
 ## Isolation
 
-Producers must enqueue, and applications must retry and delete jobs, in `READ COMMITTED` transactions, and the pool of the worker must run its single statements at `READ COMMITTED`, since the statements rely on it to recheck a row that a concurrent transaction changed while they waited for its lock; at `REPEATABLE READ` and `SERIALIZABLE`, such a wait ends in a serialization failure, which kern-jobs neither handles nor tests.
+Producers must enqueue, also by the [SQL function](enqueue.md#sql-function), and applications must retry and delete jobs, in `READ COMMITTED` transactions, and the pool of the worker must run its single statements at `READ COMMITTED`, since the statements rely on it to recheck a row that a concurrent transaction changed while they waited for its lock; at `REPEATABLE READ` and `SERIALIZABLE`, such a wait ends in a serialization failure, which kern-jobs neither handles nor tests.
 
 ## Transactions
 

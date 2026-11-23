@@ -36,6 +36,21 @@ Keys are unique per scope and task ([decision](../decisions/enqueue/key-per-task
 - The update of a conflict reads `delay`, `maxWait`, and `resetAttempts` of its job, which are not columns of `excluded`, from a second parameter, a JSON object of the jobs with a key by their keys, which an uncorrelated subquery parses once per statement, also under a generic plan.
 - The statement returns a row of each job in no promised order, and the core maps the rows back to the jobs: a job with a key by its key, and the jobs without a key to the new rows without a key in the ascending order of their ids.
 
+## SQL function
+
+The function `enqueue` of the schema, which migration `0005_enqueue_function` installs, enqueues one job from SQL, such as from a migration of the application, by a copy of the statement of one job of the core, and returns its `id` and `created` as `OUT` parameters, one row of each call.
+
+- Its arguments are `task`, `payload`, and `scope`, and the options of an enqueue of the jobs API in snake case, `key`, `queue`, `key_mode`, `run_at`, `delay`, `max_wait`, `max_attempts`, and `reset_attempts`; only `task` is required.
+- An argument that is NULL takes its default, as an omitted one, so a column of a query that is NULL omits its option; `task` and `scope` reject NULL, and an omitted `scope` gives the empty scope, so that a scope that a query fails to find does not enqueue an unscoped job.
+- It checks its arguments as the jobs API checks the merged options, with the messages of the jobs API under the names of the arguments, and rejects a NULL `task` or `scope` with SQLSTATE `22004` and the following with `22023`: `delay` with `run_at`, `debounce` without `delay` and `max_wait` or with `run_at`, a delay outside 0 to 10^12 seconds, a `run_at` outside the years 1 to 9999, a `max_attempts` below 1, a `key_mode` of no mode, and the name of a [failure task](failure-jobs.md), which `defineTask` rejects; it ignores `max_wait` outside `debounce` and `reset_attempts` with `keep`; the check constraints of the table reject a value over its limit.
+- It knows no task definition, so it applies neither the options of a task nor whether the task is scoped.
+- Each call runs its insert as a statement of its own in the transaction of the caller, with the [concurrency](#concurrency) of an enqueue, so the calls of one statement for the rows of a query enqueue one after another, and those of one key merge into one pending job, unlike `enqueueMany`.
+- Its time is `statement_timestamp()`, the start of the statement of the caller, or of a query of several statements of a script, which every call of that statement shares.
+- Its body is a SQL-standard body, which PostgreSQL parses at the creation of the function and binds to the table of the schema, so a call depends neither on the `search_path` of the caller nor on the name of the schema, which a rename may change ([decision](../decisions/enqueue/sql-function-binds-its-table.md)).
+  A SQL-standard body has no `RAISE` statement, so the function `check_enqueue` of the schema, in PL/pgSQL, checks the arguments; it names no object of the schema, and its search path is fixed to `pg_catalog, pg_temp`, so its comparisons take the operators of `pg_catalog` whatever the search path of the caller.
+- Both functions are `SECURITY INVOKER`, so a caller needs `USAGE` on the schema, `EXECUTE` on both functions, which PostgreSQL grants to `PUBLIC` for a new function unless the default privileges of its owner revoke it, and `SELECT`, `INSERT`, and `UPDATE` on the table.
+- The statement of the core and the function are two copies, which a test compares on the same sequences of enqueues, retries, and claims ([decision](../decisions/enqueue/sql-function-copies-the-statement.md)): a change of the run time or the merge of a job must come with a migration that replaces the function.
+
 ## Debounce
 
 A debounced job runs `delay` seconds after the latest event, but no later than `maxWait` seconds after the first event of its window, when the events of the window pass the same `delay` and `maxWait`; the formulas give the rule for any settings:

@@ -1,4 +1,5 @@
 // Enqueue: one upsert by the partial unique index of pending keys, of one job or of many.
+// The SQL function `enqueue` of migration `0005_enqueue_function` copies the statement of one job, which `enqueue-function.test.ts` compares with it: a change of the run time or the merge of a job needs a new migration that replaces the function.
 import { encodePayload, type KeyMode } from "./job"
 import type { JobTable } from "./job-table"
 import { NOW } from "./postgres"

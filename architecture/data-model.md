@@ -3,7 +3,7 @@
 All jobs live in one table, `job`, with its claim sequence `claim_seq`, in a PostgreSQL schema of their own, which the [migrations](migrations.md) create.
 A job that completes is deleted; a job that fails for good stays as `failed` until the application retries or deletes it ([Administration](administration.md)).
 
-Every statement names the table and the sequence qualified by their schema, so that it does not depend on the `search_path` of its connection, which an application may switch, such as per tenant.
+Every statement names the table and the sequence qualified by their schema, so that it does not depend on the `search_path` of its connection, which an application may switch, such as per tenant; the [SQL function](enqueue.md#sql-function) `enqueue` binds the table at its creation for the same reason.
 
 ## Columns
 

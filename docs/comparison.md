@@ -25,7 +25,7 @@ kern-jobs is in early development, and its API changes between minor versions.
 
 |                                                                          | kern-jobs                                                                 | Graphile Worker                                                               | pg-boss                                                        |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM                                                | Through a SQL function                                                        | Through an adapter of your client                              |
+| [Enqueue in a transaction of the application](#enqueue-in-a-transaction) | Through your client or ORM, or a SQL function                             | Through a SQL function                                                        | Through an adapter of your client                              |
 | [Payload types shared by the application and workers](#payload-types)    | A task definition                                                         | A global interface                                                            | Not connected                                                  |
 | [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                                      | Job keys                                                                      | Queue policies, with other rules                               |
 | [Debounce with a bound on postponing](#debounce)                         | Built in                                                                  | Without a bound                                                               | Time slots of a fixed length                                   |
@@ -39,6 +39,7 @@ kern-jobs is in early development, and its API changes between minor versions.
 ## Enqueue in a transaction
 
 With kern-jobs, pass `createJobs` your client, the client of a transaction, or a function that returns the client of the current transaction; see [Database Clients and Transactions](./database-clients).
+In a migration of the application, call `enqueue` of kern-jobs from SQL; see [Enqueueing from SQL](./tasks/enqueue#enqueueing-from-sql).
 
 - Graphile Worker: call the SQL function [`graphile_worker.add_job`](https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md) on the connection of the transaction.
 - pg-boss: pass `send` a [`db` object](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/jobs.md?plain=1#L76-L86) with `executeSql`, which runs the statement on the connection of the transaction.

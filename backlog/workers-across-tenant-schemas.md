@@ -39,8 +39,8 @@ A successful administrative `jobs.retry()` must atomically append a due wakeup e
 Keep its `{ retried: true }`, `{ retried: false, pendingId }`, and `null` outcomes.
 
 Keep registration admission, upsert, effective deadline, and wakeup expressible in PostgreSQL after the application has resolved its task options.
-The [future SQL function](enqueue-from-sql.md) can then use the same write logic, with the installed body selecting local enqueue or enqueue with a root wakeup.
-For example, an application migration can execute this SQL in either installation:
+The [SQL function `enqueue`](../architecture/enqueue.md#sql-function) of an installation enqueues into the table of its own schema, which a dump of the tenant includes; a function of coordinated operation outside the tenant dump can then use the same write logic, with the installed body selecting local enqueue or enqueue with a root wakeup.
+For example, an application migration could execute this SQL, the proposed common form of a call, in either installation:
 
 ```sql
 select kern_jobs.enqueue(
@@ -53,9 +53,9 @@ select kern_jobs.enqueue(
 from product p where p.active;
 ```
 
-The illustrative function defaults the target to the caller's `current_schema()` and accepts an explicit `schema_name`.
+The function of coordinated operation, unlike the installed one, which writes into the table of its own schema whatever `current_schema()` of the caller, defaults the target to the caller's `current_schema()` and accepts an explicit `schema_name`.
 Resolve that default at the API boundary and qualify and quote identifiers internally.
-Install the function outside the tenant dump.
+Install that function outside the tenant dump.
 
 ## Admission and discovery
 

@@ -16,6 +16,8 @@ Measurements come from single runs on one local machine without network, so they
 - [`enqueueMany` takes the payloads of one task](enqueue/batch-of-one-task.md), rather than items of several tasks.
 - [A key at most once per `enqueueMany`](enqueue/distinct-keys-in-batch.md), rather than the last item of a key winning.
 - [`enqueueMany` inserts in the order of its items](enqueue/batch-insert-order.md): concurrent batches with keys in different orders can deadlock.
+- [The SQL function copies the statement of the core](enqueue/sql-function-copies-the-statement.md), which a test compares with it, rather than the core calling the function.
+- [The SQL function binds its table at its creation](enqueue/sql-function-binds-its-table.md): a SQL-standard body, with its checks in a second function.
 
 ## Schedules
 

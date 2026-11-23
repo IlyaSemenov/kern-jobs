@@ -22,7 +22,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 - A task is a kind of work defined in code, such as sending an email; a job is one row of the table that a worker executes as a task.
 - A scope is a namespace of keys and queues, such as of a tenant: a key merges and a queue serializes only the jobs of its scope.
   It separates jobs logically within one table and one set of workers; it is neither a partition of the table, nor a quota, nor access control.
-  An enqueue of a task defined with `scoped: true` takes the scope from the producer, and an enqueue of another task gives its job the empty scope.
+  An enqueue of the jobs API of a task defined with `scoped: true` takes the scope from the producer, and of another task gives its job the empty scope; the [SQL function](enqueue.md#sql-function) takes the scope of its arguments.
   An unscoped job is a job whose scope is empty.
 - A key identifies the pending job of a task within a scope, such as `product:42`.
 - A queue serializes the jobs of a scope that name it.
@@ -62,7 +62,7 @@ Module paths are relative to `src/`.
 
 - [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `sql/job-table.ts`, `sql/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
-- [Enqueue](enqueue.md): key modes and debounce; `sql/enqueue.ts`.
+- [Enqueue](enqueue.md): key modes, debounce, and the SQL function `enqueue`; `sql/enqueue.ts` and `migration/migrations/0005_enqueue_function.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, `limits.ts`, and `producer/`.
 - [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/` and `worker/db/schedule.ts`.
 - [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts`.
