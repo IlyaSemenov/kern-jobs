@@ -18,7 +18,7 @@ Done when the whole suite passes on a table of three partitions.
 
 Preliminary decisions for the migrations of the schema:
 
-- The history applies to a schema of any name, beside other tables, with a table of versions of its own, so a table in a schema of the application or of each tenant needs only names of the table, the sequence, and the indexes that the application chooses; the migrations then become functions of these names.
+- The history applies to a schema of any name, beside other tables, so a table in a schema of the application or of each tenant needs only names of the job table, its sequence, its indexes, and the table of versions that the application chooses, such as by a prefix, since the table of versions is named `migration` without one; the migrations then become functions of these names.
 - `migrateJobs` with the schema of a tenant keeps the versions and the lock of that tenant.
   An application that is not on kern-db cannot call it in the transaction that creates the tenant, so its first enqueue for a tenant comes after that transaction commits.
 - With partitions, the history migrates the parent table, and creating the partition of a scope is an operation outside the history, in a short transaction of its own, since `CREATE TABLE … PARTITION OF` keeps its `ACCESS EXCLUSIVE` lock of the parent until its transaction ends.

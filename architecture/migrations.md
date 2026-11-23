@@ -9,7 +9,7 @@ The column names, types, and nullability declared in `worker/db/db.ts` must matc
 
 - `migration/migrations.ts` defines the history from loaders of the migrations of `migration/migrations/`, each the default export of a module named by its key, such as `0001_create_job`, so that a worker that checks the schema loads none of them.
 - A migration builds its objects with the helpers of kern-migrations, and writes SQL only for what they lack.
-- The history keeps its applied migrations in a table of its own name, `kern_jobs_migration`, in the schema of the jobs, so that it applies beside the history of an application in one PostgreSQL schema, whose table has the default name of kern-migrations.
+- The history keeps its applied migrations in the table `migration` of the schema of the jobs, named without a prefix like the job table.
 - A migration names the table, the sequence, and the indexes without a PostgreSQL schema, which the search path of its transaction gives, so that the history applies to a schema of any name.
 - A released migration never changes: a change of the schema is a new migration.
 - A migration that changes the [summary view](data-model.md#summary-view) must in its `up` keep each column with its type, unit, and meaning, and only append columns by `replaceView` of kern-migrations, which keeps the grants of the application on the view; its `down` restores the previous view, with `rollback: "recreate"` when `up` appends columns.
