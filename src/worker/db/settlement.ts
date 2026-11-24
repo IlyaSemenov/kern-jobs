@@ -13,7 +13,7 @@ import { isUniqueViolation } from "./violation"
 /** Completes a job by deleting its active row; `false` means the claim was lost. */
 export async function complete(db: WorkerDb, c: ClaimRef): Promise<boolean> {
   const count = await db.job
-    .where({ id: BigInt(c.id), claimId: BigInt(c.claimId), state: "active" })
+    .where({ id: c.id, claimId: c.claimId, state: "active" })
     .comment(toStatementLabel("settle:complete"))
     .delete()
   return count === 1
@@ -137,7 +137,7 @@ async function returnOnce(
   const tx = db.$database
   const now = o.now ?? null
   const a = await db.job
-    .where({ id: BigInt(c.id), claimId: BigInt(c.claimId), state: "active" })
+    .where({ id: c.id, claimId: c.claimId, state: "active" })
     .select("id", "scope", "task", "key", "attempts", "maxAttempts")
     .forUpdate()
     .take()

@@ -70,7 +70,7 @@ function createGates(o: { honorAbort?: boolean } = {}) {
   })
   const task: WorkerTask = {
     async handler(job, { signal }) {
-      const g = gate(job.claim_id!)
+      const g = gate(job.claimId!)
       if (o.honorAbort) {
         await Promise.race([
           g.promise,
@@ -155,7 +155,7 @@ describe("drivers", () => {
       )
       expect(outcomes.map(e => e.outcome)).toEqual(["completed", "retry"])
       const rows = await jobs(schema)
-      expect(rows.map(row => [row.id, row.state, row.attempts, row.last_error])).toEqual([
+      expect(rows.map(row => [row.id, row.state, row.attempts, row.lastError])).toEqual([
         [retried.id, "pending", 1, "boom"],
       ])
     } finally {
@@ -463,7 +463,7 @@ describe("slots", () => {
     expect(log.all("heartbeat").length).toBeGreaterThan(beats + 10)
     expect(log.all("abort")).toEqual([])
     expect(new Set(log.all("start").map(e => e.claim.id))).toEqual(new Set([a.id, c.id]))
-    expect(only(await jobs(schema, `id = ${c.id}`)).lease_until!.getTime()).toBeGreaterThan(
+    expect(only(await jobs(schema, `id = ${c.id}`)).leaseUntil!.getTime()).toBeGreaterThan(
       Date.now(),
     )
     await query(producer, "commit")
@@ -626,7 +626,7 @@ describe("heartbeat", () => {
     expect((await log.waitFor("settled", e => e.claim === first.claim)).outcome).toBe("lost")
     // The worker claims the returned job again; no fail recorded the abort.
     const second = await log.waitFor("start", e => e.claim.job.attempts === 2)
-    expect(second.claim.job.last_error).toBe("lease expired")
+    expect(only(await jobs(schema, `id = ${second.claim.id}`)).lastError).toBe("lease expired")
   })
 
   test("a claim that returns after the deadline of its lease does not start its handler, and its job retries with the attempt spent", async () => {
@@ -651,7 +651,7 @@ describe("heartbeat", () => {
       [job.id],
     ])
     const row = only(await jobs(schema))
-    expect([row.state, row.attempts, row.last_error]).toEqual([
+    expect([row.state, row.attempts, row.lastError]).toEqual([
       "pending",
       1,
       "lease confirmation deadline passed before the handler started",
@@ -707,7 +707,7 @@ describe("heartbeat", () => {
     expect(claimed).toBe(0)
     expect(abortedAfter).toBeLessThan(lease * 1000)
     const row = only(await jobs(schema, `id = ${job.id}`))
-    expect([row.state, row.last_error]).toEqual(["pending", "handler aborted: deadline"])
+    expect([row.state, row.lastError]).toEqual(["pending", "handler aborted: deadline"])
   })
 
   test("a heartbeat connection whose backend died is replaced, and the handler keeps its lease", async () => {
@@ -740,17 +740,22 @@ describe("worker id", () => {
       limit: 1,
       defaultLease: 3600,
     })
+    const gates = createGates()
     const log = recordEvents()
     startTestWorker(schema, {
       id: "same",
-      tasks: { t: { handler: () => {} } },
+      tasks: { t: gates.task },
       onEvent: log.onEvent,
     })
     expect((await log.waitFor("recover")).jobs).toEqual([
       { id: job.id, state: "pending", detached: false },
     ])
     const start = await log.waitFor("start")
-    expect([start.claim.job.attempts, start.claim.job.last_error]).toEqual([2, "worker restarted"])
+    expect([start.claim.job.attempts, only(await jobs(schema)).lastError]).toEqual([
+      2,
+      "worker restarted",
+    ])
+    gates.open(start.claim.claimId)
     expect((await log.waitFor("settled")).outcome).toBe("completed")
   })
 
@@ -976,15 +981,15 @@ describe("failures", () => {
     // The attempt of a RetryError counts, so the last one fails for good.
     expect(outcomes.map(e => e.outcome)).toEqual(["retry", "retry", "failed", "failed"])
     const [r, d, l, t] = await jobs(schema)
-    expect([r, d, l, t].map(row => [row!.state, row!.last_error])).toEqual([
+    expect([r, d, l, t].map(row => [row!.state, row!.lastError])).toEqual([
       ["pending", "boom"],
       ["pending", "rate limited"],
       ["failed", "rate limited"],
       ["failed", "bad payload"],
     ])
-    expect(r!.not_before!.getTime() - Date.now()).toBeGreaterThan(90_000)
-    expect(d!.not_before!.getTime() - Date.now()).toBeGreaterThan(190_000)
-    expect(d!.not_before!.getTime() - Date.now()).toBeLessThanOrEqual(200_000)
+    expect(r!.notBefore!.getTime() - Date.now()).toBeGreaterThan(90_000)
+    expect(d!.notBefore!.getTime() - Date.now()).toBeGreaterThan(190_000)
+    expect(d!.notBefore!.getTime() - Date.now()).toBeLessThanOrEqual(200_000)
     expect(log.all("backoff-error")).toEqual([])
   })
 
@@ -1013,8 +1018,8 @@ describe("failures", () => {
     )
     expect(outcomes.map(e => e.outcome)).toEqual(["failed", "retry"])
     const [t, d] = await jobs(schema)
-    expect([t!.last_error, d!.last_error]).toEqual(["bad\\u0000payload", "rate\\u0000limited"])
-    expect(d!.not_before!.getTime() - Date.now()).toBeGreaterThan(190_000)
+    expect([t!.lastError, d!.lastError]).toEqual(["bad\\u0000payload", "rate\\u0000limited"])
+    expect(d!.notBefore!.getTime() - Date.now()).toBeGreaterThan(190_000)
   })
 
   test("a backoff that throws or gives a delay outside its range is reported, and the job retries with the default backoff", async () => {
@@ -1046,7 +1051,7 @@ describe("failures", () => {
       expect(log.all("backoff-error", e => e.claim.id === id)).toHaveLength(1)
       const row = only(await jobs(schema, `id = ${id}`))
       // The default backoff of the first attempt is 2 seconds.
-      expect(row.not_before!.getTime() - Date.now()).toBeGreaterThan(1000)
+      expect(row.notBefore!.getTime() - Date.now()).toBeGreaterThan(1000)
     }
   })
 
@@ -1066,7 +1071,7 @@ describe("failures", () => {
     expect((await log.waitFor("settled")).outcome).toBe("failed")
     expect(log.all("end").map(e => e.outcome)).toEqual(["terminal"])
     const row = only(await jobs(schema, `id = ${job.id}`))
-    expect([row.state, row.last_error]).toEqual(["failed", "undefined"])
+    expect([row.state, row.lastError]).toEqual(["failed", "undefined"])
   })
 
   test("a handler that throws a value whose inspection or string conversion throws fails its job", async () => {
@@ -1109,7 +1114,7 @@ describe("failures", () => {
     })
     for (const job of [plain, hostile, proxy]) {
       expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
-      expect(only(await jobs(schema, `id = ${job.id}`)).last_error).toBe("unprintable error")
+      expect(only(await jobs(schema, `id = ${job.id}`)).lastError).toBe("unprintable error")
     }
     // Telling the error classes of the proxy fails, so its job retries with the default backoff.
     expect(log.all("backoff-error").map(e => e.claim.id)).toEqual([proxy.id])
@@ -1167,7 +1172,7 @@ describe("stop", () => {
     expect(log.all("end")[0]!.outcome).toBe("requeue")
     expect(log.all("settled")[0]!.outcome).toBe("requeued")
     const row = only(await jobs(schema, `id = ${job.id}`))
-    expect([row.state, row.attempts, row.last_error, row.claim_id]).toEqual([
+    expect([row.state, row.attempts, row.lastError, row.claimId]).toEqual([
       "pending",
       0,
       null,
@@ -1215,7 +1220,7 @@ describe("stop", () => {
     const decided = Object.fromEntries(log.all("end").map(e => [e.claim.job.task, e.outcome]))
     expect(decided).toEqual({ terminal: "terminal", retry: "retry", returns: "complete" })
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.state, r.attempts, r.last_error])).toEqual([
+    expect(rows.map(r => [r.id, r.state, r.attempts, r.lastError])).toEqual([
       [ids.terminal, "failed", 1, "gone"],
       [ids.retry, "pending", 1, "later"],
     ])
@@ -1247,7 +1252,7 @@ describe("stop", () => {
     expect(log.all("backoff-error").map(e => e.error)).toEqual([trap])
     expect(log.all("settled").map(e => e.outcome)).toEqual(["failed"])
     const row = only(await jobs(schema, `id = ${job.id}`))
-    expect([row.state, row.attempts, row.last_error]).toEqual(["failed", 1, "later"])
+    expect([row.state, row.attempts, row.lastError]).toEqual(["failed", 1, "later"])
   })
 
   test("a job interrupted by stop merges with the pending job of its key", async () => {
@@ -1327,10 +1332,10 @@ describe("stop", () => {
     // A heartbeat in flight at the timeout may still extend the lease once.
     await sleep(3 * interval * 1000)
     const beats = log.all("heartbeat").length
-    const leaseUntil = only(await jobs(schema)).lease_until
+    const leaseUntil = only(await jobs(schema)).leaseUntil
     await sleep(3 * interval * 1000)
     expect(log.all("heartbeat").length).toBe(beats)
-    expect(only(await jobs(schema)).lease_until).toEqual(leaseUntil)
+    expect(only(await jobs(schema)).leaseUntil).toEqual(leaseUntil)
     // Another worker runs the job again, and the orphan then ends.
     await reapNow(schema, job.id)
     const other = recordEvents()
@@ -1340,7 +1345,7 @@ describe("stop", () => {
     gates.open(orphan.claim.claimId)
     expect((await log.waitFor("settled")).outcome).toBe("stopped")
     const row = only(await jobs(schema))
-    expect([row.state, row.claim_id, row.attempts]).toEqual(["active", again.claim.claimId, 2])
+    expect([row.state, row.claimId, row.attempts]).toEqual(["active", again.claim.claimId, 2])
     gatesOther.open(again.claim.claimId)
     expect((await other.waitFor("settled")).outcome).toBe("completed")
   })

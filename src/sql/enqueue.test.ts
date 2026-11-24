@@ -43,13 +43,13 @@ describe("run time", () => {
       delay: 5,
       now: T(1),
     })
-    expect((await jobs(schema)).map(row => secondsOf(row.run_at))).toEqual([1, 6, 7])
+    expect((await jobs(schema)).map(row => secondsOf(row.runAt))).toEqual([1, 6, 7])
   })
 
   test("replace takes the delay from its own statement, and keep keeps the run time", async () => {
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 5, now: T(1) })
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 5, now: T(3) })
-    expect(secondsOf(only(await jobs(schema)).run_at)).toBe(8)
+    expect(secondsOf(only(await jobs(schema)).runAt)).toBe(8)
     await enqueue(schema.admin, schema.table, {
       task: "t",
       key: "k",
@@ -57,7 +57,7 @@ describe("run time", () => {
       delay: 1,
       now: T(4),
     })
-    expect(secondsOf(only(await jobs(schema)).run_at)).toBe(8)
+    expect(secondsOf(only(await jobs(schema)).runAt)).toBe(8)
   })
 
   test("takes the bounds of the options of an enqueue: delay and maxWait of 1e12 seconds, runAt in the years 1 and 9999", async () => {
@@ -72,13 +72,13 @@ describe("run time", () => {
     // Over the pending row, the debounce adds delay to the time of its enqueue and maxWait to the start of the window.
     await enqueueAt("debounce", { mode: "debounce", delay: 1e12, maxWait: 1e12, now: T(1) })
     const rows = await jobs(schema)
-    expect(rows.map(row => [row.key, row.run_at.getTime()])).toEqual([
+    expect(rows.map(row => [row.key, row.runAt.getTime()])).toEqual([
       ["first", first.getTime()],
       ["last", last.getTime()],
       ["delay", T(1e12).getTime()],
       ["debounce", T(1e12).getTime()],
     ])
-    expect(rows[0]!.max_attempts).toBe(2 ** 31 - 1)
+    expect(rows[0]!.maxAttempts).toBe(2 ** 31 - 1)
   })
 })
 
@@ -117,8 +117,8 @@ describe("key modes with an existing pending job", () => {
     expect(b).toEqual({ id: a.id, created: false })
     const row = only(await jobs(schema))
     expect(row.payload).toBe(1)
-    expect(secondsOf(row.run_at)).toBe(5)
-    expect(row.max_attempts).toBe(3)
+    expect(secondsOf(row.runAt)).toBe(5)
+    expect(row.maxAttempts).toBe(3)
   })
 
   test("replace changes payload, run_at, and max_attempts and keeps attempts", async () => {
@@ -134,8 +134,8 @@ describe("key modes with an existing pending job", () => {
     })
     const row = only(await jobs(schema))
     expect(row.payload).toBe(2)
-    expect(secondsOf(row.run_at)).toBe(7)
-    expect(row.max_attempts).toBe(9)
+    expect(secondsOf(row.runAt)).toBe(7)
+    expect(row.maxAttempts).toBe(9)
     expect(row.attempts).toBe(3)
   })
 
@@ -247,10 +247,10 @@ describe("enqueueMany", () => {
       rows.map(row => [
         row.key,
         row.payload,
-        secondsOf(row.run_at),
-        secondsOf(row.window_started_at),
+        secondsOf(row.runAt),
+        secondsOf(row.windowStartedAt),
         row.attempts,
-        row.max_attempts,
+        row.maxAttempts,
       ]),
     ).toEqual([
       ["keep", 1, 5, 0, 3, 3],
@@ -356,7 +356,7 @@ describe("concurrent producers", () => {
       expect(rows).toHaveLength(1)
       if (mode === "debounce") {
         // Monotonic: run_at is not before the latest event + delay, and not after the window.
-        expect(secondsOf(rows[0]!.run_at)).toBeCloseTo(0.99 + 2, 3)
+        expect(secondsOf(rows[0]!.runAt)).toBeCloseTo(0.99 + 2, 3)
       }
     })
   }
@@ -665,7 +665,7 @@ describe("debounce: maxWait bounds the computed deadline, not the claim", () => 
     await query(producer, "commit")
     const claim = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(15) }))
     // Deadline min(2 + 2, 0 + 10) = 4 respected; the claim is 11 s late, 5 s past window start + maxWait.
-    expect([secondsOf(claim.job.run_at), claim.lag]).toEqual([4, 11])
+    expect([secondsOf(only(await jobs(schema)).runAt), claim.lag]).toEqual([4, 11])
   })
 })
 
@@ -679,7 +679,7 @@ describe("debounce: maxWait below delay", () => {
       maxWait: 2,
       now: T(0),
     })
-    expect(secondsOf((await jobs(schema))[0]!.run_at)).toBe(2)
+    expect(secondsOf((await jobs(schema))[0]!.runAt)).toBe(2)
   })
 })
 
@@ -692,7 +692,7 @@ describe("debounce: changes of settings and key modes", () => {
       ...settings,
       now: T(now),
     })
-  const runAt = async (key: string) => secondsOf(only(await jobs(schema, `key = '${key}'`)).run_at)
+  const runAt = async (key: string) => secondsOf(only(await jobs(schema, `key = '${key}'`)).runAt)
 
   test("a later event never moves run_at back, also with a smaller maxWait, and the commit order does not change it", async () => {
     await debounce("in-order", 0, { delay: 8, maxWait: 3 })
@@ -713,7 +713,7 @@ describe("debounce: changes of settings and key modes", () => {
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 100, now: T(0) })
     await debounce("k", 50, DEBOUNCE)
     const row = only(await jobs(schema))
-    expect([secondsOf(row.run_at), secondsOf(row.window_started_at)]).toEqual([52, 50])
+    expect([secondsOf(row.runAt), secondsOf(row.windowStartedAt)]).toEqual([52, 50])
     await debounce("k", 59, DEBOUNCE)
     expect(await runAt("k")).toBe(60)
   })
@@ -724,7 +724,7 @@ describe("debounce: changes of settings and key modes", () => {
     expect(await runAt("k")).toBe(8)
     await debounce("k", 2, DEBOUNCE)
     const row = only(await jobs(schema))
-    expect([secondsOf(row.run_at), secondsOf(row.window_started_at)]).toEqual([4, 2])
+    expect([secondsOf(row.runAt), secondsOf(row.windowStartedAt)]).toEqual([4, 2])
   })
 })
 
@@ -752,7 +752,7 @@ describe("debounce under concurrency", () => {
       ...DEBOUNCE,
       now: T(5),
     })
-    expect(secondsOf((await jobs(schema))[0]!.run_at)).toBe(8)
+    expect(secondsOf((await jobs(schema))[0]!.runAt)).toBe(8)
     // A formula without monotonicity would give 7, a run 1 s after the event at 6.
   })
 
@@ -773,7 +773,7 @@ describe("debounce under concurrency", () => {
       maxWait: 2,
       now: T(9),
     })
-    expect(secondsOf(only(await jobs(schema)).run_at)).toBe(12)
+    expect(secondsOf(only(await jobs(schema)).runAt)).toBe(12)
     // A cap from the now of the producer would give 9 + 2 = 11.
   })
 
@@ -831,7 +831,7 @@ describe("debounce under concurrency", () => {
     await query(worker, "commit")
     expect((await event).created).toBe(true)
     const rows = await jobs(schema, `state = 'pending'`)
-    expect([secondsOf(rows[0]!.window_started_at), secondsOf(rows[0]!.run_at)]).toEqual([10, 12])
+    expect([secondsOf(rows[0]!.windowStartedAt), secondsOf(rows[0]!.runAt)]).toEqual([10, 12])
   })
 
   test("8 producers and a worker race on every tick, 10 keys, 300 ticks: no start is early, every event is covered, and the lateness past maxWait is measured", async () => {
@@ -906,6 +906,6 @@ describe("debounce under concurrency", () => {
       await query(producer, "commit")
     }
     const row = only(await jobs(schema))
-    expect([row.state, secondsOf(row.run_at)]).toEqual(["pending", 10])
+    expect([row.state, secondsOf(row.runAt)]).toEqual(["pending", 10])
   })
 })

@@ -1,6 +1,7 @@
 // Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, breakpoints inside statements, and virtual time.
 // Test connections do not add the test schema to `search_path`, so statements must qualify their names.
 import { migrate } from "kern-migrations"
+import { columnsOf, type Selectable } from "kern-orm"
 import {
   type Connection,
   createDatabase,
@@ -15,11 +16,11 @@ import { getBackendPid } from "kern-orm/testing"
 import postgres from "postgres"
 
 import { jobMigrations } from "../migration/migrations"
-import { jobColumns, type JobRow, toJob } from "../sql/job"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier } from "../sql/postgres"
 import { bindWorkerDb, type WorkerDb } from "../worker/db/db"
-import { query, type StatementTarget } from "../worker/db/query"
+import { query, startQuery, type StatementTarget } from "../worker/db/query"
+import { job } from "../worker/db/tables/job"
 
 /** Returns the URL of the test database. */
 export function databaseUrl(): string {
@@ -273,14 +274,18 @@ export const T = (seconds: number) => new Date(BASE + Math.round(seconds * 1000)
 /** Converts virtual time back to seconds. */
 export const secondsOf = (d: Date) => (d.getTime() - BASE) / 1000
 
+/** Row of the job table with all its columns. */
+export type JobRow = Selectable<typeof job>
+
 /** Returns the job rows of a test schema in the order of their ids. */
 export async function jobs(
   schema: Pick<TestSchema, "admin" | "table">,
   where = "true",
 ): Promise<JobRow[]> {
-  const rows = await query(
+  const columns = columnsOf(job, "*", { alias: "j" })
+  const rows = await startQuery(
     schema.admin,
-    `select ${jobColumns("j")} from ${schema.table.name} j where ${where} order by id`,
-  )
-  return rows.map(toJob)
+    `select ${columns.text} from ${schema.table.name} j where ${where} order by id`,
+  ).select({ job: columns })
+  return rows.map(row => row.job)
 }

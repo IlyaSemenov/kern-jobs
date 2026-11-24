@@ -3,7 +3,7 @@
 The schema of kern-jobs, the job table with its claim sequence and its indexes ([Data model](data-model.md)), is created and changed by migrations of [kern-migrations](https://github.com/IlyaSemenov/kern-orm/blob/kern-migrations%400.4.1/architecture/migrations.md).
 kern-jobs keeps their history and applies it itself, on a driver of kern-db, rather than give their SQL to the migration tool of the application ([decision](../decisions/migrations/own-history.md)).
 
-The column names, types, and nullability declared in `worker/db/db.ts` must match the job table created by the migrations.
+The column names, types, and nullability declared in `worker/db/tables/` must match the tables created by the migrations.
 
 ## History
 

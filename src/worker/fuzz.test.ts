@@ -230,7 +230,7 @@ test(`fuzz seed ${SEED}`, async () => {
         const long = faults && random.float() < 0.1
         await pause(long ? LEASE * 1400 : random.float() * 15, zombie ? null : signal)
         if (faults && random.float() < 0.12) throw new Error("boom")
-        observed.set(job.claim_id!, { key: job.key, version, queue: job.queue })
+        observed.set(job.claimId!, { key: job.key, version, queue: job.queue })
       } finally {
         others.delete(signal)
         queue?.delete(signal)

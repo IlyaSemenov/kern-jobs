@@ -74,18 +74,18 @@ describe("last attempt and terminal error", () => {
     const { a, b } = await activeWithPending({ maxAttempts: 1 })
     expect(await failA(a)).toBe("failed")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.failed_at])).toEqual([
+    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.failedAt])).toEqual([
       [a.id, "failed", "k", 1, T(2)],
       [b.id, "pending", "k", 0, null],
     ])
-    expect(secondsOf(rows[1]!.run_at)).toBe(20)
+    expect(secondsOf(rows[1]!.runAt)).toBe(20)
   })
 
   test("A before its last attempt with B pending, replace: A deleted as superseded, B unchanged", async () => {
     const { a, b } = await activeWithPending()
     expect(await failA(a)).toBe("superseded")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.attempts, secondsOf(r.run_at)])).toEqual([[b.id, 0, 20]])
+    expect(rows.map(r => [r.id, r.attempts, secondsOf(r.runAt)])).toEqual([[b.id, 0, 20]])
   })
 
   test("A before its last attempt with B pending, debounce: A deleted as superseded, B unchanged", async () => {
@@ -102,7 +102,7 @@ describe("last attempt and terminal error", () => {
     })
     expect(await failA(a)).toBe("superseded")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.payload, r.attempts, secondsOf(r.run_at)])).toEqual([
+    expect(rows.map(r => [r.id, r.payload, r.attempts, secondsOf(r.runAt)])).toEqual([
       [b.id, "b", 0, 11],
     ])
   })
@@ -110,7 +110,7 @@ describe("last attempt and terminal error", () => {
   test("a terminal error with B pending: A failed at the time of the fail, B unchanged", async () => {
     const { a, b } = await activeWithPending()
     expect(await failA(a, { reason: "terminal-error" })).toBe("failed")
-    expect((await jobs(schema)).map(r => [r.id, r.state, r.failed_at])).toEqual([
+    expect((await jobs(schema)).map(r => [r.id, r.state, r.failedAt])).toEqual([
       [a.id, "failed", T(2)],
       [b.id, "pending", null],
     ])
@@ -120,7 +120,7 @@ describe("last attempt and terminal error", () => {
     const { a } = await activeWithPending({ mode: "keep" })
     expect(await failA(a)).toBe("replaced-pending")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.run_at), r.payload])).toEqual([
+    expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.runAt), r.payload])).toEqual([
       [a.id, "pending", 1, 32, "a"],
     ])
   })
@@ -134,8 +134,8 @@ describe("last attempt and terminal error", () => {
       row.state,
       row.key,
       row.attempts,
-      secondsOf(row.run_at),
-      secondsOf(row.not_before!),
+      secondsOf(row.runAt),
+      secondsOf(row.notBefore!),
     ]).toEqual(["pending", "k", 1, 32, 32])
   })
 
@@ -151,7 +151,7 @@ describe("last attempt and terminal error", () => {
     })
     expect(await failA(a)).toBe("retry")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.scope, r.state, r.key, secondsOf(r.run_at)])).toEqual([
+    expect(rows.map(r => [r.id, r.scope, r.state, r.key, secondsOf(r.runAt)])).toEqual([
       [a.id, "a", "pending", "k", 32],
       [b.id, "b", "pending", "k", 20],
     ])
@@ -213,7 +213,7 @@ describe("merge policy is read from the rows, not from the caller", () => {
   test("the last enqueue sets key_mode of the pending row", async () => {
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", mode: "replace", now: T(0) })
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", mode: "keep", now: T(1) })
-    expect((await jobs(schema))[0]!.key_mode).toBe("keep")
+    expect((await jobs(schema))[0]!.keyMode).toBe("keep")
   })
 })
 
@@ -237,14 +237,14 @@ describe("uniqueness of pending keys during a retry", () => {
         now: T(3),
       }),
     ).toEqual({ id: a.id, created: false })
-    expect((await jobs(schema)).map(r => [r.payload, secondsOf(r.run_at)])).toEqual([["a", 32]])
+    expect((await jobs(schema)).map(r => [r.payload, secondsOf(r.runAt)])).toEqual([["a", 32]])
   })
 
   test("replace during a retry changes the payload, keeps run_at at or after not_before, and keeps attempts", async () => {
     const a = await retrying()
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: "b", now: T(3) })
     const row = only(await jobs(schema))
-    expect([row.id, row.payload, secondsOf(row.run_at), row.attempts]).toEqual([a.id, "b", 32, 1])
+    expect([row.id, row.payload, secondsOf(row.runAt), row.attempts]).toEqual([a.id, "b", 32, 1])
     await enqueue(schema.admin, schema.table, {
       task: "t",
       key: "k",
@@ -252,7 +252,7 @@ describe("uniqueness of pending keys during a retry", () => {
       runAt: T(50),
       now: T(4),
     })
-    expect(secondsOf(only(await jobs(schema)).run_at)).toBe(50)
+    expect(secondsOf(only(await jobs(schema)).runAt)).toBe(50)
   })
 
   test("20 concurrent producers during a retry: one pending row, created by none", async () => {
@@ -299,7 +299,7 @@ describe("attempt budget", () => {
       )
     }
     expect(outcomes).toEqual(["retry", "retry", "failed"])
-    expect((await jobs(schema)).map(r => [r.state, r.attempts, r.last_error])).toEqual([
+    expect((await jobs(schema)).map(r => [r.state, r.attempts, r.lastError])).toEqual([
       ["failed", 3, "e2"],
     ])
   })
@@ -320,7 +320,7 @@ describe("attempt budget", () => {
     await failA(a, { backoff: 0 })
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", maxAttempts: 1, now: T(3) })
     const again = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(3) }))
-    expect([again.job.attempts, again.job.max_attempts]).toEqual([2, 1])
+    expect([again.job.attempts, again.job.maxAttempts]).toEqual([2, 1])
     expect(await failA(again, { now: T(4) })).toBe("failed")
   })
 })
@@ -341,10 +341,10 @@ describe("requeue", () => {
       row.state,
       row.key,
       row.attempts,
-      row.last_error,
-      secondsOf(row.run_at),
-      secondsOf(row.not_before!),
-      row.claim_id,
+      row.lastError,
+      secondsOf(row.runAt),
+      secondsOf(row.notBefore!),
+      row.claimId,
     ]).toEqual(["pending", "k", 1, "boom", 2, 2, null])
   })
 
@@ -352,7 +352,7 @@ describe("requeue", () => {
     const { a } = await activeWithPending({ mode: "keep" })
     expect(await requeueA(a)).toBe("replaced-pending")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.run_at), r.payload])).toEqual([
+    expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.runAt), r.payload])).toEqual([
       [a.id, "pending", 0, 2, "a"],
     ])
   })
@@ -361,7 +361,7 @@ describe("requeue", () => {
     const { a, b } = await activeWithPending({ maxAttempts: 1 })
     expect(await requeueA(a)).toBe("superseded")
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.attempts, secondsOf(r.run_at)])).toEqual([[b.id, 0, 20]])
+    expect(rows.map(r => [r.id, r.attempts, secondsOf(r.runAt)])).toEqual([[b.id, 0, 20]])
   })
 
   test("a producer commits B between the competitor check and the update: 23505, and the retry merges", async () => {
@@ -490,7 +490,7 @@ describe("races of the return to pending with enqueues", () => {
     expect(outcome).toBe("retry")
     expect(await event!).toEqual({ id: a.id, created: false })
     const [row] = await jobs(schema)
-    expect([row!.payload, row!.attempts, secondsOf(row!.run_at)]).toEqual(["b", 1, 32])
+    expect([row!.payload, row!.attempts, secondsOf(row!.runAt)]).toEqual(["b", 1, 32])
   })
 
   test("fail runs at READ COMMITTED, on which these races rely, also where the default isolation is higher", async () => {

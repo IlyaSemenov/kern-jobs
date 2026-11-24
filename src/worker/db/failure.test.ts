@@ -6,10 +6,11 @@ import { waitForLock } from "kern-orm/testing"
 
 import { retryFailedJob } from "../../producer/administration"
 import { enqueue } from "../../sql/enqueue"
-import type { JobRow, KeyMode } from "../../sql/job"
+import type { KeyMode } from "../../sql/job"
 import {
   createTestSchema,
   holdHook,
+  type JobRow,
   jobs,
   only,
   T,
@@ -61,13 +62,13 @@ describe("claim stamps", () => {
   for (const queue of [null, "q"]) {
     test(`a claim ${queue ? "with" : "without"} a queue stamps the attempt budget of the failure jobs of its task, and a later claim without one clears it`, async () => {
       const claim = await claimed({ queue, maxAttempts: 5 })
-      expect(only(await jobs(schema)).failure_max_attempts).toBe(7)
+      expect(only(await jobs(schema)).failureMaxAttempts).toBe(7)
       // A requeue keeps the stamp on the pending row, where nothing reads it.
       await requeue(schema.db, schema.table, claim, { now: T(1) })
       const plain = { ...stamping, failureMaxAttempts: {} }
       await claimCycle(schema.admin, schema.table, { ...plain, slots: 1, now: T(2) })
       const cleared = only(await jobs(schema))
-      expect([cleared.state, cleared.failure_max_attempts]).toEqual(["active", null])
+      expect([cleared.state, cleared.failureMaxAttempts]).toEqual(["active", null])
     })
   }
 
@@ -80,7 +81,7 @@ describe("claim stamps", () => {
       limit: 2,
       now: T(0),
     })
-    expect((await jobs(schema)).map(r => [r.task, r.failure_max_attempts])).toEqual([
+    expect((await jobs(schema)).map(r => [r.task, r.failureMaxAttempts])).toEqual([
       ["t", 7],
       ["u", null],
     ])
@@ -127,7 +128,7 @@ describe("claim stamps", () => {
     expect(await claim(long, undefined)).toHaveLength(1)
     const stamped = only(await claim(fitting, 7))
     expect(await failAt(stamped, { reason: "terminal-error" })).toBe("failed")
-    expect(only(await jobs(schema, `task = '${fitting}:failure'`)).max_attempts).toBe(7)
+    expect(only(await jobs(schema, `task = '${fitting}:failure'`)).maxAttempts).toBe(7)
   })
 })
 
@@ -142,25 +143,25 @@ describe("terminal fail", () => {
     })
     expect(await failAt(claim)).toBe("failed")
     const source = only(await jobs(schema, "task = 't'"))
-    expect([source.state, source.key, source.last_error]).toEqual(["failed", "k", "boom"])
+    expect([source.state, source.key, source.lastError]).toEqual(["failed", "k", "boom"])
     const job = only(await failureJobs())
     expect(job).toMatchObject({
       task: "t:failure",
       scope: "s1",
       key: null,
       queue: null,
-      key_mode: "replace",
-      run_at: T(2),
-      not_before: null,
-      window_started_at: T(2),
-      created_at: T(2),
+      keyMode: "replace",
+      runAt: T(2),
+      notBefore: null,
+      windowStartedAt: T(2),
+      createdAt: T(2),
       attempts: 0,
-      max_attempts: 7,
+      maxAttempts: 7,
       state: "pending",
-      claim_id: null,
-      last_error: null,
-      failed_at: null,
-      failure_max_attempts: null,
+      claimId: null,
+      lastError: null,
+      failedAt: null,
+      failureMaxAttempts: null,
     })
     expect(job.payload).toEqual({
       id: claim.claimId,
@@ -365,7 +366,7 @@ describe("reaper", () => {
       { id: claim.id, state: "failed", detached: false },
     ])
     const job = only(await failureJobs())
-    expect([job.scope, job.max_attempts, job.run_at]).toEqual(["s1", 7, T(11)])
+    expect([job.scope, job.maxAttempts, job.runAt]).toEqual(["s1", 7, T(11)])
     expect(job.payload).toEqual({
       id: claim.claimId,
       reason: "lease-expired",

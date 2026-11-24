@@ -104,7 +104,7 @@ describe("a running worker", () => {
       ],
     ])
     const rows = await jobs(schema)
-    expect(rows.map(row => [row.id, row.state, row.attempts, row.last_error])).toEqual([
+    expect(rows.map(row => [row.id, row.state, row.attempts, row.lastError])).toEqual([
       [failed.id, "pending", 1, "the index is down"],
     ])
   })

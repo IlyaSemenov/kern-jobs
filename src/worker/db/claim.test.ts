@@ -238,7 +238,9 @@ describe("start order", () => {
     })
     await release()
     const r = await claim
-    expect(r.kind === "job" && [r.claim.job.key, secondsOf(r.claim.job.run_at)]).toEqual(["k1", 3])
+    if (r.kind !== "job") throw new Error(`Expected a claimed job, got ${r.kind}`)
+    const claimed = only(await jobs(schema, `id = ${r.claim.id}`))
+    expect([claimed.key, secondsOf(claimed.runAt)]).toEqual(["k1", 3])
     expect((await jobs(schema, "key = 'k2'")).map(row => row.state)).toEqual(["pending"])
   })
 
@@ -462,8 +464,7 @@ async function simulate(o: {
       if (c.job.queue) {
         queued++
         perQueue.set(c.job.queue, (perQueue.get(c.job.queue) ?? 0) + 1)
-        const wait = step - (c.job.run_at.getTime() - T(0).getTime()) / 1000
-        maxWait.set(c.job.queue, Math.max(maxWait.get(c.job.queue) ?? 0, wait))
+        maxWait.set(c.job.queue, Math.max(maxWait.get(c.job.queue) ?? 0, c.lag))
       } else plain++
       await complete(schema.db, c)
     }

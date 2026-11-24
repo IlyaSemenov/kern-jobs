@@ -866,10 +866,10 @@ describe("options", () => {
     await jobs.enqueue(task, { id: "1" })
     await jobs.enqueue(task, { id: "2" }, { key: null, delay: 0 })
     const [first, second] = await jobRows(schema)
-    expect(first).toMatchObject({ key: "k:1", queue: "q", max_attempts: 3 })
-    expect(first!.run_at.getTime() - first!.created_at.getTime()).toBe(5000)
-    expect(second).toMatchObject({ key: null, queue: "q", max_attempts: 4 })
-    expect(second!.run_at).toEqual(second!.created_at)
+    expect(first).toMatchObject({ key: "k:1", queue: "q", maxAttempts: 3 })
+    expect(first!.runAt.getTime() - first!.createdAt.getTime()).toBe(5000)
+    expect(second).toMatchObject({ key: null, queue: "q", maxAttempts: 4 })
+    expect(second!.runAt).toEqual(second!.createdAt)
   })
 
   test("key true merges the enqueues of the task in each scope under the empty key, which deletePending takes too", async () => {
@@ -897,8 +897,8 @@ describe("options", () => {
     const jobs = createJobs(pool, { schemaName: schema.name })
     await jobs.enqueue(task)
     const row = only(await jobRows(schema))
-    expect(row.key_mode).toBe("debounce")
-    expect(row.run_at.getTime() - row.created_at.getTime()).toBe(2000)
+    expect(row.keyMode).toBe("debounce")
+    expect(row.runAt.getTime() - row.createdAt.getTime()).toBe(2000)
   })
 
   test("rejects invalid options before it calls the executor", async () => {
@@ -968,10 +968,10 @@ describe("enqueueMany", () => {
     const jobs = createJobs(pool, { schemaName: schema.name })
     await jobs.enqueueMany(task, [{ id: "a" }, { id: "b" }, { id: "c" }], { queue: "q" })
     expect(
-      (await jobRows(schema)).map(({ key, queue, max_attempts, payload }) => [
+      (await jobRows(schema)).map(({ key, queue, maxAttempts, payload }) => [
         key,
         queue,
-        max_attempts,
+        maxAttempts,
         payload,
       ]),
     ).toEqual([

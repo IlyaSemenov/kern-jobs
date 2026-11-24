@@ -1,12 +1,15 @@
 // Worker claims identify the active jobs a worker can heartbeat and settle.
 // The claim cycle combines batches of jobs without a queue with the heads of free queues.
 // Every claim statement must run in its own autocommit transaction: claimQueued takes a transaction-level advisory lock of its queue, which an explicit transaction would hold until its commit.
-import { jobColumns, type JobRow, toJob } from "../../sql/job"
+import { columnsOf, type RecordOf } from "kern-orm"
+
 import type { JobTable } from "../../sql/job-table"
 import { hook, NOW } from "../../sql/postgres"
-import { labelSql, type TextRow } from "../../sql/statement"
+import { labelSql } from "../../sql/statement"
 
-import { query, type StatementTarget } from "./query"
+import { startQuery, type StatementTarget } from "./query"
+import { job } from "./tables/job"
+import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
 /** Claimed job with its claim id, which every heartbeat and settlement of the claim must match. */
@@ -15,15 +18,28 @@ export interface Claim {
   claimId: string
   /** Claim lag in seconds: the claim time minus `run_at`. */
   lag: number
-  job: JobRow
+  job: ClaimedJob
 }
 
 /** Reference to a claim, enough to heartbeat or settle it. */
 export type ClaimRef = Pick<Claim, "id" | "claimId">
 
-/** Reads a row returned by a claim statement: `jobColumns` and `lag_seconds`. */
-function toClaim(row: TextRow): Claim {
-  return { id: row.id!, claimId: row.claim_id!, lag: Number(row.lag_seconds), job: toJob(row) }
+/** Columns of the claimed row `j` that the worker reads, by its handler, its settlement, and its events, whose `text` a claim statement returns and whose record `select` decodes. */
+const claimedJobColumns = columnsOf(
+  job,
+  ["id", "claimId", "task", "scope", "key", "queue", "attempts", "maxAttempts", "payload"],
+  { alias: "j" },
+)
+
+/** Claimed job: the columns of its row that the worker reads, with SQL NULL of the payload as `undefined`. */
+export type ClaimedJob = RecordOf<typeof claimedJobColumns>
+
+/** SQL of the claim lag of the claimed row `j` in seconds. */
+const LAG = `extract(epoch from ${NOW} - j.run_at)::float8`
+
+/** Returns the claim of a job row and its claim lag that a claim statement returns; the statement sets `claim_id` before `RETURNING`, so the row has one. */
+function toClaim(row: ClaimedJob, lag: number): Claim {
+  return { id: row.id, claimId: row.claimId!, lag, job: row }
 }
 
 /** Options of a claim. */
@@ -59,7 +75,7 @@ export async function claimPlain(
   table: JobTable,
   o: ClaimOptions & { limit: number },
 ): Promise<Claim[]> {
-  const rows = await query(
+  const rows = await startQuery(
     db,
     labelSql(
       "claim:plain",
@@ -74,7 +90,7 @@ export async function claimPlain(
      update ${table.name} j set state = 'active', claim_id = ${nextClaimId(table)}, locked_by = $6::text, locked_at = ${NOW},
        attempts = j.attempts + 1, lease_until = ${LEASE}, ${stampFailure(7)}
      from c where j.id = c.id
-     returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds`,
+     returning ${claimedJobColumns.text}, ${LAG} as lag_seconds`,
     ),
     [
       o.now ?? null,
@@ -85,8 +101,8 @@ export async function claimPlain(
       o.worker,
       JSON.stringify(o.failureMaxAttempts ?? {}),
     ],
-  )
-  return rows.map(toClaim)
+  ).select({ job: claimedJobColumns, lag_seconds: t.doublePrecision })
+  return rows.map(row => toClaim(row.job, row.lag_seconds))
 }
 
 /** Queue of a scope. */
@@ -113,7 +129,7 @@ export async function claimQueued(
   o: ClaimOptions & { skip?: QueueRef[]; after?: QueueRef | null },
 ): Promise<QueueClaim> {
   const skip = o.skip ?? []
-  const rows = await query(
+  const row = await startQuery(
     db,
     labelSql(
       "claim:queued",
@@ -162,7 +178,7 @@ export async function claimQueued(
        update ${table.name} j set state = 'active', claim_id = ${nextClaimId(table)}, locked_by = $6::text, locked_at = ${NOW},
          attempts = j.attempts + 1, lease_until = ${LEASE}, ${stampFailure(10)}
        from locked l where j.id = l.id
-       returning ${jobColumns("j")}, extract(epoch from ${NOW} - j.run_at)::float8 as lag_seconds
+       returning ${claimedJobColumns.text}, ${LAG} as lag_seconds
      )
      select q.scope as q_scope, q.queue as q_queue, c.* from q left join claimed c on true`,
     ),
@@ -179,11 +195,19 @@ export async function claimQueued(
       JSON.stringify(o.failureMaxAttempts ?? {}),
     ],
   )
-  if (rows.length === 0) return { kind: "none" }
-  const row = rows[0]!
-  const queue = { scope: row.q_scope!, queue: row.q_queue! }
-  if (row.id == null) return { kind: "busy", queue }
-  return { kind: "job", queue, claim: toClaim(row) }
+    // A busy queue returns its row without a claimed job, whose columns are all NULL.
+    .select({
+      q_scope: t.text,
+      q_queue: t.text,
+      job: claimedJobColumns.nullable(),
+      lag_seconds: t.doublePrecision.nullable(),
+    })
+    .take()
+    .optional()
+  if (!row) return { kind: "none" }
+  const queue = { scope: row.q_scope, queue: row.q_queue }
+  if (!row.job) return { kind: "busy", queue }
+  return { kind: "job", queue, claim: toClaim(row.job, row.lag_seconds!) }
 }
 
 /** Counters of claim cycles. */

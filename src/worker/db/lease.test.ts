@@ -67,7 +67,7 @@ describe("reaper with an existing pending job", () => {
       [a.id, "pending", null, 1],
       [b!.id, "pending", "k", 0],
     ])
-    expect(secondsOf(rows[1]!.run_at)).toBe(20)
+    expect(secondsOf(rows[1]!.runAt)).toBe(20)
   })
 
   test("A at max attempts → A failed with key at the time of the reaper, B unchanged", async () => {
@@ -75,7 +75,7 @@ describe("reaper with an existing pending job", () => {
     expect(await reap(schema.admin, schema.table, { now: T(11) })).toEqual([
       { id: a.id, state: "failed", detached: false },
     ])
-    expect((await jobs(schema)).map(r => [r.id, r.state, r.key, r.failed_at])).toEqual([
+    expect((await jobs(schema)).map(r => [r.id, r.state, r.key, r.failedAt])).toEqual([
       [a.id, "failed", "k", T(11)],
       [b!.id, "pending", "k", null],
     ])
@@ -275,11 +275,11 @@ describe("returning the active jobs of a worker", () => {
       { id: a.id, state: "pending", detached: false },
     ])
     const rows = await jobs(schema)
-    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.locked_by, r.last_error])).toEqual([
+    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.lockedBy, r.lastError])).toEqual([
       [a.id, "pending", "k", 1, null, "worker restarted"],
       [other.id, "active", null, 1, "live", null],
     ])
-    expect(secondsOf(rows[0]!.run_at)).toBe(1)
+    expect(secondsOf(rows[0]!.runAt)).toBe(1)
   })
 
   test("a job of the worker on its last attempt fails", async () => {
@@ -315,7 +315,7 @@ describe("heartbeat", () => {
       }),
     )
     await heartbeat(schema.admin, schema.table, { claims: [{ ...a, lease: 10 }], now: T(1) })
-    expect(secondsOf((await jobs(schema))[0]!.lease_until!)).toBe(100)
+    expect(secondsOf((await jobs(schema))[0]!.leaseUntil!)).toBe(100)
   })
 
   test("each claim gets its own lease", async () => {
@@ -330,7 +330,7 @@ describe("heartbeat", () => {
       now: T(5),
     })
     const leaseOf = async (id: string) =>
-      secondsOf(only(await jobs(schema, `id = ${id}`)).lease_until!)
+      secondsOf(only(await jobs(schema, `id = ${id}`)).leaseUntil!)
     expect([await leaseOf(a!.id), await leaseOf(b!.id)]).toEqual([35, 305])
   })
 
@@ -345,9 +345,9 @@ describe("heartbeat", () => {
         now: T(0),
       }),
     )
-    expect(secondsOf(a.job.lease_until!)).toBe(longest)
+    expect(secondsOf(only(await jobs(schema)).leaseUntil!)).toBe(longest)
     await heartbeat(schema.admin, schema.table, { claims: [{ ...a, lease: longest }], now: T(5) })
-    expect(secondsOf((await jobs(schema))[0]!.lease_until!)).toBe(longest + 5)
+    expect(secondsOf((await jobs(schema))[0]!.leaseUntil!)).toBe(longest + 5)
   })
 
   test("labels its statement", async () => {
@@ -392,9 +392,9 @@ describe("fencing", () => {
     const second = only(
       await claimPlain(schema.admin, schema.table, { ...W("w1"), limit: 1, now: T(11) }),
     )
-    expect([second.id, second.job.locked_by, second.job.attempts]).toEqual([
+    expect([second.id, only(await jobs(schema)).lockedBy, second.job.attempts]).toEqual([
       first.id,
-      first.job.locked_by,
+      "w1",
       first.job.attempts,
     ])
     expect(await complete(schema.db, first)).toBe(false)
@@ -414,7 +414,7 @@ describe("fencing", () => {
     expect(await reap(schema.admin, schema.table, { now: T(11) })).toEqual([])
     await query(worker, "commit")
     expect(await reap(schema.admin, schema.table, { now: T(11) })).toEqual([])
-    expect(secondsOf((await jobs(schema))[0]!.lease_until!)).toBe(20.5)
+    expect(secondsOf((await jobs(schema))[0]!.leaseUntil!)).toBe(20.5)
   })
 
   test("reaper in flight: heartbeat reports the claim busy without waiting, complete waits; then both see it lost", async () => {
@@ -464,7 +464,7 @@ describe("fencing", () => {
     expect(await beat).toEqual({ confirmed: [c!.claimId], busy: [a!.claimId] })
     await query(producer, "commit")
     expect(await failing).toBe("superseded")
-    expect(secondsOf((await jobs(schema, `id = ${c!.id}`))[0]!.lease_until!)).toBe(13)
+    expect(secondsOf((await jobs(schema, `id = ${c!.id}`))[0]!.leaseUntil!)).toBe(13)
   })
 })
 
@@ -570,7 +570,7 @@ describe("ownership after lease expiry and before reclaim", () => {
       confirmed: [a.claimId],
       busy: [],
     })
-    expect(secondsOf((await jobs(schema))[0]!.lease_until!)).toBe(25)
+    expect(secondsOf((await jobs(schema))[0]!.leaseUntil!)).toBe(25)
     expect(await reap(schema.admin, schema.table, { now: T(20) })).toEqual([])
   })
 })

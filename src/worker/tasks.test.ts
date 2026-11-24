@@ -2,39 +2,26 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { enqueue } from "../sql/enqueue"
-import type { JobRow } from "../sql/job"
 import { fixedBackoff } from "../task/backoff"
 import { RetryError, TerminalError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
 import { defineTask, type HandlerContext, type JobInfo } from "../task/task"
 import { createTestSchema, jobs, only, sleep, type TestSchema } from "../test-harness/database"
 
-import { type Claim, claimPlain } from "./db/claim"
+import { type Claim, type ClaimedJob, claimPlain } from "./db/claim"
 import { type RunHandlerContext, toWorkerTasks } from "./tasks"
 import { recordEvents, startTestWorker, stopTestWorkers } from "./test-harness"
 
-const job: JobRow = {
+const job: ClaimedJob = {
   id: "1",
+  claimId: "7",
   task: "search.indexProduct",
   scope: "",
-  queue: "search",
   key: "product:42",
-  key_mode: "replace",
-  payload: { productId: "42" },
-  run_at: new Date(0),
-  not_before: null,
-  window_started_at: new Date(0),
-  created_at: new Date(0),
+  queue: "search",
   attempts: 2,
-  max_attempts: 5,
-  state: "active",
-  claim_id: "7",
-  locked_by: "w",
-  locked_at: new Date(0),
-  lease_until: new Date(60_000),
-  last_error: null,
-  failed_at: null,
-  failure_max_attempts: null,
+  maxAttempts: 5,
+  payload: { productId: "42" },
 }
 
 describe("toWorkerTasks", () => {
@@ -373,7 +360,7 @@ describe("a worker of a manifest", () => {
       await log.waitFor("start", e => e.claim.id === indexed.id)
       const row = only(await jobs(schema, `id = ${indexed.id}`))
       // The task lease of 5 seconds, not the test lease of the worker, of 1 second.
-      expect(row.lease_until!.getTime() - row.locked_at!.getTime()).toBeGreaterThanOrEqual(4900)
+      expect(row.leaseUntil!.getTime() - row.lockedAt!.getTime()).toBeGreaterThanOrEqual(4900)
     } finally {
       gate.resolve()
     }
@@ -517,7 +504,7 @@ describe("a worker of a manifest", () => {
       const [failure, scope] = only(seen)
       expect([failure.job.scope, failure.reason, scope]).toEqual(["acme", "handler-error", "acme"])
       const failed = only(await jobs(schema, "task = 'orders.charge:failure'"))
-      expect([failed.state, failed.scope, failed.last_error]).toEqual([
+      expect([failed.state, failed.scope, failed.lastError]).toEqual([
         "failed",
         "",
         "task orders.charge:failure is scoped, but its job has no scope",
@@ -576,9 +563,7 @@ describe("a worker of a manifest", () => {
       expect(
         (await log.waitFor("settled", e => e.claim.job.task === "orders.charge:failure")).outcome,
       ).toBe("failed")
-      expect(
-        (await jobs(schema)).map(r => [r.task, r.state, r.max_attempts, r.last_error]),
-      ).toEqual([
+      expect((await jobs(schema)).map(r => [r.task, r.state, r.maxAttempts, r.lastError])).toEqual([
         ["orders.charge", "failed", 1, "card declined"],
         ["orders.charge:failure", "failed", 1, "mail server down"],
       ])
@@ -604,7 +589,7 @@ describe("a worker of a manifest", () => {
         (await log.waitFor("settled", e => e.claim.job.task === "orders.charge:failure")).outcome,
       ).toBe("retry")
       const failure = only(await jobs(schema, "task = 'orders.charge:failure'"))
-      expect([failure.state, failure.attempts, failure.max_attempts, failure.last_error]).toEqual([
+      expect([failure.state, failure.attempts, failure.maxAttempts, failure.lastError]).toEqual([
         "pending",
         1,
         25,
@@ -628,7 +613,7 @@ describe("a worker of a manifest", () => {
       await log.waitFor("recover")
       await sleep(100)
       const failed = only(await jobs(schema, "task = 'orders.charge:failure'"))
-      expect([failed.state, failed.max_attempts]).toEqual(["pending", 4])
+      expect([failed.state, failed.maxAttempts]).toEqual(["pending", 4])
       expect(failed.payload).toMatchObject({ id: claim.claimId, reason: "worker-restarted" })
     })
   })

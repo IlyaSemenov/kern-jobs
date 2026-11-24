@@ -81,9 +81,9 @@ test("catch-up resolves task options at enqueue time and applies schedule overri
   expect(only(await jobs(schema))).toMatchObject({
     key: null,
     queue: "eu-recovery",
-    max_attempts: 1,
+    maxAttempts: 1,
     payload: { region: "eu" },
-    run_at: instant("03:15:10"),
+    runAt: instant("03:15:10"),
   })
 })
 
@@ -131,7 +131,7 @@ test("a check reads the cursor and the clock exactly on a pool whose DateStyle a
   for (const schedule of [covered, current]) {
     await evaluateSchedule(db, schema.table, toWorkerSchedule(schedule), { now })
   }
-  expect((await jobs(schema)).map(job => [job.task, job.run_at])).toEqual([["current", now]])
+  expect((await jobs(schema)).map(job => [job.task, job.runAt])).toEqual([["current", now]])
   const cursors = await query(
     schema.admin,
     `select id, extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule order by id`,
@@ -184,7 +184,7 @@ test("a scheduled enqueue that keeps a pending job consumes the occurrence", asy
     now: due,
   })
   await run(schedule)
-  expect(only(await jobs(schema))).toMatchObject({ payload: "manual", key_mode: "keep" })
+  expect(only(await jobs(schema))).toMatchObject({ payload: "manual", keyMode: "keep" })
   const claim = only(
     await claimPlain(schema.driver, schema.table, {
       worker: "quick",
@@ -243,12 +243,12 @@ test("a check whose registration waits for a concurrent one locks the committed 
   await query(registrar, "commit")
   await check
   const job = only(await jobs(schema))
-  expect(job.run_at.getTime()).toBe(Number(started!.ms))
+  expect(job.runAt.getTime()).toBe(Number(started!.ms))
   const [row] = await query(
     schema.admin,
     `select extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule`,
   )
-  expect(Number(row!.cursor)).toBe(Math.floor(job.run_at.getTime() / 60000) * 60000)
+  expect(Number(row!.cursor)).toBe(Math.floor(job.runAt.getTime() / 60000) * 60000)
 })
 
 test("a replica skips a locked schedule and a later evaluation can still enqueue it", async () => {
@@ -307,7 +307,7 @@ test("a changed definition applies to the minutes after the last check, includin
   await run(defineSchedule(task, { cron: { minute: 0, hour: 4 } }), instant("02:50:00"))
   const changed = defineSchedule(task, { cron: { minute: 0, hour: 3 }, catchUp: { within: 600 } })
   await run(changed, instant("03:05:00"))
-  expect(only(await jobs(schema)).run_at).toEqual(instant("03:05:00"))
+  expect(only(await jobs(schema)).runAt).toEqual(instant("03:05:00"))
 })
 
 test("a paused schedule skips the minutes it checks and recovers downtime after resuming", async () => {

@@ -134,7 +134,7 @@ describe("SIGKILL during claiming", () => {
     await a.kill()
     await release()
     await sleep(200)
-    expect([(await row(job.id))!.state, (await row(job.id))!.locked_by]).toEqual(["active", "a"])
+    expect([(await row(job.id))!.state, (await row(job.id))!.lockedBy]).toEqual(["active", "a"])
     await reapUntil(job.id, r => r.state === "pending")
     const b = spawnWorker("b")
     await b.waitFor(completed(job.id))
@@ -250,7 +250,7 @@ describe("connection cut at COMMIT of fail", () => {
       // Before: the retry applies the fail. After: the server applied it, and the retry finds the claim gone.
       expect(settled.outcome).toBe(mode === "before" ? "retry" : "unknown")
       const r = (await row(job.id))!
-      expect([r.state, r.attempts, r.last_error]).toEqual(["pending", 1, "injected"])
+      expect([r.state, r.attempts, r.lastError]).toEqual(["pending", 1, "injected"])
       await a.kill()
     }, 30_000)
   }

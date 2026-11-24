@@ -147,14 +147,14 @@ describe("retry", () => {
       state: "failed",
       attempts: 2,
       key: "k",
-      key_mode: "keep",
+      keyMode: "keep",
       queue: "q",
       payload: { n: 1 },
-      max_attempts: 2,
-      created_at: T(0),
-      locked_at: T(5),
-      last_error: "boom",
-      failed_at: T(6),
+      maxAttempts: 2,
+      createdAt: T(0),
+      lockedAt: T(5),
+      lastError: "boom",
+      failedAt: T(6),
     })
 
     expect(await retry(failed.id, { now: T(10) })).toEqual({ retried: true })
@@ -162,10 +162,10 @@ describe("retry", () => {
       ...failed,
       state: "pending",
       attempts: 0,
-      run_at: T(10),
-      not_before: null,
-      window_started_at: T(10),
-      failed_at: null,
+      runAt: T(10),
+      notBefore: null,
+      windowStartedAt: T(10),
+      failedAt: null,
     })
   })
 
@@ -211,7 +211,7 @@ describe("retry", () => {
         now: T(31),
       })
       const before = await jobs(schema)
-      expect(before.map(r => [r.id, r.state, r.key_mode, r.attempts, r.not_before])).toEqual([
+      expect(before.map(r => [r.id, r.state, r.keyMode, r.attempts, r.notBefore])).toEqual([
         [failed, "failed", mode === "keep" ? "replace" : "keep", 1, null],
         [claim.id, "pending", mode, 1, T(71)],
       ])

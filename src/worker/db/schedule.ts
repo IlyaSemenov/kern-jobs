@@ -1,5 +1,4 @@
 import { param, sql } from "kern-orm"
-import * as t from "kern-orm/types"
 
 import { hasOccurrence } from "../../schedule/cron"
 import type { WorkerSchedule } from "../../schedule/schedule"
@@ -9,6 +8,7 @@ import { toStatementLabel } from "../../sql/statement"
 import { getTaskEnqueueParams } from "../../task/options"
 
 import type { WorkerDb } from "./db"
+import * as t from "./types"
 
 /** Options of `evaluateSchedule`. */
 export interface EvaluateOptions {

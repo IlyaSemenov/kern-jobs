@@ -23,21 +23,29 @@ kern-db keeps the [contract of its drivers](https://github.com/IlyaSemenov/kern-
 ## Statements
 
 `kern-jobs/worker` loads kern-orm, and each worker binds the ORM schema of `worker/db/db.ts` to its database in the configured PostgreSQL schema at startup.
-Worker ORM definitions use camelCase keys and map them to snake_case PostgreSQL columns with `toSnakeCase`.
-Simple worker statements use typed table queries on this database, such as complete, the row locks and deletes of fail and requeue, and the registration, lock, and advance of the cursor of a schedule ([decision](../decisions/drivers/worker-orm.md)).
+The schema has layers, each of which imports only the layers before it:
+
+- the building blocks of tables: `defineTable` of `worker/db/base.ts`, whose camelCase keys map to snake_case PostgreSQL columns with `toSnakeCase`, and the column types of `worker/db/types.ts`, those of kern-orm and its own, which modules import as `t` from it rather than from `kern-orm/types`;
+- `worker/db/tables/` defines one table per module;
+- `worker/db/db.ts` assembles the tables into the schema;
+- the other modules use the schema and the tables.
+
+The job table declares every column, and its types read `bigint` columns as their text, so that IDs keep their precision; timestamps as seconds since the epoch, decoded to a `Date` of those seconds as a JavaScript number times 1000, rounded to an integer, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`; and SQL NULL of the payload as `undefined`, apart from JSON `null`, which a handler gets as `null`.
+Simple worker statements use typed table queries on the database of the worker, such as complete, the row locks and deletes of fail and requeue, and the registration, lock, and advance of the cursor of a schedule ([decision](../decisions/drivers/worker-orm.md)).
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, the return to pending, and an enqueue, use hand-written SQL, which in fail, requeue, and the check of a schedule runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
 
-For raw SQL with named result columns, the worker runs its statements through `query` of `worker/db/query.ts`, which turns each parameter into text by `encodeParam`, from a number, boolean, date, or array of strings, and returns the rows as records by the names of their columns.
+Hand-written statements that only the worker runs go through `worker/db/query.ts`, which passes each parameter by `encodeParam` as text or SQL NULL: `query` returns the rows as records of the text of their columns by name, and `startQuery(…).select(…)` decodes the result columns that it names by their types, as a claim does.
 A statement that also runs on the executor of an application, such as an enqueue, runs through `queryValues` of `sql/statement.ts`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
 - Each hand-written statement casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
 - Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)).
-- Hand-written SQL returns a boolean as text, `(…)::text`, and job rows through `jobColumns`, which gives timestamps as seconds since the epoch, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`.
+- Hand-written SQL returns a boolean as text, `(…)::text`.
+- A hand-written statement returns the columns of job rows through `columnsOf` of the job table with the alias of the table in the statement and the keys of the columns that its callers read, such as `claimedJobColumns` of a claim: its SQL selects their `text`, and `select` takes them as a field, which decodes their record.
 - Each statement that kern-jobs writes starts with its label in a comment, `/* kern-jobs:<area>:<statement> */`: hand-written SQL through `labelSql` and a typed query through `comment` with `toStatementLabel`, both of `sql/statement.ts`, whose `StatementOperation` lists the names, none of which is a prefix of another.
   Statements of kern-db and kern-migrations, such as `BEGIN`, the settings of a transaction, advisory locks, and migrations, carry none.
   A test finds a statement of kern-jobs by its label, followed by its hand-written SQL where it must tell the statement of its schema from those of others, and never by SQL that kern-orm generates.
-- A typed worker query selects a timestamp as seconds since the epoch, `extract(epoch from …)`, since kern-orm decodes `timestamptz` only under the `DateStyle` `ISO`, which the pool of the application may not have.
+- The check of a schedule selects its cursor and the time of the check as seconds since the epoch, `extract(epoch from …)`, which keeps their microseconds, since kern-orm decodes `timestamptz` only under the `DateStyle` `ISO`, which the pool of the application may not have.
 
 ## Connections of the worker
 

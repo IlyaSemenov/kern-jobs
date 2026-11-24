@@ -3,13 +3,12 @@
 import { createDatabase, type Database, type Driver } from "kern-orm/db"
 
 import type { WorkerSchedule } from "../schedule/schedule"
-import type { JobRow } from "../sql/job"
 import type { JobTable } from "../sql/job-table"
 import { labelSql } from "../sql/statement"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
 
-import { type Claim, claimCycle, createClaimState } from "./db/claim"
+import { type Claim, claimCycle, type ClaimedJob, createClaimState } from "./db/claim"
 import { bindWorkerDb } from "./db/db"
 import { reap } from "./db/lease"
 import { query, type StatementTarget } from "./db/query"
@@ -28,7 +27,7 @@ export interface WorkerTask {
    * Runs a job; the job completes when it returns and fails when it throws.
    * The signal is aborted with a `HandlerAbort` when the worker loses or cannot confirm the lease of the job, or stops.
    */
-  handler(job: JobRow, context: { signal: AbortSignal }): unknown
+  handler(job: ClaimedJob, context: { signal: AbortSignal }): unknown
   /** Lease in seconds; the lease of the worker when omitted. */
   lease?: number | undefined
   /** `defaultBackoff` when omitted. */
@@ -303,7 +302,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
       const aborted = kept.signal.aborted ? (kept.signal.reason as HandlerAbort).reason : null
       // The thrown value is classified once, before the report, whose receiver gets the value and can change it: the report and the settlement both use this classification.
       const thrown = failed ? classifyThrown(error) : null
-      const { attempts: attempt, max_attempts: maxAttempts } = claim.job
+      const { attempts: attempt, maxAttempts } = claim.job
       const outcome = toHandlerOutcome({ thrown, aborted, attempt, maxAttempts })
       emit({ type: "end", claim, outcome, error, aborted })
       if (!thrown) return { type: "complete" }

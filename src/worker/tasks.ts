@@ -1,5 +1,4 @@
 // Tasks of a worker from the task implementations of its manifest: each implementation runs a claimed job with its payload and metadata, under the lease and backoff of its task, through the `runHandler` of the worker, and an implementation with a failure task gives the attempt budget of failure jobs that its claims stamp and the task that runs its failure jobs.
-import type { JobRow } from "../sql/job"
 import { TerminalError } from "../task/errors"
 import { type ManifestTask, toManifestTasks } from "../task/manifest"
 import {
@@ -11,6 +10,7 @@ import {
   type TaskImplementation,
 } from "../task/task"
 
+import type { ClaimedJob } from "./db/claim"
 import type { WorkerTask } from "./runtime"
 
 /** What `runHandler` of a worker gets about a job whose handler it runs: the context of the handler, the name of the task, and the payload of the job. */
@@ -71,13 +71,13 @@ function toWorkerTask(task: ManifestTask, runHandler: RunHandler | undefined): W
 }
 
 /** Returns the metadata of a claimed job, as handlers and `onError` get it. */
-export function toJobInfo(job: JobRow): JobInfo {
+export function toJobInfo(job: ClaimedJob): JobInfo {
   return {
     id: job.id,
     // The table stores the empty string for a job without a scope, which `createJobs` rejects as a scope.
     scope: job.scope === "" ? null : job.scope,
     attempt: job.attempts,
-    maxAttempts: job.max_attempts,
+    maxAttempts: job.maxAttempts,
     key: job.key,
     queue: job.queue,
   }

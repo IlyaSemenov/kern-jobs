@@ -111,7 +111,7 @@ for (const mode of ["before", "after"] as const) {
       errors: 1,
     })
     const row = only(await jobs(schema))
-    expect([row.state, row.attempts, row.last_error]).toEqual(["pending", 1, "boom"])
+    expect([row.state, row.attempts, row.lastError]).toEqual(["pending", 1, "boom"])
   })
 }
 

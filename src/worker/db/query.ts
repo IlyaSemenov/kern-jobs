@@ -1,5 +1,6 @@
 // Statements of the worker whose rows it reads by the names of their columns, which a driver of kern-db gives with the result.
 import type { Connection } from "kern-orm/db"
+import { startSqlQuery } from "kern-orm/db/builder"
 
 import { type Param, type TextRow, toStatement } from "../../sql/statement"
 
@@ -20,4 +21,9 @@ export async function query(
     columns.forEach(({ name }, i) => (row[name] = values[i] ?? null))
     return row
   })
+}
+
+/** Starts a query of a statement with parameters that `encodeParam` turns into text, whose `select` decodes the fields of its rows by types; it runs once awaited. */
+export function startQuery(target: StatementTarget, text: string, params: readonly Param[] = []) {
+  return startSqlQuery(() => toStatement(text, params), target)
 }
