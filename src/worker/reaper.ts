@@ -1,8 +1,9 @@
 // Reaper loop of a worker: returns expired jobs in batches and survives connection errors.
+import type { StatementExecutor } from "kern-orm/db"
+
 import type { JobTable } from "../sql/job-table"
 
 import { reap } from "./db/lease"
-import type { StatementTarget } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { type Loop, startLoop } from "./loop"
 
@@ -20,7 +21,7 @@ export interface ReaperOptions {
  * A failed round is reported and the next one runs after the interval: the pool replaces a lost connection, so the reaper resumes once the server is reachable again.
  * A full batch starts the next round at once.
  */
-export function startReaper(db: StatementTarget, table: JobTable, o: ReaperOptions): Loop {
+export function startReaper(db: StatementExecutor, table: JobTable, o: ReaperOptions): Loop {
   return startLoop(
     async () => {
       const jobs = await reap(db, table, { limit: o.limit })

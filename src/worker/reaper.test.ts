@@ -7,12 +7,12 @@ import {
   createTestSchema,
   databaseUrl,
   jobs,
+  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
-import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { proxyTo } from "./faults/proxy"
 import { startReaper } from "./reaper"

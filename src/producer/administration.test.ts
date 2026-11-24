@@ -1,6 +1,7 @@
 // Administration of jobs: a retry of a failed job, and a delete of pending or failed jobs by id or by a filter, in a scope, and their races with producers, claims, retries, fail, and the reaper.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
+import { sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { enqueue, type EnqueueParams } from "../sql/enqueue"
@@ -12,13 +13,13 @@ import {
   holdHook,
   jobs,
   only,
+  query,
   recordLabels,
   T,
   type TestSchema,
 } from "../test-harness/database"
 import { claimCycle, claimPlain } from "../worker/db/claim"
 import { reap } from "../worker/db/lease"
-import { query } from "../worker/db/query"
 import { fail } from "../worker/db/settlement"
 import { isUniqueViolation } from "../worker/db/violation"
 
@@ -406,7 +407,7 @@ describe("delete", () => {
     const { id: active } = await enqueue(schema.admin, schema.table, { task: "t", now: T(12) })
     await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(13) })
     const { id: pending } = await enqueue(schema.admin, schema.table, { task: "t", now: T(14) })
-    const before = await jobs(schema, `state = 'active'`)
+    const before = await jobs(schema, sql`state = 'active'`)
     expect([await deleteIn(failed), await deleteIn(pending)]).toEqual([true, true])
     for (const id of [active, failed, pending, "999999"]) expect(await deleteIn(id)).toBe(false)
     expect(await jobs(schema)).toEqual(before)
@@ -505,7 +506,7 @@ describe("delete pending", () => {
     await enqueueIn("b", "t")
     await enqueueIn("", "t")
     const pending = async () =>
-      (await jobs(schema, `state = 'pending'`)).map(r => [r.scope, r.task])
+      (await jobs(schema, sql`state = 'pending'`)).map(r => [r.scope, r.task])
     expect(await deletePending({ scope: "a", task: "t" })).toBe(2)
     expect(await pending()).toEqual([
       ["a", "u"],
@@ -561,7 +562,7 @@ describe("delete failed", () => {
     await enqueue(schema.admin, schema.table, { task: "t", scope: "a", now: T(101) })
     only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1, now: T(102) }))
     await enqueue(schema.admin, schema.table, { task: "t", scope: "a", now: T(103) })
-    const failedIds = async () => (await jobs(schema, `state = 'failed'`)).map(r => r.id)
+    const failedIds = async () => (await jobs(schema, sql`state = 'failed'`)).map(r => r.id)
     const before = await failedIds()
     // The bound of a delay: T(110) less 1e12 seconds would be before the earliest timestamp of PostgreSQL.
     expect(await deleteFailed({ olderThan: 1e12, now: T(110) })).toBe(0)

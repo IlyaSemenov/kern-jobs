@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { sql } from "kern-orm/db"
 import { waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -13,12 +14,12 @@ import {
   databaseUrl,
   holdHook,
   jobs,
+  query,
   sleep,
   type TestSchema,
 } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
-import { query } from "../db/query"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
@@ -107,7 +108,7 @@ function spawnWorker(id: string, overrides: Partial<WorkerConfig> = {}) {
   return { cfg, proc, events, waitFor, kill }
 }
 
-const row = async (id: string) => (await jobs(schema, `id = ${id}`))[0]
+const row = async (id: string) => (await jobs(schema, sql`id = ${id}`))[0]
 const backendAlive = async (pid: number) =>
   (await query(schema.admin, `select 1 from pg_stat_activity where pid = $1::text::int`, [pid]))
     .length > 0

@@ -15,9 +15,9 @@ import {
   databaseUrl,
   jobs as jobRows,
   only,
+  query,
   type TestSchema,
 } from "../test-harness/database"
-import { query } from "../worker/db/query"
 
 import type { JobsClient } from "./client"
 import {

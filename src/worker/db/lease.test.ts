@@ -1,6 +1,7 @@
 // Leases: the reaper with an existing pending job, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
+import { sql } from "kern-orm/db"
 import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -11,6 +12,7 @@ import {
   isPending,
   jobs,
   only,
+  query,
   recordLabels,
   secondsOf,
   T,
@@ -19,7 +21,6 @@ import {
 
 import { claimCycle, claimPlain } from "./claim"
 import { heartbeat, reap } from "./lease"
-import { query } from "./query"
 import { complete, fail } from "./settlement"
 import { isUniqueViolation } from "./violation"
 
@@ -330,7 +331,7 @@ describe("heartbeat", () => {
       now: T(5),
     })
     const leaseOf = async (id: string) =>
-      secondsOf(only(await jobs(schema, `id = ${id}`)).leaseUntil!)
+      secondsOf(only(await jobs(schema, sql`id = ${id}`)).leaseUntil!)
     expect([await leaseOf(a!.id), await leaseOf(b!.id)]).toEqual([35, 305])
   })
 
@@ -464,7 +465,7 @@ describe("fencing", () => {
     expect(await beat).toEqual({ confirmed: [c!.claimId], busy: [a!.claimId] })
     await query(producer, "commit")
     expect(await failing).toBe("superseded")
-    expect(secondsOf((await jobs(schema, `id = ${c!.id}`))[0]!.leaseUntil!)).toBe(13)
+    expect(secondsOf((await jobs(schema, sql`id = ${c!.id}`))[0]!.leaseUntil!)).toBe(13)
   })
 })
 
@@ -523,10 +524,10 @@ describe("reaper progress", () => {
     await release()
     const result = await reaped
     expect(result.length).toBe(51)
-    const rows = await jobs(schema, `task = 't'`)
+    const rows = await jobs(schema, sql`task = 't'`)
     expect(rows.every(r => r.state === "pending" && r.key != null)).toBe(true)
     // The original hot row was the first "hot" job; it ends up pending without its key.
-    const hot = only(await jobs(schema, `task = 'hot' and attempts = 1 and claim_id is null`))
+    const hot = only(await jobs(schema, sql`task = 'hot' and attempts = 1 and claim_id is null`))
     expect([hot.state, hot.key, stats.forcedDetaches]).toEqual(["pending", null, 1])
     console.log(`hot key reaper: ${stats.uniqueViolations} unique violations retried`)
   })

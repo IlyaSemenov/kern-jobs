@@ -1,13 +1,15 @@
 // Settlement of a claimed job: complete, fail with retry, merge, or a final failure, and requeue of a job whose attempt is given back.
+import { param, queryOn, sql, type StatementExecutor } from "kern-orm/db"
+
 import type { JobTable } from "../../sql/job-table"
-import { NOW } from "../../sql/postgres"
-import { labelSql, toStatementLabel } from "../../sql/statement"
+import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import type { WorkerDb } from "./db"
 import { insertFailureJobsSql } from "./failure"
-import { query, type StatementTarget } from "./query"
+import { jobTableSql, nowSql } from "./sql"
+import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
 /** Completes a job by deleting its active row; `false` means the claim was lost. */
@@ -39,9 +41,9 @@ export interface FailOptions {
    * Breakpoints between the statements of the transaction for deterministic tests; they get the database, whose statements in them run in the transaction.
    */
   pause?: {
-    afterOwnLock?: (tx: StatementTarget) => Promise<void>
-    afterCompetitorCheck?: (tx: StatementTarget) => Promise<void>
-    beforeCommit?: (tx: StatementTarget) => Promise<void>
+    afterOwnLock?: (tx: StatementExecutor) => Promise<void>
+    afterCompetitorCheck?: (tx: StatementExecutor) => Promise<void>
+    beforeCommit?: (tx: StatementExecutor) => Promise<void>
   }
 }
 
@@ -135,7 +137,8 @@ async function returnOnce(
 ): Promise<FailOutcome> {
   // Raw statements on the database of `db` join the ambient transaction of `db.$transaction`, as its typed queries do.
   const tx = db.$database
-  const now = o.now ?? null
+  const now = nowSql(o.now)
+  const jobs = jobTableSql(table)
   const a = await db.job
     .where({ id: c.id, claimId: c.claimId, state: "active" })
     .select("id", "scope", "task", "key", "attempts", "maxAttempts")
@@ -148,38 +151,28 @@ async function returnOnce(
   // A terminal outcome is always recorded as failed and never merged away; failed rows are outside key uniqueness.
   // The failure job is inserted by the statement that fails the job, so both commit or roll back together, and only a claim that commits its own transition from active inserts one.
   if (o.reason === "terminal-error" || (!o.refund && a.attempts >= a.maxAttempts)) {
-    await query(
-      tx,
-      labelSql(
-        "settle:fail",
-        `with s as (
-         update ${table.name} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = $3::text,
-           failed_at = ${NOW}
-         where id = $2::text::bigint
-         returning *, $4::text::bigint as failed_claim_id
-       ), i as (
-         ${insertFailureJobsSql(table, "s", "$5::text")}
-       )
-       select from s`,
-      ),
-      [now, c.id, o.error, c.claimId, o.reason ?? "handler-error"],
-    )
+    await queryOn(tx)`
+      with s as (
+        update ${jobs} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = ${o.error},
+          failed_at = ${now}
+        where id = ${c.id}
+        returning *, ${c.claimId}::bigint as failed_claim_id
+      ), i as (
+        ${insertFailureJobsSql(table, sql`s`, o.reason ?? "handler-error")}
+      )
+      select from s`.comment(toStatementLabel("settle:fail"))
     return "failed"
   }
   // A null error keeps the error of the latest failure, since a requeue records none.
+  const backoff = param(t.doublePrecision, o.backoff)
   const toPending = () =>
-    query(
-      tx,
-      labelSql(
-        "settle:to-pending",
-        `update ${table.name} set state = 'pending', attempts = attempts - $5::text::int,
-         run_at = n.t + make_interval(secs => $3::text::float8), not_before = n.t + make_interval(secs => $3::text::float8),
-         window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null, last_error = coalesce($4::text, last_error)
-       from (select ${NOW} as t) n
-       where id = $2::text::bigint`,
-      ),
-      [now, c.id, o.backoff, o.error, o.refund ? 1 : 0],
-    )
+    queryOn(tx)`
+      update ${jobs} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
+        run_at = n.t + make_interval(secs => ${backoff}), not_before = n.t + make_interval(secs => ${backoff}),
+        window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null,
+        last_error = coalesce(${param(t.text.nullable(), o.error)}, last_error)
+      from (select ${now} as t) n
+      where id = ${c.id}`.comment(toStatementLabel("settle:to-pending"))
   if (a.key === null) {
     await toPending()
     return "retry"

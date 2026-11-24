@@ -1,6 +1,7 @@
 // Enqueue: key modes, the uniqueness of pending keys under concurrent producers, events during `active`, the pending row held by an uncommitted enqueue, and trailing-edge debounce with maxWait on virtual time.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
+import { sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import {
@@ -9,13 +10,13 @@ import {
   isPending,
   jobs,
   only,
+  query,
   secondsOf,
   T,
   type TestSchema,
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { type Claim, claimPlain } from "../worker/db/claim"
-import { query } from "../worker/db/query"
 import { complete, fail } from "../worker/db/settlement"
 
 import { enqueue, enqueueMany, type EnqueueParams } from "./enqueue"
@@ -692,7 +693,7 @@ describe("debounce: changes of settings and key modes", () => {
       ...settings,
       now: T(now),
     })
-  const runAt = async (key: string) => secondsOf(only(await jobs(schema, `key = '${key}'`)).runAt)
+  const runAt = async (key: string) => secondsOf(only(await jobs(schema, sql`key = ${key}`)).runAt)
 
   test("a later event never moves run_at back, also with a smaller maxWait, and the commit order does not change it", async () => {
     await debounce("in-order", 0, { delay: 8, maxWait: 3 })
@@ -830,7 +831,7 @@ describe("debounce under concurrency", () => {
     await waitForLock(schema.admin, producer.pid)
     await query(worker, "commit")
     expect((await event).created).toBe(true)
-    const rows = await jobs(schema, `state = 'pending'`)
+    const rows = await jobs(schema, sql`state = 'pending'`)
     expect([secondsOf(rows[0]!.windowStartedAt), secondsOf(rows[0]!.runAt)]).toEqual([10, 12])
   })
 

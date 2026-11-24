@@ -1,10 +1,9 @@
 // Test helpers of the worker runtime: recorded events, a worker of a test schema with short timings, a driver that only reserves connections, and terminating the backends of a pool.
-import type { Connection, Driver } from "kern-orm/db"
+import type { Connection, Driver, StatementExecutor } from "kern-orm/db"
 
-import type { TestSchema } from "../test-harness/database"
+import { query, type TestSchema } from "../test-harness/database"
 
 import { reap } from "./db/lease"
-import { query, type StatementTarget } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { type RuntimeOptions, startRuntime, type Worker } from "./runtime"
 
@@ -114,7 +113,7 @@ export function createAcquireOnlyDriver(acquire: () => Promise<Connection>): Dri
 
 /** Terminates the backends of the connections with an `application_name`; returns how many it terminated. */
 export async function terminateBackends(
-  observer: StatementTarget,
+  observer: StatementExecutor,
   applicationName: string,
 ): Promise<number> {
   const rows = await query(

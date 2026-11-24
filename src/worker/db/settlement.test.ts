@@ -1,7 +1,7 @@
 // Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { type Driver, TransactionConnectionError } from "kern-orm/db"
+import { type Driver, sql, TransactionConnectionError } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -11,6 +11,7 @@ import {
   createTestSchema,
   jobs,
   only,
+  query,
   secondsOf,
   T,
   type TestSchema,
@@ -18,7 +19,6 @@ import {
 
 import { type Claim, claimCycle, claimPlain } from "./claim"
 import { reap } from "./lease"
-import { query } from "./query"
 import { complete, fail, requeue } from "./settlement"
 
 let schema: TestSchema
@@ -556,7 +556,7 @@ describe("settlements of different handlers on one driver", () => {
       await completed
     })
     expect([await completed, outcome]).toEqual([true, "superseded"])
-    expect(await jobs(schema, `id = ${b!.id}`)).toEqual([])
+    expect(await jobs(schema, sql`id = ${b!.id}`)).toEqual([])
   })
 
   test("a claim cycle during the fail transaction of another handler stays applied when that transaction rolls back", async () => {
@@ -570,7 +570,7 @@ describe("settlements of different handlers on one driver", () => {
       )
     })
     expect(claimed).toHaveLength(1)
-    expect((await jobs(schema, `id = ${claimed[0]}`)).map(r => r.state)).toEqual(["active"])
+    expect((await jobs(schema, sql`id = ${claimed[0]!}`)).map(r => r.state)).toEqual(["active"])
   })
 })
 

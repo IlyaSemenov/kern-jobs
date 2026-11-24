@@ -1,7 +1,7 @@
 // Failure jobs: the attempt budget that each claim stamps, the failure job that a terminal fail and the reaper insert with the JobFailure of the stored row, the outcomes that insert none, and the atomicity and uniqueness of the insert.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { QueryError } from "kern-orm/db"
+import { QueryError, sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { retryFailedJob } from "../../producer/administration"
@@ -13,13 +13,13 @@ import {
   type JobRow,
   jobs,
   only,
+  query,
   T,
   type TestSchema,
 } from "../../test-harness/database"
 
 import { type Claim, claimCycle, type ClaimOptions, claimPlain } from "./claim"
 import { reap } from "./lease"
-import { query } from "./query"
 import { fail, requeue } from "./settlement"
 
 let schema: TestSchema
@@ -51,7 +51,7 @@ const failAt = (claim: Claim, o: Partial<Parameters<typeof fail>[3]> = {}) =>
   fail(schema.db, schema.table, claim, { error: "boom", backoff: 30, now: T(2), ...o })
 
 /** Returns the failure jobs of task `t`. */
-const failureJobs = (): Promise<JobRow[]> => jobs(schema, "task = 't:failure'")
+const failureJobs = (): Promise<JobRow[]> => jobs(schema, sql`task = 't:failure'`)
 
 /** Returns the JobFailure of the only failure job. */
 async function jobFailure(): Promise<Record<string, unknown>> {
@@ -128,7 +128,7 @@ describe("claim stamps", () => {
     expect(await claim(long, undefined)).toHaveLength(1)
     const stamped = only(await claim(fitting, 7))
     expect(await failAt(stamped, { reason: "terminal-error" })).toBe("failed")
-    expect(only(await jobs(schema, `task = '${fitting}:failure'`)).maxAttempts).toBe(7)
+    expect(only(await jobs(schema, sql`task = ${`${fitting}:failure`}`)).maxAttempts).toBe(7)
   })
 })
 
@@ -142,7 +142,7 @@ describe("terminal fail", () => {
       maxAttempts: 1,
     })
     expect(await failAt(claim)).toBe("failed")
-    const source = only(await jobs(schema, "task = 't'"))
+    const source = only(await jobs(schema, sql`task = 't'`))
     expect([source.state, source.key, source.lastError]).toEqual(["failed", "k", "boom"])
     const job = only(await failureJobs())
     expect(job).toMatchObject({
@@ -246,7 +246,7 @@ describe("terminal fail", () => {
     const claim = await claimed({ key: "k", maxAttempts: 1 })
     const pending = await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(1) })
     expect(await failAt(claim)).toBe("failed")
-    expect((await jobs(schema, "task = 't'")).map(r => [r.id, r.state])).toEqual([
+    expect((await jobs(schema, sql`task = 't'`)).map(r => [r.id, r.state])).toEqual([
       [claim.id, "failed"],
       [pending.id, "pending"],
     ])
@@ -255,7 +255,7 @@ describe("terminal fail", () => {
 
   test("a retry of the application and a later failure of the job insert another failure job with another id", async () => {
     await failAt(await claimed({ maxAttempts: 1 }))
-    const source = only(await jobs(schema, "task = 't'"))
+    const source = only(await jobs(schema, sql`task = 't'`))
     expect(await retryFailedJob(schema.admin, schema.table, { id: source.id, now: T(3) })).toEqual({
       retried: true,
     })

@@ -1,7 +1,7 @@
 // Claiming: the tasks of the worker, the queue mutex by (scope, queue), start order, skipping a busy head, a stale snapshot under a breakpoint, a stress test that checks the actual overlap of handlers, fairness of the claim cycle under a continuous inflow, claims committed before a later statement of their cycle fails, and the advisory locks of claimQueued under different plans.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { ConnectionError } from "kern-orm/db"
+import { ConnectionError, sql, type StatementExecutor } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -12,6 +12,7 @@ import {
   isPending,
   jobs,
   only,
+  query,
   recordLabels,
   secondsOf,
   sleep,
@@ -29,7 +30,6 @@ import {
   createClaimState,
 } from "./claim"
 import type { WorkerDb } from "./db"
-import { query, type StatementTarget } from "./query"
 import { complete } from "./settlement"
 import { isUniqueViolation } from "./violation"
 
@@ -75,7 +75,7 @@ describe("tasks of the worker", () => {
       [plainA.id, queuedA.id].sort(),
       [plainB.id, onlyB.id].sort(),
     ])
-    expect(only(await jobs(schema, `id = ${queuedB.id}`)).state).toBe("pending")
+    expect(only(await jobs(schema, sql`id = ${queuedB.id}`)).state).toBe("pending")
   })
 })
 
@@ -239,9 +239,9 @@ describe("start order", () => {
     await release()
     const r = await claim
     if (r.kind !== "job") throw new Error(`Expected a claimed job, got ${r.kind}`)
-    const claimed = only(await jobs(schema, `id = ${r.claim.id}`))
+    const claimed = only(await jobs(schema, sql`id = ${r.claim.id}`))
     expect([claimed.key, secondsOf(claimed.runAt)]).toEqual(["k1", 3])
-    expect((await jobs(schema, "key = 'k2'")).map(row => row.state)).toEqual(["pending"])
+    expect((await jobs(schema, sql`key = 'k2'`)).map(row => row.state)).toEqual(["pending"])
   })
 
   test("a job that a producer inserted before the head after the claim snapshot starts after the head", async () => {
@@ -261,7 +261,7 @@ describe("start order", () => {
     await release()
     const r = await claim
     expect(r.kind === "job" && r.claim.job.key).toBe("k1")
-    expect((await jobs(schema, "key = 'k0'")).map(row => row.state)).toEqual(["pending"])
+    expect((await jobs(schema, sql`key = 'k0'`)).map(row => row.state)).toEqual(["pending"])
   })
 
   test("a head that a producer moved to another queue after the claim snapshot does not start before the head of that queue", async () => {
@@ -319,7 +319,7 @@ describe("start order", () => {
     expect(isUniqueViolation(err, "job_active_queue_idx")).toBe(true)
     const stats: ClaimCycleStats = { uniqueViolations: 0, busy: 0 }
     expect(await claimCycle(b, schema.table, { ...W("b"), slots: 1, now: T(5) }, stats)).toEqual([])
-    expect((await jobs(schema, `id = ${j3.id}`))[0]!.state).toBe("pending")
+    expect((await jobs(schema, sql`id = ${j3.id}`))[0]!.state).toBe("pending")
   })
 })
 
@@ -569,7 +569,7 @@ describe("an interrupted claim cycle", () => {
     const plain = await enqueue(schema.admin, schema.table, { task: "t", now: T(0) })
     await enqueue(schema.admin, schema.table, { task: "t", queue: "q", now: T(0) })
     let statements = 0
-    const counting: StatementTarget = {
+    const counting: StatementExecutor = {
       execute: statement => {
         statements++
         return schema.admin.execute(statement)

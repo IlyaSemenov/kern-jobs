@@ -1,14 +1,21 @@
 // Leases of claimed jobs: heartbeats that extend them, and the reaper that returns expired jobs or the jobs of a worker that has ended.
-import { isQueryError } from "kern-orm/db"
+import {
+  isQueryError,
+  param,
+  queryOn,
+  sql,
+  type SqlFragment,
+  type StatementExecutor,
+} from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
-import { hook, NOW } from "../../sql/postgres"
-import { labelSql, type Param } from "../../sql/statement"
+import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import { insertFailureJobsSql } from "./failure"
-import { query, type StatementTarget } from "./query"
+import { jobTableSql, nowSql } from "./sql"
+import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
 /** Claim that a heartbeat extends, with its lease in seconds. */
@@ -31,39 +38,42 @@ export interface HeartbeatResult {
  * Rows that another transaction holds are skipped without waiting: a fail transaction holds the row of its claim while it waits for the pending job of its key, which a producer can hold for as long as its transaction lasts, and waiting for it would stop the heartbeat of every other claim of the worker.
  */
 export async function heartbeat(
-  db: StatementTarget,
+  db: StatementExecutor,
   table: JobTable,
   o: { claims: HeartbeatClaim[]; now?: Date | null },
 ): Promise<HeartbeatResult> {
-  const rows = await query(
-    db,
-    labelSql(
-      "heartbeat:extend",
-      `with x as (
-       select * from unnest($2::text::bigint[], $3::text::bigint[], $4::text::float8[]) as x(id, claim_id, lease)
-     ), owned as (
-       select j.claim_id from ${table.name} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
-     ), locked as (
-       select j.id, x.lease from ${table.name} j join x on j.id = x.id and j.claim_id = x.claim_id
-       where j.state = 'active' and ${hook("heartbeat")}
-       for update of j skip locked
-     ), extended as (
-       update ${table.name} j set lease_until = greatest(j.lease_until, ${NOW} + make_interval(secs => l.lease))
-       from locked l where j.id = l.id
-       returning j.claim_id
-     )
-     select o.claim_id, (o.claim_id in (select claim_id from extended))::text as extended from owned o`,
-    ),
-    [
-      o.now ?? null,
-      o.claims.map(c => c.id),
-      o.claims.map(c => c.claimId),
-      o.claims.map(c => String(c.lease)),
-    ],
+  const jobs = jobTableSql(table)
+  const ids = param(
+    t.array(t.bigintText),
+    o.claims.map(c => c.id),
   )
+  const claimIds = param(
+    t.array(t.bigintText),
+    o.claims.map(c => c.claimId),
+  )
+  const leases = param(
+    t.array(t.doublePrecision),
+    o.claims.map(c => c.lease),
+  )
+  const rows = await queryOn(db)`
+    with x as (
+      select * from unnest(${ids}, ${claimIds}, ${leases}) as x(id, claim_id, lease)
+    ), owned as (
+      select j.claim_id from ${jobs} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
+    ), locked as (
+      select j.id, x.lease from ${jobs} j join x on j.id = x.id and j.claim_id = x.claim_id
+      where j.state = 'active' and /*hook:heartbeat*/true
+      for update of j skip locked
+    ), extended as (
+      update ${jobs} j set lease_until = greatest(j.lease_until, ${nowSql(o.now)} + make_interval(secs => l.lease))
+      from locked l where j.id = l.id
+      returning j.claim_id
+    )
+    select o.claim_id, (o.claim_id in (select claim_id from extended)) as extended from owned o`
+    .comment(toStatementLabel("heartbeat:extend"))
+    .select({ claim_id: t.bigintText, extended: t.boolean })
   const result: HeartbeatResult = { confirmed: [], busy: [] }
-  for (const row of rows)
-    (row.extended === "true" ? result.confirmed : result.busy).push(row.claim_id!)
+  for (const row of rows) (row.extended ? result.confirmed : result.busy).push(row.claim_id)
   return result
 }
 
@@ -104,86 +114,82 @@ export interface ReapStats {
 
 /** Active rows that a reap returns, the `last_error` that it gives them, and the reason that the `JobFailure` of a failure job records. */
 interface ReapTarget {
-  /** Condition of the rows of the alias `j` in the reap statement, whose `$1` is its time and `$6` the worker. */
-  condition: string
-  /** Parameters of the reap statement after its first five: the worker, if any. */
-  params: string[]
+  /** Condition of the rows of the alias `j`. */
+  condition: SqlFragment
   error: string
   reason: Extract<FailureReason, "lease-expired" | "worker-restarted">
-  /** Statement of the ids of the rows, in the order of their ids, up to the limit. */
-  ids: { text: string; params: Param[] }
 }
 
-/** Returns the condition of the rows that a reap with these options returns, the parameters of its statement, and the statement of their ids. */
-function toReapTarget(table: JobTable, o: ReapOptions): ReapTarget {
-  const limit = o.limit ?? 100
-  // Each statement of ids names only its own parameters, since PostgreSQL cannot type a parameter that a statement does not use.
+/** Returns the rows that a reap with these options returns at `now`. */
+function toReapTarget(o: ReapOptions, now: SqlFragment): ReapTarget {
   return o.worker === undefined
-    ? {
-        condition: `j.lease_until < ${NOW}`,
-        params: [],
-        error: "lease expired",
-        reason: "lease-expired",
-        ids: {
-          text: labelSql(
-            "reap:ids",
-            `select id from ${table.name} where state = 'active' and lease_until < ${NOW} order by id limit $2::text::int`,
-          ),
-          params: [o.now ?? null, limit],
-        },
-      }
+    ? { condition: sql`j.lease_until < ${now}`, error: "lease expired", reason: "lease-expired" }
     : {
-        condition: "j.locked_by = $6::text",
-        params: [o.worker],
+        condition: sql`j.locked_by = ${o.worker}`,
         error: "worker restarted",
         reason: "worker-restarted",
-        ids: {
-          text: labelSql(
-            "reap:ids",
-            `select id from ${table.name} where state = 'active' and locked_by = $2::text order by id limit $1::text::int`,
-          ),
-          params: [limit, o.worker],
-        },
       }
 }
 
-// The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `candidates` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
-// Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
-// Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
-// A row that becomes failed with the stamp of a failure job inserts it in the same statement, from the claim id that the update clears, so the batch applies both or neither.
-const reapSql = (table: JobTable, target: ReapTarget) =>
-  labelSql(
-    "reap:batch",
-    `with timeout as materialized (
-    select set_config('lock_timeout', $5::text, true)
-  ), candidates as (
-    select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${table.name} j, timeout
-    where j.state = 'active' and ${target.condition} and ($3::text::bigint is null or j.id = $3::text::bigint)
-    order by j.id
-    limit $2::text::int
-    for update of j skip locked
-  ), ranked as (
-    select e.*,
-      ${hook("reap")} as hooked,
-      row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
-      exists (select 1 from ${table.name} p
-              where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
-    from candidates e
-  ), returned as (
-    update ${table.name} j set
-      state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
-      key = case when r.attempts < r.max_attempts and r.key is not null and ($4::text::boolean or r.has_pending or r.rn > 1)
-                 then null else j.key end,
-      run_at = ${NOW}, not_before = ${NOW}, window_started_at = ${NOW},
-      failed_at = case when r.attempts >= r.max_attempts then ${NOW} end,
-      claim_id = null, locked_by = null, lease_until = null, last_error = '${target.error}'
-    from ranked r where j.id = r.id
-    returning j.*, r.claim_id as failed_claim_id, (j.key is null and r.key is not null)::text as detached
-  ), inserted as (
-    ${insertFailureJobsSql(table, "returned", `'${target.reason}'`)}
-  )
-  select id, state, detached from returned`,
-  )
+/** Options of one reap statement. */
+interface ReapStatementOptions {
+  limit: number
+  /** Id of the only row to return, or `null` for a batch. */
+  onlyId: string | null
+  /** Detaches each returning row that keeps a key from it. */
+  forceDetach: boolean
+  lockTimeoutMs: number
+}
+
+/**
+ * Returns the reap statement of the rows of `target`, which returns its rows as `Reaped`.
+ * The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `candidates` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
+ * Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
+ * Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
+ * A row that becomes failed with the stamp of a failure job inserts it in the same statement, from the claim id that the update clears, so the batch applies both or neither.
+ */
+function reapStatement(
+  db: StatementExecutor,
+  table: JobTable,
+  target: ReapTarget,
+  now: SqlFragment,
+  o: ReapStatementOptions,
+) {
+  const jobs = jobTableSql(table)
+  const onlyId = param(t.bigintText.nullable(), o.onlyId)
+  return queryOn(db)`
+    with timeout as materialized (
+      select set_config('lock_timeout', ${String(o.lockTimeoutMs)}, true)
+    ), candidates as (
+      select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${jobs} j, timeout
+      where j.state = 'active' and ${target.condition} and (${onlyId} is null or j.id = ${onlyId})
+      order by j.id
+      limit ${o.limit}
+      for update of j skip locked
+    ), ranked as (
+      select e.*,
+        /*hook:reap*/true as hooked,
+        row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
+        exists (select 1 from ${jobs} p
+                where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
+      from candidates e
+    ), returned as (
+      update ${jobs} j set
+        state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
+        key = case when r.attempts < r.max_attempts and r.key is not null and (${param(t.boolean, o.forceDetach)} or r.has_pending or r.rn > 1)
+                   then null else j.key end,
+        run_at = ${now}, not_before = ${now}, window_started_at = ${now},
+        failed_at = case when r.attempts >= r.max_attempts then ${now} end,
+        claim_id = null, locked_by = null, lease_until = null, last_error = ${target.error}
+      from ranked r where j.id = r.id
+      returning j.*, r.claim_id as failed_claim_id, (j.key is null and r.key is not null) as detached
+    ), inserted as (
+      ${insertFailureJobsSql(table, sql`returned`, target.reason)}
+    )
+    select id, state, detached from returned`
+    .comment(toStatementLabel("reap:batch"))
+    .select({ id: t.bigintText, state: t.text.of<Reaped["state"]>(), detached: t.boolean })
+}
 
 /**
  * Returns expired active jobs, or the active jobs of `o.worker`: `failed` on the last attempt, otherwise `pending`.
@@ -194,28 +200,23 @@ const reapSql = (table: JobTable, target: ReapTarget) =>
  * a row that still conflicts after `maxRetries` attempts loses its key unconditionally, and a row that times out stays active for the next round.
  */
 export async function reap(
-  db: StatementTarget,
+  db: StatementExecutor,
   table: JobTable,
   o: ReapOptions = {},
   stats: ReapStats = { uniqueViolations: 0 },
 ): Promise<Reaped[]> {
   const lockTimeoutMs = Math.max(1, Math.round((o.lockTimeout ?? 1) * 1000))
-  const target = toReapTarget(table, o)
+  const limit = o.limit ?? 100
+  const now = nowSql(o.now)
+  const target = toReapTarget(o, now)
   const run = async (onlyId: string | null, forceDetach: boolean): Promise<Reaped[]> => {
     await o.pause?.beforeAttempt?.()
-    const rows = await query(db, reapSql(table, target), [
-      o.now ?? null,
-      o.limit ?? 100,
+    return await reapStatement(db, table, target, now, {
+      limit,
       onlyId,
       forceDetach,
       lockTimeoutMs,
-      ...target.params,
-    ])
-    return rows.map(r => ({
-      id: r.id!,
-      state: r.state as Reaped["state"],
-      detached: r.detached === "true",
-    }))
+    })
   }
   const countLockTimeout = () => (stats.lockTimeouts = (stats.lockTimeouts ?? 0) + 1)
   try {
@@ -225,13 +226,19 @@ export async function reap(
     else if (isUniqueViolation(e, "job_pending_key_idx")) stats.uniqueViolations++
     else throw e
   }
-  const candidates = await query(db, target.ids.text, target.ids.params)
+  const candidates = await queryOn(db)`
+    select j.id from ${jobTableSql(table)} j
+    where j.state = 'active' and ${target.condition}
+    order by j.id
+    limit ${limit}`
+    .comment(toStatementLabel("reap:ids"))
+    .select({ id: t.bigintText })
   const result: Reaped[] = []
   for (const { id } of candidates) {
     for (let attempt = 0; ; attempt++) {
       const force = attempt >= (o.maxRetries ?? 3)
       try {
-        const rows = await run(id!, force)
+        const rows = await run(id, force)
         result.push(...rows)
         if (force)
           stats.forcedDetaches = (stats.forcedDetaches ?? 0) + rows.filter(r => r.detached).length

@@ -1,8 +1,7 @@
 // The view `job_summary`: its columns, and the summary of the jobs of each task in each scope.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import { createTestSchema, type TestSchema } from "../test-harness/database"
-import { query } from "../worker/db/query"
+import { createTestSchema, query, type TestSchema } from "../test-harness/database"
 
 import { quoteIdentifier } from "./postgres"
 import type { TextRow } from "./statement"

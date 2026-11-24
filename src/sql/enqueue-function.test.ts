@@ -4,10 +4,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { waitForLock } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
-import { type Conn, createTestSchema, isPending, type TestSchema } from "../test-harness/database"
+import {
+  type Conn,
+  createTestSchema,
+  isPending,
+  query,
+  type TestSchema,
+} from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimPlain } from "../worker/db/claim"
-import { query } from "../worker/db/query"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
 import type { JobTable } from "./job-table"

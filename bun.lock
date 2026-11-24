@@ -5,8 +5,8 @@
     "": {
       "name": "kern-jobs",
       "dependencies": {
-        "kern-migrations": "^0.8.3",
-        "kern-orm": "^0.26.0",
+        "kern-migrations": "^0.8.5",
+        "kern-orm": "^0.28.0",
       },
       "devDependencies": {
         "@arethetypeswrong/core": "^0.18.5",
@@ -691,11 +691,11 @@
 
     "jsonc-parser": ["jsonc-parser@3.3.1", "", {}, "sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ=="],
 
-    "kern-db": ["kern-db@0.12.0", "", { "peerDependencies": { "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/pg", "pg", "postgres"] }, "sha512-eQbojppr4o/l7SPXQGXldXxcmXgq+EZF/Nn0qJYYzJJMf6KBEwG7D6A+qJqHEtr9as/HLjYBV0hdSvosvptbtw=="],
+    "kern-db": ["kern-db@0.14.0", "", { "peerDependencies": { "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/pg", "pg", "postgres"] }, "sha512-bN2s3JhErv2gxSBp9Q2XGpAq/uAXzhQwXJnFBQEfwNKeqtoQqTb19RC3UU+AXdTq0iDm3y25jlC5tCUI6UuoDg=="],
 
-    "kern-migrations": ["kern-migrations@0.8.3", "", { "peerDependencies": { "kern-db": "^0.12.0" } }, "sha512-7dVrgT2DfHWjIOg1KVlVkKFwc2pwI6HHYHoIXv39zCudJTdfKZnwAnKMfeYXozacDcop3gOr4QMQuNzbzQ1TGg=="],
+    "kern-migrations": ["kern-migrations@0.8.5", "", { "peerDependencies": { "kern-db": "^0.14.0" } }, "sha512-II7lBNbl16I9UUVcy+ap/MDIe+JYN9KgcLPTtK1lslLDIz3KBfZUDRqPJMRsGtZJmKQmPl6evbIN4maEzyxUXA=="],
 
-    "kern-orm": ["kern-orm@0.26.0", "", { "dependencies": { "kern-db": "^0.12.0" } }, "sha512-rhMs/ROVyyYTsE2T0JCRlzBjZ7sfuo8ZARDiUeKWppV5DuX+y7XsX4xb7HMI0RrTHYLB2HFnYRbcvOejGC5D2w=="],
+    "kern-orm": ["kern-orm@0.28.0", "", { "dependencies": { "kern-db": "^0.14.0" } }, "sha512-0Wq07satt05qMwfTyvDSfaC8f+zj7OBUreUWt27qEExTzigiMQyiMI2fgsxO5DcFbbVV3FHygspD7rTOXcnnjw=="],
 
     "keyv": ["keyv@5.6.0", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw=="],
 

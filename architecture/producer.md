@@ -63,7 +63,7 @@ The main entry declares the shapes of these clients, such as `JobsDatabase` and 
 ### Executor
 
 - The values are text or `null`, and the statement casts each one from text, so a client that serializes a parameter by its described type sends it as it is ([Drivers](drivers.md#statements)).
-- The client of the application may rename the columns of a result, such as `postgres.camel`, and parse values: the statements on an executor read their rows through `fromExecutor` of `producer/client.ts` only by position, as `ValuesTarget`, which `query` by the names of columns does not accept, and select only text.
+- The client of the application may rename the columns of a result, such as `postgres.camel`, and parse values: the statements on an executor read their rows through `fromExecutor` of `producer/client.ts` only by position, as `ValuesTarget`, which `queryOn` of kern-db, reading the columns by name, does not accept, and select only text.
 - A row may be an object of values in the order of the columns or an array of values; `undefined` counts as `null`, and any other value but a string throws `TypeError`, since only a client that transforms text values gives one.
 - The enqueue returns rows of one text column, a JSON array: one row `[id, created]` for one job, and a row `[id, key, created]` for each of many jobs, so that reading them depends neither on the name of the column nor on how the client parses JSON.
 - The errors of the client reach the caller unchanged: an executor gives no `QueryError` or `ConnectionError`, while a database of kern-db gives its own.

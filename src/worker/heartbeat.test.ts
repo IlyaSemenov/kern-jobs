@@ -12,9 +12,9 @@ import {
 
 import { createJobTable } from "../sql/job-table"
 import type { TextRow } from "../sql/statement"
+import { query } from "../test-harness/database"
 
 import type { ClaimRef } from "./db/claim"
-import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"
@@ -117,8 +117,8 @@ const isHeartbeat = (c: Call) => c.text.includes("unnest")
 /** Answers a heartbeat: the claims extended, and the claims busy. */
 const answer = (c: Call, extended: string[], busy: string[] = []) =>
   c.resolve([
-    ...extended.map(claimId => ({ claim_id: claimId, extended: "true" })),
-    ...busy.map(claimId => ({ claim_id: claimId, extended: "false" })),
+    ...extended.map(claimId => ({ claim_id: claimId, extended: "t" })),
+    ...busy.map(claimId => ({ claim_id: claimId, extended: "f" })),
   ])
 
 let heartbeat: Heartbeat | undefined
@@ -346,13 +346,13 @@ test("a lost claim is aborted and no longer sent; a busy claim is neither confir
   const [a, b, c] = ["1", "2", "3"].map(id => hb.keep(claim(id), 10, monotonicNow()))
   let index = 0
   let call = await fake.call(index)
-  while (!isHeartbeat(call) || call.params[2]!.split(",").length < 3) {
+  while (!isHeartbeat(call) || call.params[1]!.split(",").length < 3) {
     call.resolve([])
     call = await fake.call(++index)
   }
   answer(call, ["c1"], ["c2"])
   const next = await fake.call(index + 1)
-  expect(next.params.slice(1, 3)).toEqual(['{"1","2"}', '{"c1","c2"}'])
+  expect(next.params.slice(0, 2)).toEqual(['{"1","2"}', '{"c1","c2"}'])
   expect([a!.lost, b!.lost, c!.lost]).toEqual([false, false, true])
   expect((c!.signal.reason as HandlerAbort).reason).toBe("lost")
   expect([a!.signal.aborted, b!.signal.aborted]).toEqual([false, false])

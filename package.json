@@ -44,8 +44,8 @@
     "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
-    "kern-migrations": "^0.8.3",
-    "kern-orm": "^0.26.0"
+    "kern-migrations": "^0.8.5",
+    "kern-orm": "^0.28.0"
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",

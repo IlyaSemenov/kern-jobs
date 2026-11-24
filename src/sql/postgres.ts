@@ -1,14 +1,15 @@
 // SQL shared by the statements of the core: the time parameter, test breakpoints, and quoted names.
 
 /**
- * SQL of the current time of a statement: the `$1` parameter when given, otherwise `statement_timestamp()`.
- * Every time-dependent statement of the core takes its time as `$1`, so tests can run on virtual time.
+ * SQL of the current time of a statement of SQL text: the `$1` parameter when given, otherwise `statement_timestamp()`.
+ * Every time-dependent statement of SQL text takes its time as `$1`, so tests can run on virtual time.
  */
 export const NOW = `(select coalesce($1::text::timestamptz, statement_timestamp()))`
 
 /**
- * Marks a breakpoint for deterministic tests: the inert expression `true`, which the test helpers replace on their connections with a call that blocks while the test holds the breakpoint.
+ * Marks a breakpoint in SQL text for deterministic tests: the inert expression `true`, which the test helpers replace on their connections with a call that blocks while the test holds the breakpoint.
  * The breakpoint runs after the statement has taken its snapshot.
+ * A template writes the text of the marker literally, since it would pass an interpolated string as a parameter.
  */
 export const hook = (name: string) => `/*hook:${name}*/true`
 

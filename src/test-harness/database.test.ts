@@ -1,11 +1,10 @@
+// Test helpers of the SQL core: statements of SQL text.
 import { afterAll, expect, test } from "bun:test"
 
 import { postgresJsDriver } from "kern-orm/db/postgres-js"
 import postgres from "postgres"
 
-import { databaseUrl } from "../../test-harness/database"
-
-import { query } from "./query"
+import { databaseUrl, query } from "./database"
 
 const driver = postgresJsDriver(postgres(databaseUrl(), { max: 1 }))
 afterAll(() => driver.close())

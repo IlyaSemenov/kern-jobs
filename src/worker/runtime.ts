@@ -1,17 +1,16 @@
 // Runtime of a worker: checks its schema, returns the jobs of a previous worker of its id, claims jobs of its tasks into free slots, runs their handlers under kept leases, settles them, runs the reaper, and tells its readiness and state.
 // Claims and settlements use the pool of the worker; heartbeats use a connection of their own.
-import { createDatabase, type Database, type Driver } from "kern-orm/db"
+import { createDatabase, type Database, type Driver, type StatementExecutor } from "kern-orm/db"
 
 import type { WorkerSchedule } from "../schedule/schedule"
 import type { JobTable } from "../sql/job-table"
-import { labelSql } from "../sql/statement"
+import { toStatementLabel } from "../sql/statement"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
 
 import { type Claim, claimCycle, type ClaimedJob, createClaimState } from "./db/claim"
 import { bindWorkerDb } from "./db/db"
 import { reap } from "./db/lease"
-import { query, type StatementTarget } from "./db/query"
 import { evaluateSchedule } from "./db/schedule"
 import type { FailOptions } from "./db/settlement"
 import type { WorkerEvent } from "./events"
@@ -346,7 +345,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
 
   // Claims start their leases from the send time of their own statement: the statements of a cycle run one after another, and a slow one must not shorten the leases of the claims after it.
   let sentAt = 0
-  const timedDriver: StatementTarget = {
+  const timedDriver: StatementExecutor = {
     execute: statement => {
       sentAt = monotonicNow()
       return o.driver.execute(statement)
@@ -441,7 +440,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
         }
         // A worker without tasks claims nothing; one statement proves a connection of the pool beside the heartbeat's.
         if (taskNames.length === 0) {
-          if (!poolProven) await query(database, labelSql("worker:ping", "select 1"))
+          if (!poolProven) await database.query`select 1`.comment(toStatementLabel("worker:ping"))
         } else {
           await claimCycle(
             timedDriver,

@@ -21,12 +21,12 @@ import {
   createTestDriver,
   createTestSchema,
   databaseUrl,
+  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 
-import { query } from "./db/query"
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { startRuntime, type Worker, type WorkerTask } from "./runtime"

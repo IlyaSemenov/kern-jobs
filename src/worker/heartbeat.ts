@@ -1,12 +1,11 @@
 // Leases of the claims of a worker: heartbeats in a session of their own, which holds the lock of the worker id, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
-import { type Database, type OpenedSession, QueryError } from "kern-orm/db"
+import { type Database, type OpenedSession, QueryError, type StatementExecutor } from "kern-orm/db"
 
 import type { JobTable } from "../sql/job-table"
-import { labelSql } from "../sql/statement"
+import { toStatementLabel } from "../sql/statement"
 
 import type { ClaimRef } from "./db/claim"
 import { heartbeat } from "./db/lease"
-import { query, type StatementTarget } from "./db/query"
 import type { AbortReason, WorkerEvent } from "./events"
 import { type Loop, maxTimerDelay, monotonicNow, startLoop } from "./loop"
 
@@ -69,7 +68,7 @@ export interface Heartbeat {
    * Runs `callback` with a target of the statements of the session of the heartbeat while the session holds the lock, so that the lock is released only after `callback` ends.
    * Rejects without calling `callback` once the stop began, without a session, or when another session holds the lock.
    */
-  runLocked<T>(callback: (target: StatementTarget) => Promise<T>): Promise<T>
+  runLocked<T>(callback: (target: StatementExecutor) => Promise<T>): Promise<T>
   /**
    * Stops the heartbeats and the keeping of every lease, and resolves once the heartbeat in flight ends and the session is closed; a later call returns the same promise.
    */
@@ -115,7 +114,9 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
       if (stopping) return
       const kept = [...entries].filter(e => !e.lost)
       if (kept.length === 0)
-        await session.run(() => query(database, labelSql("heartbeat:ping", "select 1")))
+        await session.run(() =>
+          database.query`select 1`.comment(toStatementLabel("heartbeat:ping")),
+        )
       else {
         o.onEvent({ type: "heartbeat", claims: kept.map(e => e.claim.claimId) })
         const claims = kept.map(e => ({ id: e.claim.id, claimId: e.claim.claimId, lease: e.lease }))

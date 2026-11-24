@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
 
-import { type Connection, type Driver, QueryError } from "kern-orm/db"
+import { type Connection, type Driver, QueryError, sql } from "kern-orm/db"
 import { nodePostgresDriver } from "kern-orm/db/node-postgres"
 import { waitForLockedStatement } from "kern-orm/testing"
 import pg from "pg"
@@ -20,12 +20,12 @@ import {
   holdHook,
   jobs,
   only,
+  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
-import { query } from "./db/query"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
@@ -463,7 +463,7 @@ describe("slots", () => {
     expect(log.all("heartbeat").length).toBeGreaterThan(beats + 10)
     expect(log.all("abort")).toEqual([])
     expect(new Set(log.all("start").map(e => e.claim.id))).toEqual(new Set([a.id, c.id]))
-    expect(only(await jobs(schema, `id = ${c.id}`)).leaseUntil!.getTime()).toBeGreaterThan(
+    expect(only(await jobs(schema, sql`id = ${c.id}`)).leaseUntil!.getTime()).toBeGreaterThan(
       Date.now(),
     )
     await query(producer, "commit")
@@ -626,7 +626,7 @@ describe("heartbeat", () => {
     expect((await log.waitFor("settled", e => e.claim === first.claim)).outcome).toBe("lost")
     // The worker claims the returned job again; no fail recorded the abort.
     const second = await log.waitFor("start", e => e.claim.job.attempts === 2)
-    expect(only(await jobs(schema, `id = ${second.claim.id}`)).lastError).toBe("lease expired")
+    expect(only(await jobs(schema, sql`id = ${second.claim.id}`)).lastError).toBe("lease expired")
   })
 
   test("a claim that returns after the deadline of its lease does not start its handler, and its job retries with the attempt spent", async () => {
@@ -672,7 +672,7 @@ describe("heartbeat", () => {
     await sleep((lease - testTimings.abortMargin) * 1000 + 100)
     await release()
     expect((await log.waitFor("settled")).outcome).toBe("failed")
-    const failed = only(await jobs(schema, "task = 't:failure'"))
+    const failed = only(await jobs(schema, sql`task = 't:failure'`))
     expect(failed.payload).toMatchObject({
       reason: "late-claim",
       error: { message: "lease confirmation deadline passed before the handler started" },
@@ -706,7 +706,7 @@ describe("heartbeat", () => {
     await log.waitFor("start", e => e.claim.id === other.id)
     expect(claimed).toBe(0)
     expect(abortedAfter).toBeLessThan(lease * 1000)
-    const row = only(await jobs(schema, `id = ${job.id}`))
+    const row = only(await jobs(schema, sql`id = ${job.id}`))
     expect([row.state, row.lastError]).toEqual(["pending", "handler aborted: deadline"])
   })
 
@@ -1049,7 +1049,7 @@ describe("failures", () => {
     for (const { id } of ids) {
       expect((await log.waitFor("settled", e => e.claim.id === id)).outcome).toBe("retry")
       expect(log.all("backoff-error", e => e.claim.id === id)).toHaveLength(1)
-      const row = only(await jobs(schema, `id = ${id}`))
+      const row = only(await jobs(schema, sql`id = ${id}`))
       // The default backoff of the first attempt is 2 seconds.
       expect(row.notBefore!.getTime() - Date.now()).toBeGreaterThan(1000)
     }
@@ -1070,7 +1070,7 @@ describe("failures", () => {
     })
     expect((await log.waitFor("settled")).outcome).toBe("failed")
     expect(log.all("end").map(e => e.outcome)).toEqual(["terminal"])
-    const row = only(await jobs(schema, `id = ${job.id}`))
+    const row = only(await jobs(schema, sql`id = ${job.id}`))
     expect([row.state, row.lastError]).toEqual(["failed", "undefined"])
   })
 
@@ -1114,7 +1114,7 @@ describe("failures", () => {
     })
     for (const job of [plain, hostile, proxy]) {
       expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
-      expect(only(await jobs(schema, `id = ${job.id}`)).lastError).toBe("unprintable error")
+      expect(only(await jobs(schema, sql`id = ${job.id}`)).lastError).toBe("unprintable error")
     }
     // Telling the error classes of the proxy fails, so its job retries with the default backoff.
     expect(log.all("backoff-error").map(e => e.claim.id)).toEqual([proxy.id])
@@ -1171,7 +1171,7 @@ describe("stop", () => {
     ])
     expect(log.all("end")[0]!.outcome).toBe("requeue")
     expect(log.all("settled")[0]!.outcome).toBe("requeued")
-    const row = only(await jobs(schema, `id = ${job.id}`))
+    const row = only(await jobs(schema, sql`id = ${job.id}`))
     expect([row.state, row.attempts, row.lastError, row.claimId]).toEqual([
       "pending",
       0,
@@ -1251,7 +1251,7 @@ describe("stop", () => {
     expect(log.all("end").map(e => [e.aborted, e.outcome])).toEqual([["stop", "terminal"]])
     expect(log.all("backoff-error").map(e => e.error)).toEqual([trap])
     expect(log.all("settled").map(e => e.outcome)).toEqual(["failed"])
-    const row = only(await jobs(schema, `id = ${job.id}`))
+    const row = only(await jobs(schema, sql`id = ${job.id}`))
     expect([row.state, row.attempts, row.lastError]).toEqual(["failed", 1, "later"])
   })
 
@@ -1289,7 +1289,7 @@ describe("stop", () => {
       [],
       ["requeued"],
     ])
-    const row = only(await jobs(schema, `id = ${job.id}`))
+    const row = only(await jobs(schema, sql`id = ${job.id}`))
     expect([row.state, row.attempts]).toEqual(["pending", 0])
   })
 

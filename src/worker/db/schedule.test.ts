@@ -14,12 +14,12 @@ import {
   getStatementLabel,
   jobs,
   only,
+  query,
   type TestSchema,
 } from "../../test-harness/database"
 import { proxyTo } from "../faults/proxy"
 
 import { claimPlain } from "./claim"
-import { query } from "./query"
 import { evaluateSchedule } from "./schedule"
 import { complete } from "./settlement"
 

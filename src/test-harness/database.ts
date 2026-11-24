@@ -9,7 +9,11 @@ import {
   type Database,
   type Driver,
   isDriver,
+  queryOn,
+  sql,
+  type SqlFragment,
   type SqlStatement,
+  type StatementExecutor,
 } from "kern-orm/db"
 import { postgresJsDriver } from "kern-orm/db/postgres-js"
 import { getBackendPid } from "kern-orm/testing"
@@ -18,8 +22,9 @@ import postgres from "postgres"
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier } from "../sql/postgres"
+import { type Param, type TextRow, toStatement } from "../sql/statement"
 import { bindWorkerDb, type WorkerDb } from "../worker/db/db"
-import { query, startQuery, type StatementTarget } from "../worker/db/query"
+import { jobTableSql } from "../worker/db/sql"
 import { job } from "../worker/db/tables/job"
 
 /** Returns the URL of the test database. */
@@ -87,7 +92,7 @@ export function createTestDriver(
 }
 
 /**
- * Makes the given breakpoints of the SQL core, marked with `hook(name)`, block the statements of a driver while the test holds them, by the hook function of a test schema.
+ * Makes the given breakpoints of the SQL core, marked as `hook(name)` writes them, block the statements of a driver while the test holds them, by the hook function of a test schema.
  */
 export function withHooks(driver: Driver, schemaName: string, hooks: string[]): Driver {
   const rewrite = (text: string) =>
@@ -214,8 +219,27 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
   }
 }
 
+/**
+ * Executes a statement of SQL text with parameters that `encodeParam` turns into text, such as for the setup or the checks of a test, and returns its rows by the names of their columns; of several columns of one name, the last one wins.
+ */
+export async function query(
+  target: StatementExecutor,
+  text: string,
+  params: readonly Param[] = [],
+): Promise<TextRow[]> {
+  const { columns, rows } = await target.execute(toStatement(text, params))
+  return rows.map(values => {
+    const row: TextRow = {}
+    columns.forEach(({ name }, i) => (row[name] = values[i] ?? null))
+    return row
+  })
+}
+
 /** Holds breakpoint `name`: statements of connections with this hook block in it until `release()`. */
-export async function holdHook(conn: StatementTarget, name: string): Promise<() => Promise<void>> {
+export async function holdHook(
+  conn: StatementExecutor,
+  name: string,
+): Promise<() => Promise<void>> {
   await query(conn, `select pg_advisory_lock(1, hashtext($1::text))`, [name])
   return async () => {
     await query(conn, `select pg_advisory_unlock(1, hashtext($1::text))`, [name])
@@ -234,8 +258,8 @@ export function getStatementLabel(text: string): string | null {
 }
 
 /** Wraps a target of statements so that it records the label of each statement that it executes, as `getStatementLabel` gives it, in `labels`. */
-export function recordLabels(target: StatementTarget): {
-  target: StatementTarget
+export function recordLabels(target: StatementExecutor): {
+  target: StatementExecutor
   labels: (string | null)[]
 } {
   const labels: (string | null)[] = []
@@ -277,15 +301,15 @@ export const secondsOf = (d: Date) => (d.getTime() - BASE) / 1000
 /** Row of the job table with all its columns. */
 export type JobRow = Selectable<typeof job>
 
-/** Returns the job rows of a test schema in the order of their ids. */
+/** Returns the job rows of a test schema that match the condition `where` of the alias `j`, in the order of their ids. */
 export async function jobs(
   schema: Pick<TestSchema, "admin" | "table">,
-  where = "true",
+  where: SqlFragment = sql`true`,
 ): Promise<JobRow[]> {
   const columns = columnsOf(job, "*", { alias: "j" })
-  const rows = await startQuery(
-    schema.admin,
-    `select ${columns.text} from ${schema.table.name} j where ${where} order by id`,
-  ).select({ job: columns })
+  const rows = await queryOn(schema.admin)`
+    select ${columns} from ${jobTableSql(schema.table)} j where ${where} order by j.id`.select({
+    job: columns,
+  })
   return rows.map(row => row.job)
 }
