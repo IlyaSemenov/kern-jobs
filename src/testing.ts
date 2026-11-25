@@ -1,5 +1,11 @@
-// Entry of the tests of an application, `kern-jobs/testing`: a test double of the jobs API and a run of a handler without a database or a worker.
+// Entry of the tests of an application, `kern-jobs/testing`: a test double of the jobs API and runs of a handler and of `onFailure` without a database or a worker.
 
+export {
+  runFailure,
+  type RunFailureArgs,
+  type RunFailureJob,
+  type RunFailureOptions,
+} from "./testing/run-failure"
 export { type RunJobArgs, type RunJobInfo, runJob, type RunJobOptions } from "./testing/run-job"
 export {
   createTestJobs,

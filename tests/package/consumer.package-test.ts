@@ -112,7 +112,7 @@ describe.each(["node", "bun"])("%s", runtime => {
     })
   }, 60_000)
 
-  test("records an enqueue and runs a handler through kern-jobs/testing without loading kern-db, kern-migrations, or a client", () => {
+  test("records an enqueue and runs a handler and onFailure through kern-jobs/testing without loading kern-db, kern-migrations, or a client", () => {
     expect(JSON.parse(run([runtime, "testing.ts"], producer, { timeout: 30_000 }))).toEqual({
       calls: [
         {
@@ -129,6 +129,22 @@ describe.each(["node", "bun"])("%s", runtime => {
         maxAttempts: 25,
         key: "product:1",
         queue: null,
+      },
+      failure: {
+        id: "1",
+        reason: "handler-error",
+        error: { message: "job failed" },
+        failedAt: "2030-01-01T00:00:00.000Z",
+        job: {
+          id: "1",
+          task: "search.indexProduct",
+          scope: "tenant",
+          attempt: 25,
+          maxAttempts: 25,
+          key: "product:1",
+          queue: null,
+        },
+        payload: { productId: "1" },
       },
     })
   }, 60_000)

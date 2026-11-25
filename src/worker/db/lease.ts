@@ -4,7 +4,7 @@ import type { DbSqlQueryTemplate } from "kern-orm"
 import { isQueryError, param, sql, type SqlFragment } from "kern-orm/db"
 
 import { toStatementLabel } from "../../sql/statement"
-import type { FailureReason } from "../../task/failure"
+import { FAILURE_MESSAGES, type FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import { schema } from "./db"
@@ -116,10 +116,14 @@ interface ReapTarget {
 /** Returns the rows that a reap with these options returns at `now`. */
 function toReapTarget(o: ReapOptions, now: SqlFragment): ReapTarget {
   return o.worker === undefined
-    ? { condition: sql`j.lease_until < ${now}`, error: "lease expired", reason: "lease-expired" }
+    ? {
+        condition: sql`j.lease_until < ${now}`,
+        error: FAILURE_MESSAGES["lease-expired"],
+        reason: "lease-expired",
+      }
     : {
         condition: sql`j.locked_by = ${o.worker}`,
-        error: "worker restarted",
+        error: FAILURE_MESSAGES["worker-restarted"],
         reason: "worker-restarted",
       }
 }

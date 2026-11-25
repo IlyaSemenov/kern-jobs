@@ -1,8 +1,9 @@
-// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, the queries of a capture by task and scope, and the run of a handler in its scope.
+// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, the queries of a capture by task and scope, and the runs of a handler and of onFailure in its scope.
 
 import { describe, expect, mock, test } from "bun:test"
 
 import { ALL_SCOPES } from "../producer/jobs"
+import type { JobFailure } from "../task/failure"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { createTestJobs } from "./test-jobs"
@@ -436,5 +437,59 @@ describe("runJob", () => {
       createTestJobs({ scope: "a" }).runJob(implementation, { id: 1 }, { job: { scope: null } }),
     ).rejects.toThrow(TypeError)
     expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe("runFailure", () => {
+  test("runs the onFailure of a scoped task in the scope of createTestJobs at the call, as runFailure does", async () => {
+    const onFailure = mock(
+      (_failure: JobFailure<{ id: number }>, _context: HandlerContext<string>) => "done",
+    )
+    const implementation = defineTask("t", { scoped: true, queue: "q" })
+      .withPayload<{ id: number }>()
+      .implement(() => {}, { onFailure })
+    let scope = "a"
+    const jobs = createTestJobs({ scope: () => scope })
+    expect(await jobs.runFailure(implementation, { id: 1 }, { reason: "lease-expired" })).toBe(
+      "done",
+    )
+    scope = "b"
+    await jobs.runFailure(implementation, { id: 2 })
+    const [failure, context] = onFailure.mock.calls[0]!
+    expect(failure).toMatchObject({
+      reason: "lease-expired",
+      job: { id: "1", task: "t", scope: "a", attempt: 25, maxAttempts: 25, key: null, queue: "q" },
+      payload: { id: 1 },
+    })
+    expect(context.job).toMatchObject({ id: "2", scope: "a", attempt: 1, key: null, queue: null })
+    expect(onFailure.mock.calls[1]![0].job.scope).toBe("b")
+    expect(onFailure.mock.calls[1]![1].job.scope).toBe("b")
+  })
+
+  test("runs the onFailure of an unscoped task without a scope, and takes the scope of options.job, without calling the function of the scope", async () => {
+    const onFailure = mock((_failure: JobFailure<void>, _context: HandlerContext) => {})
+    const getScope = mock(() => "a")
+    const jobs = createTestJobs({ scope: getScope })
+    await jobs.runFailure(defineTask("t").implement(() => {}, { onFailure }))
+    await jobs.runFailure(
+      defineTask("u", { scoped: true }).implement(() => {}, { onFailure }),
+      undefined,
+      { job: { scope: "b" } },
+    )
+    expect(onFailure.mock.calls.map(([failure]) => failure.job.scope)).toEqual([null, "b"])
+    expect(getScope).not.toHaveBeenCalled()
+  })
+
+  test("rejects a scoped task without a scope or with ALL_SCOPES with TypeError, as enqueue does, and an implementation without onFailure with TypeError, before it runs onFailure", async () => {
+    const onFailure = mock(() => {})
+    const implementation = reportTask.implement(() => {}, { onFailure })
+    await expect(createTestJobs().runFailure(implementation, { id: 1 })).rejects.toThrow(TypeError)
+    await expect(
+      createTestJobs({ scope: ALL_SCOPES }).runFailure(implementation, { id: 1 }),
+    ).rejects.toThrow(TypeError)
+    await expect(
+      createTestJobs({ scope: "a" }).runFailure(reportTask.implement(() => {}) as never, { id: 1 }),
+    ).rejects.toThrow(TypeError)
+    expect(onFailure).not.toHaveBeenCalled()
   })
 })

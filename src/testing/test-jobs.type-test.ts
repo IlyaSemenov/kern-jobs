@@ -70,6 +70,24 @@ describe("createTestJobs", () => {
     )
   })
 
+  test("runFailure takes an implementation with onFailure, the payload of its task, and an optional scope for a scoped task", () => {
+    const jobs = createTestJobs({ scope: "a" })
+    const sendEmail = sendEmailTask.implement(() => {}, { onFailure: () => {} })
+    void jobs.runFailure(sendEmail, { to: "a" }, { reason: "terminal-error", job: { attempt: 1 } })
+    void jobs.runFailure(purgeExpiredSessionsTask.implement(() => {}, { onFailure: () => {} }))
+    void jobs.runFailure(
+      reportTask.implement(() => {}, { onFailure: () => {} }),
+      { id: 1 },
+    )
+    const withoutFailure = sendEmailTask.implement(() => {})
+    // @ts-expect-error The implementation needs onFailure.
+    void jobs.runFailure(withoutFailure, { to: "a" })
+    // @ts-expect-error The task needs a payload.
+    void jobs.runFailure(sendEmail)
+    // @ts-expect-error The payload has the type of the task.
+    void jobs.runFailure(sendEmail, { to: 1 })
+  })
+
   test("TestJobCall and TestJobQueries take their type arguments by default", () => {
     const check = (queries: TestJobQueries) => queries.payloadsFor(sendEmailTask)
     expectTypeOf(check).returns.toEqualTypeOf<{ to: string }[]>()

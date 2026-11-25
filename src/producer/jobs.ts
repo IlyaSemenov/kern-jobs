@@ -272,12 +272,12 @@ function checkDistinctKeys(jobs: readonly EnqueueJob[]): void {
 const maxJobId = 2n ** 63n - 1n
 
 /**
- * Throws `TypeError` for an id of a job that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, the range of the ids of the job table.
+ * Throws `TypeError` for an id of a job that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, the range of the ids of the job table; `name` names the id in the error.
  */
-function checkJobId(id: unknown): asserts id is string {
-  if (typeof id !== "string") throw new TypeError(`id must be a string, got ${String(id)}`)
+export function checkJobId(id: unknown, name = "id"): asserts id is string {
+  if (typeof id !== "string") throw new TypeError(`${name} must be a string, got ${String(id)}`)
   if (!/^[1-9][0-9]{0,18}$/.test(id) || BigInt(id) > maxJobId) {
-    throw new RangeError(`id must be a decimal integer from 1 to ${maxJobId}, got "${id}"`)
+    throw new RangeError(`${name} must be a decimal integer from 1 to ${maxJobId}, got "${id}"`)
   }
 }
 

@@ -11,6 +11,13 @@ export type FailureReason =
   | "worker-restarted"
   | "late-claim"
 
+/** Error message that the worker or the reaper records for a failure of each reason that no thrown error causes. */
+export const FAILURE_MESSAGES = {
+  "lease-expired": "lease expired",
+  "worker-restarted": "worker restarted",
+  "late-claim": "lease confirmation deadline passed before the handler started",
+} as const satisfies Partial<Record<FailureReason, string>>
+
 /** Recorded failure for good of a job, which `onFailure` gets. */
 export interface JobFailure<Payload = unknown> {
   /** Id of the failure, the same in each run of `onFailure` for it, unique within the installation; a job that fails for good again after a retry gets another one. */

@@ -154,6 +154,26 @@ describe("job", () => {
   })
 })
 
+describe("job.id", () => {
+  test("rejects an id that no job of the table can have with RangeError, and one that is not a string with TypeError, before it runs the handler", async () => {
+    const handler = mock(() => {})
+    const implementation = defineTask("t").implement(handler)
+    for (const id of ["", "job-1", "0", "01", " 1", "0x10", "9223372036854775808"]) {
+      await expect(runJob(implementation, undefined, { job: { id } })).rejects.toThrow(
+        new RangeError(
+          `job.id must be a decimal integer from 1 to 9223372036854775807, got "${id}"`,
+        ),
+      )
+    }
+    await expect(runJob(implementation, undefined, { job: { id: 1 as never } })).rejects.toThrow(
+      TypeError,
+    )
+    expect(handler).not.toHaveBeenCalled()
+    await runJob(implementation, undefined, { job: { id: "9223372036854775807" } })
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("scope", () => {
   const scopedTask = defineTask("t", { scoped: true })
 

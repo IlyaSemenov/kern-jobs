@@ -1,6 +1,6 @@
 // Test helpers of the consumer, exported with inferred types that its declarations name through the exports of kern-jobs and kern-jobs/testing; the type tests of `declaration-consumer/` check the emitted types.
 
-import { createTestJobs, runJob } from "kern-jobs/testing"
+import { createTestJobs, runFailure, type RunFailureOptions, runJob } from "kern-jobs/testing"
 
 import { indexProductTask } from "./tasks.ts"
 
@@ -17,5 +17,14 @@ export function runIndex(productId: string, attempt?: number) {
     indexProductTask.implement(() => {}),
     { productId },
     { job: { attempt } },
+  )
+}
+
+/** Runs the onFailure of the indexing of a product with the options that a test gives. */
+export function runIndexFailure(productId: string, options?: RunFailureOptions) {
+  return runFailure(
+    indexProductTask.implement(() => {}, { onFailure: () => {} }),
+    { productId },
+    options,
   )
 }

@@ -83,7 +83,7 @@ await runJob(sendWelcomeEmail, { userId: "user-1" }, { job: { attempt: 25 } })
 
 Pass an `AbortSignal` in `signal` to test how the handler [stops](../workers/handlers#stop-long-handlers).
 
-`runJob` calls the handler directly, without the [`runHandler`](../workers/handlers#wrap-every-handler) of a worker, [retries](../workers/retries), or `onFailure`; to test `onFailure`, [run it with a `JobFailure`](../workers/failure-handlers#test-onfailure).
+`runJob` calls the handler directly, without the [`runHandler`](../workers/handlers#wrap-every-handler) of a worker, [retries](../workers/retries), or `onFailure`; to test `onFailure`, run it by [`runFailure`](../workers/failure-handlers#test-onfailure).
 
 For a [scoped task](../tasks/scopes), pass the scope of its job to `runJob` in `job.scope`.
 To give its job the scope of `testJobs` instead, call `testJobs.runJob` without `job.scope`:

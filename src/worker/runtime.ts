@@ -8,6 +8,7 @@ import type { JobTable } from "../sql/job-table"
 import { toStatementLabel } from "../sql/statement"
 import { type Backoff, defaultBackoff } from "../task/backoff"
 import { delayRange, isDelay } from "../task/delay"
+import { FAILURE_MESSAGES } from "../task/failure"
 
 import { type Claim, claimCycle, type ClaimedJob, createClaimState } from "./db/claim"
 import { bindWorkerDb } from "./db/db"
@@ -129,9 +130,6 @@ function toErrorMessage(error: unknown): string {
   }
   return message.replaceAll("\0", "\\u0000")
 }
-
-/** Error of a job whose claim returned after the deadline of its lease, so that the worker did not start its handler. */
-const lateClaimError = "lease confirmation deadline passed before the handler started"
 
 /**
  * Builds the options of the fail of a job whose handler threw `error`, by its classification `thrown`: a `TerminalError` fails it for good, with the reason `terminal-error`, a `RetryError` retries it after its delay, and any other error after the backoff of its task, with the reason of a fail without one, `handler-error`.
@@ -282,8 +280,12 @@ export function startRuntime(o: RuntimeOptions): Worker {
       return execute(claim, kept, async () => ({
         type: "fail",
         options: {
-          ...toFailOptions(task, claim, new Error(lateClaimError), { type: "other" }, e =>
-            emit({ type: "backoff-error", claim, error: e }),
+          ...toFailOptions(
+            task,
+            claim,
+            new Error(FAILURE_MESSAGES["late-claim"]),
+            { type: "other" },
+            e => emit({ type: "backoff-error", claim, error: e }),
           ),
           reason: "late-claim",
         },

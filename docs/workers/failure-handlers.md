@@ -106,23 +106,28 @@ export const manifest = defineManifest({
 
 ## Test `onFailure`
 
-Run the `failure` of the implementation with a `JobFailure` by [`runJob`](../testing/#run-a-handler):
+Run `onFailure` of the implementation with the payload of the failed job by `runFailure` from `kern-jobs/testing`:
+
+```ts [src/worker/tasks/charge-order.test.ts]
+import { runFailure } from "kern-jobs/testing"
+
+import chargeOrder from "./charge-order"
+
+await runFailure(chargeOrder, { orderId: "42", generation: 3 })
+```
+
+`runFailure` resolves to what `onFailure` returns, or rejects with what it throws.
+`onFailure` gets a `JobFailure` of a failure on the last attempt: the reason `handler-error`, the current time as `failedAt`, the payload through JSON, as [`runJob`](../testing/#run-a-handler) gives it to a handler, and as `job` the key, the queue, and `maxAttempts` that the options of the task give for the payload.
+Replace the fields of the `JobFailure` in the options, such as the reason, the error, or `job.attempt`:
 
 ```ts
-await runJob(chargeOrder.failure, {
-  id: "1",
-  reason: "handler-error",
-  error: { message: "card declined" },
-  failedAt: "2030-01-01T00:00:00.000Z",
-  job: {
-    id: "1",
-    task: "orders.charge",
-    scope: null,
-    attempt: 25,
-    maxAttempts: 25,
-    key: null,
-    queue: null,
-  },
-  payload: { orderId: "42", generation: 3 },
-})
+await runFailure(
+  chargeOrder,
+  { orderId: "42", generation: 3 },
+  { reason: "terminal-error", error: new Error("card declined") },
+)
 ```
+
+Without `error`, the message is the one that kern-jobs records for the reason, such as `lease expired`, or `job failed` for an error of the handler.
+
+For a [scoped task](../tasks/scopes), pass the scope of the failed job in `job.scope`, or call `testJobs.runFailure` to give it the scope of `testJobs`, as [`testJobs.runJob`](../testing/#run-a-handler) does.

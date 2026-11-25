@@ -9,8 +9,9 @@ import {
 } from "../producer/jobs"
 import type { EnqueueJob, EnqueueResult } from "../sql/enqueue"
 import { encodePayload } from "../sql/job"
-import type { Task, TaskImplementation } from "../task/task"
+import type { FailureImplementation, Task, TaskImplementation } from "../task/task"
 
+import { type RunFailureArgs, type RunFailureOptions, runFailureWithScope } from "./run-failure"
 import { type RunJobArgs, type RunJobOptions, runJobWithScope } from "./run-job"
 
 /** Options of `createTestJobs`. */
@@ -84,6 +85,17 @@ export interface TestJobs extends Jobs {
     implementation: TaskImplementation<string, P>,
     ...args: NoInfer<RunJobArgs<P, string | null>>
   ): Promise<unknown>
+  /**
+   * Runs the `onFailure` of a task implementation as `runFailure` does, and gives the failed job the scope that `runJob` of this jobs API gives a job: of a scoped task, the scope of `createTestJobs` at the call.
+   * `options.job.scope` replaces that scope, and then the scope function of `createTestJobs` is not called.
+   * It rejects with the errors of `runFailure`, and without `options.job.scope`, for a scoped task, with the errors of `enqueue` for the scope.
+   */
+  runFailure<P>(
+    implementation: TaskImplementation<string, P> & {
+      readonly failure: FailureImplementation<string, P>
+    },
+    ...args: NoInfer<RunFailureArgs<P, string | null>>
+  ): Promise<unknown>
 }
 
 /** Pending job of the memory of `createTestJobs`. */
@@ -128,6 +140,9 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
     for (const j of pending) if (isOfCall(j) && j.key !== null) ids.set(j.key, j.id)
     return key => ids.get(key)
   }
+
+  /** Returns the scope that `runJob` and `runFailure` give a job of a task without `options.job.scope`: the scope of `createTestJobs` at the call for a scoped task, as an enqueue gives it, and `null` for another task. */
+  const getRunScope = (task: Task<string, unknown>) => toJobScope(getEnqueueScope(task, scope))
 
   /** Removes the pending jobs that match a filter, and returns their count. */
   const removePending = (filter: (job: PendingJob) => boolean) => {
@@ -210,7 +225,16 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
     ): Promise<unknown> {
       const [payload, options] = args as [P, RunJobOptions?]
       return await runJobWithScope(implementation, payload, options, () =>
-        toJobScope(getEnqueueScope(implementation.task, scope)),
+        getRunScope(implementation.task),
+      )
+    },
+    async runFailure<P>(
+      implementation: TaskImplementation<string, P>,
+      ...args: [payload?: P, options?: RunFailureOptions]
+    ): Promise<unknown> {
+      const [payload, options] = args as [P, RunFailureOptions?]
+      return await runFailureWithScope(implementation, payload, options, () =>
+        getRunScope(implementation.task),
       )
     },
   }

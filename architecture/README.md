@@ -38,7 +38,7 @@ This directory specifies the SQL core, the producer API, and the worker runtime:
 ## Entry points
 
 - `kern-jobs`, `index.ts`, gives what producers and workers share: the definitions of tasks and the enqueue.
-- `kern-jobs/testing`, `testing.ts`, gives what tests of an application run without a database or a worker: `createTestJobs` and `runJob`.
+- `kern-jobs/testing`, `testing.ts`, gives what tests of an application run without a database or a worker: `createTestJobs`, `runJob`, and `runFailure`.
 - `kern-jobs/migrations`, `migrations.ts`, gives what creates and updates the schema before producers and workers start: `migrateJobs`.
 - `kern-jobs/worker`, `worker.ts`, gives what only a worker process runs: `startWorker`, `waitForSignalAndStop` and `stopOnSignals`, the manifest and its check, the errors of handlers, the reason of an abort, and the type of a driver.
 - `kern-jobs/drivers/postgres-js` and `kern-jobs/drivers/node-postgres`, `drivers/postgres-js.ts` and `drivers/node-postgres.ts`, give the driver of kern-db over each client, which the worker and `migrateJobs` take.
@@ -72,5 +72,5 @@ Module paths are relative to `src/`.
 - [Leases](leases.md): heartbeat, the reaper, and fencing; `worker/db/lease.ts`.
 - [PostgreSQL](postgresql.md): supported versions, isolation, transactions, and time; `sql/postgres.ts`.
 - [Drivers](drivers.md): the drivers of kern-db that the worker relies on, the statements of the core, the connections of the worker, and transactions; `drivers/`, `worker/driver.ts`, `worker/db/db.ts`, `worker/db/base.ts`, `worker/db/types.ts`, `worker/db/tables/`, `sql/statement.ts`, `worker/db/sql.ts`, and `worker/db/violation.ts`.
-- [Testing](testing.md): the test double of the jobs API and the run of a handler in a test; `testing/`.
+- [Testing](testing.md): the test double of the jobs API and the runs of a handler and of `onFailure` in a test; `testing/`.
 - [Worker](worker.md): the worker of an application and its runtime: options, implementations of tasks and the manifest, handler errors and backoff, the check of the schema, slots, claiming, leases, settlement, the reaper, stopping, and errors; `worker/`, `task/manifest.ts`, `task/errors.ts`, and `task/backoff.ts`.
