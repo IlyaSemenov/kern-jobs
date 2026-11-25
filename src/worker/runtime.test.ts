@@ -717,19 +717,35 @@ describe("heartbeat", () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
     const gates = createGates({ honorAbort: true })
     const log = recordEvents()
+    const applicationName = `${schema.name}_heartbeat`
     startTestWorker(schema, {
-      heartbeatSource: schema.createDriver({ max: 1, applicationName: "heartbeat" }),
+      heartbeatSource: schema.createDriver({ max: 1, applicationName, pauses: ["heartbeat"] }),
+      lease: 10,
       tasks: { t: gates.task },
       onEvent: log.onEvent,
     })
-    const start = await log.waitFor("start")
-    await log.waitFor("heartbeat")
-    expect(await terminateBackends(schema.conn, "heartbeat")).toBe(1)
-    await log.waitFor("heartbeat-error")
+    const { claim } = await log.waitFor("start")
+    const readLeaseUntil = async () => {
+      const deadline = await schema.db.job
+        .where({ id: claim.id, claimId: claim.claimId })
+        .get("leaseUntil")
+      return deadline!.getTime()
+    }
+    // Kill the original backend during its heartbeat so only its replacement can extend the observed lease.
+    const resume = await pauseAt(schema.conn, "heartbeat")
+    let leaseUntil: number
+    try {
+      await waitForLockedStatement(schema.conn, `"${schema.name}".kern_test_pause('heartbeat')`)
+      leaseUntil = await readLeaseUntil()
+      expect(await terminateBackends(schema.conn, applicationName)).toBe(1)
+      await log.waitFor("heartbeat-error")
+    } finally {
+      await resume()
+    }
     await log.waitFor("heartbeat-recovered")
-    await sleep(lease * 1000)
-    gates.open(start.claim.claimId)
-    expect((await log.waitFor("settled")).outcome).toBe("completed")
+    expect(await readLeaseUntil()).toBeGreaterThan(leaseUntil)
+    gates.open(claim.claimId)
+    expect((await log.waitFor("settled", e => e.claim === claim)).outcome).toBe("completed")
     expect(log.all("abort")).toEqual([])
   })
 })
