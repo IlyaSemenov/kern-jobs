@@ -6,10 +6,16 @@ import { identifier, joinSql, param, sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
-import { type Conn, createTestSchema, isPending, type TestSchema } from "../test-harness/database"
+import {
+  type Conn,
+  createTestSchema,
+  isPending,
+  jobs,
+  type TestSchema,
+} from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimPlain } from "../worker/db/claim"
-import { workerSchema } from "../worker/db/db"
+import { bindWorkerDb, workerSchema } from "../worker/db/db"
 import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
@@ -554,14 +560,9 @@ describe("schema", () => {
     await caller.query`set search_path = pg_temp, ${identifier(schema.name)}`
     await caller.query`create temporary table job (id bigint, task text)`
     const { id } = await callEnqueue(caller, { task: "t", scope: "tenant" }, table)
-    const rows = await schema.conn.query`
-      select 'quoted' as source, id, scope from ${identifier(table.schemaName, "job")}
-      union all select 'test', id, scope from ${workerSchema.job}`.select({
-      source: t.text,
-      id: t.bigintText,
-      scope: t.text,
-    })
-    expect(rows).toEqual([{ source: "quoted", id, scope: "tenant" }])
+    const quoted = await jobs(bindWorkerDb(schema.database, table.schemaName).$query)
+    expect(quoted.map(job => ({ id: job.id, scope: job.scope }))).toEqual([{ id, scope: "tenant" }])
+    expect(await jobs(schema.conn.query)).toEqual([])
   })
 
   test("checks its arguments by the operators of PostgreSQL, whatever operators the search path of the caller gives", async () => {
@@ -584,9 +585,7 @@ describe("schema", () => {
       alter schema ${identifier(table.schemaName)} rename to ${identifier(renamed.schemaName)}`
     const { id } = await callEnqueue(schema.conn, { task: "t" }, renamed)
     expect(
-      await schema.conn.query`select id from ${identifier(renamed.schemaName, "job")}`.pluck(
-        t.bigintText,
-      ),
+      (await jobs(bindWorkerDb(schema.database, renamed.schemaName).$query)).map(job => job.id),
     ).toEqual([id])
   })
 })
