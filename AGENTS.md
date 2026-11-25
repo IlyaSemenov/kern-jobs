@@ -76,6 +76,6 @@ Do not catalog files or restate information evident from their names and locatio
 - Run the checks on the database of `.env.test.local` only; CI runs the tests on the other supported versions of PostgreSQL.
 - Run the `types` script when public types or TypeScript configuration change.
 - Run the `test` script when behavior changes.
-- When claiming, settlement, leases, or the worker change, also run `src/worker/fuzz.test.ts` with several values of `FUZZ_SEED`.
+- Run `src/worker/fuzz.test.ts` with several values of `FUZZ_SEED` only when a change touches the code of claiming, settlement, leases, the reaper, or stopping.
 - Run the `test:package` script when package exports, declarations, the build configuration, or supported runtimes change; it builds the package first.
 - Run the `docs:build` script when site pages or the VitePress configuration change.
