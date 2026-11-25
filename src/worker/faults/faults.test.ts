@@ -13,8 +13,8 @@ import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
   databaseUrl,
-  holdHook,
   jobs,
+  pauseAt,
   sleep,
   type TestSchema,
 } from "../../test-harness/database"
@@ -128,12 +128,12 @@ async function reapUntil(id: string, pred: (r: any) => boolean, timeoutMs = 5000
 describe("SIGKILL during claiming", () => {
   test("inside the claim statement, default settings: the orphaned backend commits the claim; the reaper recovers it", async () => {
     const job = await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "claim_plain")
-    const a = spawnWorker("a", { hooks: ["claim_plain"], poolSize: 1 })
+    const resume = await pauseAt(schema.conn, "claim_plain")
+    const a = spawnWorker("a", { pauses: ["claim_plain"], poolSize: 1 })
     const ready = await a.waitFor(e => e.ev === "ready")
     await waitForLock(schema.conn, ready.mainPid)
     await a.kill()
-    await release()
+    await resume()
     await sleep(200)
     expect([(await row(job.id))!.state, (await row(job.id))!.lockedBy]).toEqual(["active", "a"])
     await reapUntil(job.id, r => r.state === "pending")
@@ -146,17 +146,17 @@ describe("SIGKILL during claiming", () => {
 
   test("inside the claim statement, client_connection_check_interval 100 ms: the backend aborts, nothing is claimed", async () => {
     const job = await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "claim_plain")
-    const a = spawnWorker("a", { hooks: ["claim_plain"], connectionCheckMs: 100, poolSize: 1 })
+    const resume = await pauseAt(schema.conn, "claim_plain")
+    const a = spawnWorker("a", { pauses: ["claim_plain"], connectionCheckMs: 100, poolSize: 1 })
     const ready = await a.waitFor(e => e.ev === "ready")
     await waitForLock(schema.conn, ready.mainPid)
     await a.kill()
     const deadline = Date.now() + 3000
     while ((await backendAlive(ready.mainPid)) && Date.now() < deadline) await sleep(50)
     const terminated = !(await backendAlive(ready.mainPid))
-    await release()
+    await resume()
     await sleep(200)
-    console.log(`connection check: backend terminated before hook release: ${terminated}`)
+    console.log(`connection check: backend terminated before the resume: ${terminated}`)
     expect(terminated).toBe(true)
     expect([(await row(job.id))!.state, (await row(job.id))!.attempts]).toEqual(["pending", 0])
   }, 30_000)
@@ -208,10 +208,10 @@ describe("SIGKILL inside fail and reap", () => {
         defaultLease: 0.1,
       })
       await sleep(200)
-      const release = await holdHook(schema.conn, "reap")
+      const resume = await pauseAt(schema.conn, "reap")
       const r = spawnWorker("reaper", {
         role: "reaper",
-        hooks: ["reap"],
+        pauses: ["reap"],
         poolSize: 1,
         connectionCheckMs: check ? 100 : undefined,
       })
@@ -222,7 +222,7 @@ describe("SIGKILL inside fail and reap", () => {
         const deadline = Date.now() + 3000
         while ((await backendAlive(ready.mainPid)) && Date.now() < deadline) await sleep(50)
       }
-      await release()
+      await resume()
       await sleep(300)
       const states = (await jobs(schema.conn.query)).map(x => x.state)
       const pending = states.filter(s => s === "pending").length
@@ -326,9 +326,9 @@ describe("slots and heartbeats", () => {
 
   test("heartbeats run one at a time", async () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "heartbeat")
+    const resume = await pauseAt(schema.conn, "heartbeat")
     const w = spawnWorker("a", {
-      heartbeatHooks: ["heartbeat"],
+      heartbeatPauses: ["heartbeat"],
       handlerMs: 3000,
       heartbeatMs: 100,
       lease: 2,
@@ -336,15 +336,15 @@ describe("slots and heartbeats", () => {
     await w.waitFor(e => e.ev === "heartbeat")
     await sleep(600)
     const sent = w.events().filter(e => e.ev === "heartbeat").length
-    await release()
+    await resume()
     expect(sent).toBe(1)
   }, 30_000)
 
   test("a worker whose heartbeat is stuck does not claim", async () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "heartbeat")
+    const resume = await pauseAt(schema.conn, "heartbeat")
     const w = spawnWorker("a", {
-      heartbeatHooks: ["heartbeat"],
+      heartbeatPauses: ["heartbeat"],
       handlerMs: 5000,
       heartbeatMs: 100,
       lease: 2,
@@ -354,7 +354,7 @@ describe("slots and heartbeats", () => {
     const late = await enqueue(schema.conn, schema.table, { task: "t" })
     await sleep(500)
     const claimed = w.events().some(e => e.ev === "start" && e.id === late.id)
-    await release()
+    await resume()
     await w.waitFor(e => e.ev === "start" && e.id === late.id)
     expect(claimed).toBe(false)
   }, 30_000)

@@ -1,7 +1,7 @@
 // Administration of jobs by the application: retry of a failed job, and delete of pending or failed jobs by id or by a filter, each in one statement on the client of the application.
 
 import type { JobTable } from "../sql/job-table"
-import { hook, NOW } from "../sql/postgres"
+import { NOW, pauseCondition } from "../sql/postgres"
 import {
   labelSql,
   type Param,
@@ -42,7 +42,7 @@ export async function retryFailedJob(
       "admin:retry-failed",
       `with f as (
        select id, scope, task, key from ${table.name}
-       where id = $2::text::bigint and state = 'failed' and ($3::text is null or scope = $3::text) and ${hook("retry")}
+       where id = $2::text::bigint and state = 'failed' and ($3::text is null or scope = $3::text) and ${pauseCondition("retry")}
        for update
      ), c as (
        select p.id from ${table.name} p, f

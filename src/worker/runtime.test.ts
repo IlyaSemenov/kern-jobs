@@ -18,9 +18,9 @@ import {
   createTestSchema,
   databaseUrl,
   getStatementLabel,
-  holdHook,
   jobs,
   only,
+  pauseAt,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
@@ -308,12 +308,12 @@ describe("schema check", () => {
 
 describe("state", () => {
   test("a worker is starting until it has checked its schema and its first successful claim cycle has returned, then ready, stopping, and stopped", async () => {
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const checked = Promise.withResolvers<void>()
     openAll.push(() => checked.resolve())
     let resolved = false
     const worker = startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       tasks: { t: { handler: () => {} } },
       checkSchema: () => checked.promise,
@@ -322,9 +322,9 @@ describe("state", () => {
     await sleep(50)
     const whileChecking = worker.state
     checked.resolve()
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     const whileClaiming = [worker.state, resolved]
-    await release()
+    await resume()
     await worker.ready
     expect([whileChecking, whileClaiming, worker.state]).toEqual([
       "starting",
@@ -505,20 +505,20 @@ describe("heartbeat", () => {
   test("a claim takes its lease from the send time of its own statement, not from the start of its cycle", async () => {
     await enqueue(schema.conn, schema.table, { task: "plain" })
     const queued = await enqueue(schema.conn, schema.table, { task: "queued", queue: "q" })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const gates = createGates({ honorAbort: true })
     const log = recordEvents()
     startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       concurrency: 2,
       tasks: { plain: gates.task, queued: gates.task },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     // The plain phase of the cycle takes longer than the lease.
     await sleep(lease * 1000)
-    await release()
+    await resume()
     const start = await log.waitFor("start", e => e.claim.id === queued.id)
     await sleep(3 * interval * 1000)
     expect(log.all("abort", e => e.claim.claimId === start.claim.claimId)).toEqual([])
@@ -528,21 +528,21 @@ describe("heartbeat", () => {
     await enqueue(schema.conn, schema.table, { task: "plain" })
     const queued = await enqueue(schema.conn, schema.table, { task: "queued", queue: "q" })
     const { proxy, source } = await proxiedHeartbeat()
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const gates = createGates({ honorAbort: true })
     const log = recordEvents()
     startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: source,
       concurrency: 2,
       tasks: { plain: gates.task, queued: gates.task },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     proxy.refuse = true
     proxy.cut()
     await log.waitFor("heartbeat-error")
-    await release()
+    await resume()
     await log.waitFor("start", e => e.claim.job.task === "plain")
     await sleep(200)
     const claimed = log.all("start", e => e.claim.id === queued.id).length
@@ -553,18 +553,18 @@ describe("heartbeat", () => {
 
   test("heartbeats run one at a time", async () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "heartbeat")
+    const resume = await pauseAt(schema.conn, "heartbeat")
     const gates = createGates()
     const log = recordEvents()
     startTestWorker(schema, {
-      heartbeatSource: schema.createDriver({ max: 1, hooks: ["heartbeat"] }),
+      heartbeatSource: schema.createDriver({ max: 1, pauses: ["heartbeat"] }),
       tasks: { t: gates.task },
       onEvent: log.onEvent,
     })
     await log.waitFor("heartbeat")
     await sleep(5 * interval * 1000)
     const sent = log.all("heartbeat").length
-    await release()
+    await resume()
     await sleep(3 * interval * 1000)
     expect(sent).toBe(1)
     expect(log.all("heartbeat").length).toBeGreaterThan(1)
@@ -591,12 +591,12 @@ describe("heartbeat", () => {
 
   test("a worker whose heartbeat is stuck does not claim", async () => {
     const first = await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "heartbeat")
+    const resume = await pauseAt(schema.conn, "heartbeat")
     const gates = createGates()
     const log = recordEvents()
     startTestWorker(schema, {
       concurrency: 2,
-      heartbeatSource: schema.createDriver({ max: 1, hooks: ["heartbeat"] }),
+      heartbeatSource: schema.createDriver({ max: 1, pauses: ["heartbeat"] }),
       tasks: { t: gates.task },
       onEvent: log.onEvent,
     })
@@ -606,7 +606,7 @@ describe("heartbeat", () => {
     const late = await enqueue(schema.conn, schema.table, { task: "t" })
     await sleep(200)
     const claimed = log.all("start", e => e.claim.id === late.id).length
-    await release()
+    await resume()
     await log.waitFor("start", e => e.claim.id === late.id)
     expect(claimed).toBe(0)
   })
@@ -634,19 +634,19 @@ describe("heartbeat", () => {
 
   test("a claim that returns after the deadline of its lease does not start its handler, and its job retries with the attempt spent", async () => {
     const job = await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const log = recordEvents()
     let calls = 0
     startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       tasks: { t: { handler: () => void calls++, backoff: () => 3600 } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     // The deadline of the abort comes the lease less the abort margin after the send time of the claim statement.
     await sleep((lease - testTimings.abortMargin) * 1000 + 100)
-    await release()
+    await resume()
     expect((await log.waitFor("settled")).outcome).toBe("retry")
     expect([calls, log.all("start"), log.all("late-claim").map(e => e.claim.id)]).toEqual([
       0,
@@ -663,17 +663,17 @@ describe("heartbeat", () => {
 
   test("a claim that returns after the deadline of its lease on the last attempt fails the job with the reason late-claim of its failure job", async () => {
     await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const log = recordEvents()
     startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       tasks: { t: { handler: () => {}, failureMaxAttempts: 2 } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     await sleep((lease - testTimings.abortMargin) * 1000 + 100)
-    await release()
+    await resume()
     expect((await log.waitFor("settled")).outcome).toBe("failed")
     const failed = only(await jobs(schema.conn.query, sql`task = 't:failure'`))
     expect(failed.payload).toMatchObject({
@@ -808,8 +808,8 @@ describe("worker id", () => {
       limit: 1,
       defaultLease: 3600,
     })
-    const release = await holdHook(schema.conn, "reap")
-    openAll.push(() => void release())
+    const resume = await pauseAt(schema.conn, "reap")
+    openAll.push(() => void resume())
     let statements = 0
     const stoppedLog = recordEvents()
     const stopped = startTestWorker(schema, {
@@ -822,10 +822,10 @@ describe("worker id", () => {
           return schema.driver.execute(statement)
         },
       },
-      heartbeatSource: schema.createDriver({ max: 1, hooks: ["reap"] }),
+      heartbeatSource: schema.createDriver({ max: 1, pauses: ["reap"] }),
       tasks: { t: { handler: () => {} } },
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('reap')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('reap')")
     await expect(stopped.stop({ force: true })).rejects.toThrow("The worker stop was forced")
     const log = recordEvents()
     const next = startTestWorker(schema, {
@@ -836,7 +836,7 @@ describe("worker id", () => {
     })
     await log.waitFor("heartbeat-error")
     expect(next.state).toBe("starting")
-    await release()
+    await resume()
     expect((await log.waitFor("settled")).claim.job.id).toBe(job.id)
     expect(statements).toBe(0)
     expect(stoppedLog.all("recover").length).toBe(1)
@@ -884,9 +884,9 @@ describe("worker id", () => {
       limit: 1,
       defaultLease: 3600,
     })
-    const release = await holdHook(schema.conn, "reap")
-    openAll.push(() => void release())
-    const heartbeat = createWatchedHeartbeat(schema.createDriver({ max: 1, hooks: ["reap"] }))
+    const resume = await pauseAt(schema.conn, "reap")
+    openAll.push(() => void resume())
+    const heartbeat = createWatchedHeartbeat(schema.createDriver({ max: 1, pauses: ["reap"] }))
     let statements = 0
     const log = recordEvents()
     startTestWorker(schema, {
@@ -902,10 +902,10 @@ describe("worker id", () => {
       tasks: { t: { handler: () => {} } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('reap')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('reap')")
     heartbeat.failing = true
     await log.waitFor("heartbeat-error", e => e.error instanceof QueryError)
-    await release()
+    await resume()
     await log.waitFor("recover")
     // The second batch returns none and ends the return, after which the claim cycle would claim at once.
     // With the periodic reaper disabled, every reap batch observed here belongs to the return of the jobs of the worker.
@@ -1278,18 +1278,18 @@ describe("stop", () => {
 
   test("a claim that returns after stop began does not start its handler, and its job returns with the attempt given back", async () => {
     const job = await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const log = recordEvents()
     let calls = 0
     const worker = startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       tasks: { t: { handler: () => void calls++ } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     const stopped = worker.stop()
-    await release()
+    await resume()
     await stopped
     expect([calls, log.all("start"), log.all("settled").map(e => e.outcome)]).toEqual([
       0,
@@ -1302,19 +1302,19 @@ describe("stop", () => {
 
   test("a claim that returns after stop began and after the deadline of its lease returns its job with the attempt given back", async () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const log = recordEvents()
     const worker = startTestWorker(schema, {
-      driver: schema.createDriver({ hooks: ["claim_plain"] }),
+      driver: schema.createDriver({ pauses: ["claim_plain"] }),
       heartbeatSource: schema.createDriver({ max: 1 }),
       tasks: { t: { handler: () => {} } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     // The deadline of the abort comes the lease less the abort margin after the send time of the claim statement.
     await sleep((lease - testTimings.abortMargin) * 1000 + 100)
     const stopped = worker.stop()
-    await release()
+    await resume()
     await stopped
     expect([log.all("late-claim"), log.all("settled").map(e => e.outcome)]).toEqual([
       [],
@@ -1462,10 +1462,10 @@ describe("stop", () => {
 
   test("a claim that returns after the timeout of stop sends nothing, and its job stays claimed until its lease expires", async () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
-    const release = await holdHook(schema.conn, "claim_plain")
+    const resume = await pauseAt(schema.conn, "claim_plain")
     const log = recordEvents()
     let statements = 0
-    const pool = schema.createDriver({ hooks: ["claim_plain"] })
+    const pool = schema.createDriver({ pauses: ["claim_plain"] })
     const worker = startTestWorker(schema, {
       driver: {
         ...pool,
@@ -1482,10 +1482,10 @@ describe("stop", () => {
       tasks: { t: { handler: () => {} } },
       onEvent: log.onEvent,
     })
-    await waitForLockedStatement(schema.conn, "kern_test_hook('claim_plain')")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('claim_plain')")
     const sent = statements
     await expect(worker.stop({ timeout: 0.2 })).rejects.toThrow("did not stop within 0.2 s")
-    await release()
+    await resume()
     while (only(await jobs(schema.conn.query)).state !== "active") await sleep(10)
     await sleep(200)
     expect([statements - sent, log.all("settled"), log.all("start")]).toEqual([0, [], []])
@@ -1551,7 +1551,7 @@ describe("stop", () => {
     await enqueue(schema.conn, schema.table, { task: "t" })
     const gates = createGates({ honorAbort: true })
     const log = recordEvents()
-    const heartbeatSource = schema.createDriver({ max: 1, hooks: ["heartbeat"] })
+    const heartbeatSource = schema.createDriver({ max: 1, pauses: ["heartbeat"] })
     const worker = startTestWorker(schema, {
       heartbeatSource,
       tasks: { t: gates.task },
@@ -1559,13 +1559,13 @@ describe("stop", () => {
     })
     await log.waitFor("start")
     await log.waitFor("heartbeat")
-    const release = await holdHook(schema.conn, "heartbeat")
-    await waitForLockedStatement(schema.conn, "kern_test_hook('heartbeat')")
+    const resume = await pauseAt(schema.conn, "heartbeat")
+    await waitForLockedStatement(schema.conn, "kern_test_pause('heartbeat')")
     await expect(worker.stop({ abortAfter: 0, timeout: 0.5 })).rejects.toThrow(
       "did not stop within 0.5 s",
     )
     expect(log.all("settled").map(e => e.outcome)).toEqual(["requeued"])
-    await release()
+    await resume()
     // The pool of one connection gives it once the heartbeat has released it.
     expect(await queryOn(heartbeatSource)`select 1`.get(t.integer)).toBe(1)
     await heartbeatSource.close()

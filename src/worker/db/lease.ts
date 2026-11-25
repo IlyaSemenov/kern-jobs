@@ -1,16 +1,15 @@
 // Leases of claimed jobs: heartbeats that extend them, and the reaper that returns expired jobs or the jobs of a worker that has ended.
 
 import type { DbSqlQueryTemplate } from "kern-orm"
-import { isQueryError, param, sql, type SqlFragment, unsafeSql } from "kern-orm/db"
+import { isQueryError, param, sql, type SqlFragment } from "kern-orm/db"
 
-import { hook } from "../../sql/postgres"
 import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
 import { workerSchema } from "./db"
 import { insertFailureJobsSql } from "./failure"
-import { nowSql } from "./sql"
+import { nowSql, pauseSql } from "./sql"
 import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
@@ -56,7 +55,7 @@ export async function heartbeat(
       select j.claim_id from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
     ), locked as (
       select j.id, x.lease from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id
-      where j.state = 'active' and ${unsafeSql(hook("heartbeat"))}
+      where j.state = 'active' and ${pauseSql("heartbeat")}
       for update of j skip locked
     ), extended as (
       update ${workerSchema.job} j set lease_until = greatest(j.lease_until, ${nowSql(o.now)} + make_interval(secs => l.lease))
@@ -92,7 +91,7 @@ export interface ReapOptions {
   maxRetries?: number
   /** Seconds that each lock wait of a statement lasts before the statement gives up, such as for the transaction of a producer: positive, since PostgreSQL reads 0 as no limit; 1 when omitted. */
   lockTimeout?: number
-  /** Breakpoint before every statement attempt for deterministic tests. */
+  /** Pause point before every statement attempt for deterministic tests. */
   pause?: { beforeAttempt?: () => Promise<void> }
 }
 
@@ -160,7 +159,7 @@ function reapStatement(
       for update of j skip locked
     ), ranked as (
       select e.*,
-        ${unsafeSql(hook("reap"))} as hooked,
+        ${pauseSql("reap")} as paused,
         row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
         exists (select 1 from ${workerSchema.job} p
                 where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending

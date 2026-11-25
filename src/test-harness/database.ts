@@ -1,4 +1,4 @@
-// Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, breakpoints inside statements, and virtual time.
+// Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, pause points inside statements, and virtual time.
 // Test connections do not add the test schema to `search_path`, so statements must qualify their names.
 
 import { migrate } from "kern-migrations"
@@ -23,7 +23,7 @@ import postgres from "postgres"
 
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
-import { quoteIdentifier } from "../sql/postgres"
+import { quoteIdentifier, replacePauseConditions } from "../sql/postgres"
 import { bindWorkerDb, type WorkerDb, workerSchema } from "../worker/db/db"
 import { job } from "../worker/db/tables/job"
 
@@ -37,9 +37,9 @@ export function databaseUrl(): string {
   return url
 }
 
-// Blocks while the test holds the advisory lock of the breakpoint, see `holdHook`.
-const createHookSql = (schemaName: string) => `
-create function ${quoteIdentifier(schemaName)}.kern_test_hook(name text) returns boolean language plpgsql volatile as $$
+// Blocks while the test holds the advisory lock of the pause point, see `pauseAt`.
+const createPauseSql = (schemaName: string) => `
+create function ${quoteIdentifier(schemaName)}.kern_test_pause(name text) returns boolean language plpgsql volatile as $$
 begin
   perform pg_advisory_lock(1, hashtext(name));
   perform pg_advisory_unlock(1, hashtext(name));
@@ -52,8 +52,8 @@ $$;
 export interface TestDriverOptions {
   /** Size of the pool. */
   max?: number
-  /** Breakpoints that block statements of this driver while the test holds them. */
-  hooks?: string[]
+  /** Pause points that block statements of this driver while the test holds them. */
+  pauses?: string[]
   /** `client_connection_check_interval` of the connections in milliseconds. */
   connectionCheckMs?: number
   /** `application_name` of the connections, by which a test finds their backends. */
@@ -66,7 +66,7 @@ export interface TestDriverOptions {
   timeZone?: string
 }
 
-/** Creates a postgres.js driver of a test database whose breakpoints call the hook function of its schema. */
+/** Creates a postgres.js driver of a test database whose pause points call the pause function of its schema. */
 export function createTestDriver(
   url: string,
   schemaName: string,
@@ -88,18 +88,18 @@ export function createTestDriver(
     },
   })
   const driver = postgresJsDriver(sql)
-  return options.hooks?.length ? withHooks(driver, schemaName, options.hooks) : driver
+  return options.pauses?.length ? withPauses(driver, schemaName, options.pauses) : driver
 }
 
 /**
- * Makes the given breakpoints of the SQL core, marked as `hook(name)` writes them, block the statements of a driver while the test holds them, by the hook function of a test schema.
+ * Makes the given pause points of the SQL core, marked as `pauseCondition(name)` writes them, block the statements of a driver from `pauseAt` until its resume, by the pause function of a test schema.
  */
-export function withHooks(driver: Driver, schemaName: string, hooks: string[]): Driver {
+export function withPauses(driver: Driver, schemaName: string, pauses: string[]): Driver {
   const rewrite = (text: string) =>
-    text.replace(/\/\*hook:([a-z_]+)\*\/true/g, (marker, name: string) =>
-      hooks.includes(name)
-        ? `(select ${quoteIdentifier(schemaName)}.kern_test_hook('${name}'))`
-        : marker,
+    replacePauseConditions(text, (name, condition) =>
+      pauses.includes(name)
+        ? `(select ${quoteIdentifier(schemaName)}.kern_test_pause('${name}'))`
+        : condition,
     )
   const rewriteStatement = ({ text, parameters }: SqlStatement) =>
     createStatement(rewrite(text), parameters)
@@ -193,7 +193,7 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
   }
   await migrate(database, jobMigrations, { schemaName })
   const conn = await connect()
-  await conn.executeScript(createHookSql(schemaName))
+  await conn.executeScript(createPauseSql(schemaName))
   return {
     name: schemaName,
     table: createJobTable(schemaName),
@@ -223,11 +223,8 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
   }
 }
 
-/** Holds breakpoint `name`: statements of connections with this hook block in it until `release()`. */
-export async function holdHook(
-  conn: StatementExecutor,
-  name: string,
-): Promise<() => Promise<void>> {
+/** Pauses statements at pause point `name` on connections that enable it in `pauses`, and returns the function that resumes them. */
+export async function pauseAt(conn: StatementExecutor, name: string): Promise<() => Promise<void>> {
   await queryOn(conn)`select pg_advisory_lock(1, hashtext(${name}))`
   return async () => {
     await queryOn(conn)`select pg_advisory_unlock(1, hashtext(${name}))`

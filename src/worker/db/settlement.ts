@@ -38,7 +38,7 @@ export interface FailOptions {
   /** Retries of the transaction after a `23505` on the pending-key index. */
   maxRetries?: number
   /**
-   * Breakpoints between the statements of the transaction for deterministic tests; they get the database, whose statements in them run in the transaction.
+   * Pause points between the statements of the transaction for deterministic tests; they get the database, whose statements in them run in the transaction.
    */
   pause?: {
     afterOwnLock?: (tx: StatementExecutor) => Promise<void>

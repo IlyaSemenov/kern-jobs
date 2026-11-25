@@ -9,10 +9,10 @@ import { enqueue } from "../../sql/enqueue"
 import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
-  holdHook,
   isPending,
   jobs,
   only,
+  pauseAt,
   recordLabels,
   secondsOf,
   T,
@@ -137,13 +137,13 @@ describe("reaper with an existing pending job", () => {
 
   test("B committed after the reaper snapshot → 23505 and the retry detaches A", async () => {
     const { a } = await expiredWithPending({ withPending: false })
-    const reaper = await schema.connect({ hooks: ["reap"] })
-    const release = await holdHook(schema.conn, "reap")
+    const reaper = await schema.connect({ pauses: ["reap"] })
+    const resume = await pauseAt(schema.conn, "reap")
     const stats = { uniqueViolations: 0 }
     const reaped = reap(reaper.query, { now: T(11) }, stats)
     await waitForLock(schema.conn, reaper.pid)
     await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(5) })
-    await release()
+    await resume()
     expect(await reaped).toEqual([{ id: a.id, state: "pending", detached: true }])
     expect(stats.uniqueViolations).toBe(1)
   })
@@ -289,13 +289,13 @@ describe("returning the active jobs of a worker", () => {
 
   test("B committed after the snapshot → 23505, and the retry row by row detaches the job of the worker", async () => {
     const { a } = await expiredWithPending({ withPending: false })
-    const reaper = await schema.connect({ hooks: ["reap"] })
-    const release = await holdHook(schema.conn, "reap")
+    const reaper = await schema.connect({ pauses: ["reap"] })
+    const resume = await pauseAt(schema.conn, "reap")
     const stats = { uniqueViolations: 0 }
     const reaped = reap(reaper.query, { worker: "dead", now: T(1) }, stats)
     await waitForLock(schema.conn, reaper.pid)
     await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(1) })
-    await release()
+    await resume()
     expect(await reaped).toEqual([{ id: a.id, state: "pending", detached: true }])
     expect(stats.uniqueViolations).toBe(1)
   })
@@ -471,9 +471,9 @@ describe("reaper progress", () => {
       now: T(0),
     })
 
-    const reaper = await schema.connect({ hooks: ["reap"] })
+    const reaper = await schema.connect({ pauses: ["reap"] })
     const producer = await schema.connect()
-    let release = await holdHook(schema.conn, "reap")
+    let resume = await pauseAt(schema.conn, "reap")
     const stats = { uniqueViolations: 0, forcedDetaches: 0 }
     let settled = false
     // Hot key pressure: before every attempt a live worker claims the pending "h", so the snapshot sees none;
@@ -506,10 +506,10 @@ describe("reaper progress", () => {
       )
       if (!blocked) break
       await enqueue(producer, schema.table, { task: "hot", key: "h", now: T(11) })
-      await release()
-      release = await holdHook(schema.conn, "reap")
+      await resume()
+      resume = await pauseAt(schema.conn, "reap")
     }
-    await release()
+    await resume()
     const result = await reaped
     expect(result.length).toBe(51)
     const rows = await jobs(schema.conn.query, sql`task = 't'`)

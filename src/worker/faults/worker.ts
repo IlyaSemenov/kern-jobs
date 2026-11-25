@@ -43,10 +43,10 @@ export interface WorkerConfig {
   pauseAt?: "after-claim" | "mid-fail"
   /** Size of the pool of claims and settlements; with 1, the ready event reports the pid of its backend. */
   poolSize?: number
-  /** Breakpoints enabled on the pool. */
-  hooks?: string[]
-  /** Breakpoints enabled on the heartbeat connection. */
-  heartbeatHooks?: string[]
+  /** Pause points enabled on the pool. */
+  pauses?: string[]
+  /** Pause points enabled on the heartbeat connection. */
+  heartbeatPauses?: string[]
   /** `client_connection_check_interval` of the pool, ms. */
   connectionCheckMs?: number
   pollMs?: number
@@ -88,12 +88,12 @@ function pauseMidFail(driver: Driver): Driver {
 const table = createJobTable(cfg.schemaName)
 const pool = createTestDriver(cfg.mainUrl, cfg.schemaName, {
   max: cfg.poolSize ?? 4,
-  hooks: cfg.hooks,
+  pauses: cfg.pauses,
   connectionCheckMs: cfg.connectionCheckMs,
 })
 const heartbeatSource = createTestDriver(cfg.heartbeatUrl, cfg.schemaName, {
   max: 1,
-  hooks: cfg.heartbeatHooks,
+  pauses: cfg.heartbeatPauses,
 })
 log("ready", { mainPid: cfg.poolSize === 1 ? await getBackendPid(pool) : undefined })
 

@@ -11,9 +11,9 @@ import { toStatementLabel } from "../sql/statement"
 import {
   type Conn,
   createTestSchema,
-  holdHook,
   jobs,
   only,
+  pauseAt,
   recordLabels,
   T,
   type TestSchema,
@@ -295,8 +295,8 @@ describe("retry", () => {
 
   test("a pending job of the key that a producer commits after the snapshot of the retry makes it reject with a unique violation and change nothing", async () => {
     const failed = await createFailedJob({ key: "k" })
-    const operator = await schema.connect({ hooks: ["retry"] })
-    const release = await holdHook(schema.conn, "retry")
+    const operator = await schema.connect({ pauses: ["retry"] })
+    const resume = await pauseAt(schema.conn, "retry")
     const retried = retryFailedJob(operator, schema.table, { id: failed, now: T(20) })
     await waitForLock(schema.conn, operator.pid)
     const { id: pending } = await enqueue(schema.conn, schema.table, {
@@ -304,7 +304,7 @@ describe("retry", () => {
       key: "k",
       now: T(12),
     })
-    await release()
+    await resume()
     expect(isUniqueViolation(await getRejection(retried), "job_pending_key_idx")).toBe(true)
     expect((await jobs(schema.conn.query)).map(r => [r.id, r.state])).toEqual([
       [failed, "failed"],
@@ -379,13 +379,13 @@ describe("retry", () => {
     const expired = only(
       await claimPlain(schema.conn.query, { ...W, defaultLease: 1, limit: 1, now: T(13) }),
     )
-    const reaper = await schema.connect({ hooks: ["reap"] })
-    const release = await holdHook(schema.conn, "reap")
+    const reaper = await schema.connect({ pauses: ["reap"] })
+    const resume = await pauseAt(schema.conn, "reap")
     const stats = { uniqueViolations: 0 }
     const reaped = reap(reaper.query, { now: T(20) }, stats)
     await waitForLock(schema.conn, reaper.pid)
     expect(await retry(failed)).toEqual({ retried: true })
-    await release()
+    await resume()
     expect(await reaped).toEqual([{ id: expired.id, state: "pending", detached: true }])
     expect(stats.uniqueViolations).toBe(1)
     expect((await jobs(schema.conn.query)).map(r => [r.id, r.key])).toEqual([

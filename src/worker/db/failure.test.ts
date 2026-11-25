@@ -10,10 +10,10 @@ import { enqueue } from "../../sql/enqueue"
 import type { KeyMode } from "../../sql/job"
 import {
   createTestSchema,
-  holdHook,
   type JobRow,
   jobs,
   only,
+  pauseAt,
   T,
   type TestSchema,
   unsafeInteger,
@@ -401,13 +401,13 @@ describe("reaper", () => {
   test("a batch redone row by row after a conflict of a key inserts the failure job once", async () => {
     const failing = await claimed({ maxAttempts: 1 })
     const returning = await claimed({ key: "k", maxAttempts: 5 })
-    const reaper = await schema.connect({ hooks: ["reap"] })
-    const release = await holdHook(schema.conn, "reap")
+    const reaper = await schema.connect({ pauses: ["reap"] })
+    const resume = await pauseAt(schema.conn, "reap")
     const stats = { uniqueViolations: 0 }
     const reaped = reap(reaper.query, { now: T(11) }, stats)
     await waitForLock(schema.conn, reaper.pid)
     await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(11) })
-    await release()
+    await resume()
     expect(await reaped).toEqual([
       { id: failing.id, state: "failed", detached: false },
       { id: returning.id, state: "pending", detached: true },
