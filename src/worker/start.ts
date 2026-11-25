@@ -9,13 +9,14 @@ import { checkJobSchema } from "../migration/migrate"
 import { toWorkerSchedules } from "../schedule/schedule"
 import { createJobTable, DEFAULT_SCHEMA_NAME } from "../sql/job-table"
 import type { Manifest } from "../task/manifest"
+import type { RunHandler } from "../task/run-handler"
 import { isLease, type JobInfo, leaseRange } from "../task/task"
 
 import { checkDriver } from "./driver"
 import type { AbortReason, WorkerEvent } from "./events"
 import { intervalRange, isInterval, isTimerDelay, timerDelayRange } from "./loop"
 import { startRuntime, type StopOptions, type Worker } from "./runtime"
-import { type RunHandler, toJobInfo, toWorkerTasks } from "./tasks"
+import { toJobInfo, toWorkerTasks } from "./tasks"
 
 /** Options of the reaper of a worker. */
 export interface WorkerReaperOptions {

@@ -8,11 +8,12 @@ import { enqueue } from "../sql/enqueue"
 import { fixedBackoff } from "../task/backoff"
 import { RetryError, TerminalError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
+import type { RunHandlerContext } from "../task/run-handler"
 import { defineTask, type HandlerContext, type JobInfo } from "../task/task"
 import { createTestSchema, jobs, only, sleep, type TestSchema } from "../test-harness/database"
 
 import { type Claim, type ClaimedJob, claimPlain } from "./db/claim"
-import { type RunHandlerContext, toWorkerTasks } from "./tasks"
+import { toWorkerTasks } from "./tasks"
 import { recordEvents, startTestWorker, stopTestWorkers } from "./test-harness"
 
 const job: ClaimedJob = {
@@ -127,17 +128,6 @@ describe("toWorkerTasks", () => {
       },
     ])
     await expect(task.handler({ ...job, attempts: 3 }, { signal })).rejects.toBe(failure)
-  })
-
-  test("gives runHandler a run whose promise rejects also when the handler throws synchronously", async () => {
-    const failure = new Error("the index is down")
-    const implementation = defineTask("search.indexProduct").implement(() => {
-      throw failure
-    })
-    const task = toWorkerTasks([implementation], (_, run) => run().catch(error => error))[
-      "search.indexProduct"
-    ]!
-    expect(await task.handler(job, { signal: new AbortController().signal })).toBe(failure)
   })
 
   test("runs no handler when runHandler does not call run", async () => {

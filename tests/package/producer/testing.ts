@@ -1,4 +1,4 @@
-// Records an enqueue and runs a handler and onFailure through `kern-jobs/testing` in a project that has neither the dependencies of kern-jobs nor a client library, and prints the outcome as JSON.
+// Records an enqueue and runs a handler, also through a `runHandler`, and onFailure through `kern-jobs/testing` in a project that has neither the dependencies of kern-jobs nor a client library, and prints the outcome as JSON.
 
 import { defineTask } from "kern-jobs"
 import { createTestJobs, runFailure, runJob } from "kern-jobs/testing"
@@ -15,9 +15,14 @@ const job = await runJob(
   { productId: "1" },
   { job: { scope: "tenant" } },
 )
+const handled = await runJob(
+  indexProductTask.implement(() => "done"),
+  { productId: "1" },
+  { job: { scope: "tenant" }, runHandler: async ({ task }, run) => [task, await run()] },
+)
 const failure = await runFailure(
   indexProductTask.implement(() => {}, { onFailure: failure => failure }),
   { productId: "1" },
   { failedAt: "2030-01-01T00:00:00.000Z", job: { scope: "tenant" } },
 )
-console.log(JSON.stringify({ calls: captured.callsFor(indexProductTask), job, failure }))
+console.log(JSON.stringify({ calls: captured.callsFor(indexProductTask), job, handled, failure }))

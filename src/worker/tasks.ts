@@ -2,9 +2,9 @@
 
 import { TerminalError } from "../task/errors"
 import { type ManifestTask, toManifestTasks } from "../task/manifest"
+import { type RunHandler, runTaskHandler } from "../task/run-handler"
 import {
   checkTaskName,
-  type HandlerContext,
   isLease,
   type JobInfo,
   leaseRange,
@@ -13,19 +13,6 @@ import {
 
 import type { ClaimedJob } from "./db/claim"
 import type { WorkerTask } from "./runtime"
-
-/** What `runHandler` of a worker gets about a job whose handler it runs: the context of the handler, the name of the task, and the payload of the job. */
-export interface RunHandlerContext extends HandlerContext {
-  task: string
-  payload: unknown
-}
-
-/**
- * Wraps the handler of every job of a worker, such as to run it in the context of the scope of the job: `run` runs the handler and returns its promise, which rejects also when the handler throws synchronously.
- * The worker settles the job by the outcome of `runHandler` as by the outcome of a handler, also after the abort of its signal, so call `run` at most once and return or await its promise.
- * A `runHandler` that resolves without calling `run` completes the job without running its handler.
- */
-export type RunHandler = (context: RunHandlerContext, run: () => Promise<unknown>) => unknown
 
 /**
  * Returns the tasks of a worker by name from the task implementations of a manifest: the task of each implementation, with the attempt budget of failure jobs that its claims stamp, and the failure task of an implementation that has one.
@@ -61,9 +48,8 @@ function toWorkerTask(task: ManifestTask, runHandler: RunHandler | undefined): W
       if (scoped && job.scope === "") {
         throw new TerminalError(`task ${name} is scoped, but its job has no scope`)
       }
-      const context: HandlerContext = { signal, job: toJobInfo(job) }
-      const run = async () => await implementation.handler(job.payload, context)
-      return runHandler ? runHandler({ ...context, task: name, payload: job.payload }, run) : run()
+      const context = { signal, job: toJobInfo(job), task: name, payload: job.payload }
+      return runTaskHandler(implementation, context, runHandler)
     },
     lease,
     backoff,

@@ -1,5 +1,6 @@
 // Entry of the tests of an application, `kern-jobs/testing`: a test double of the jobs API and runs of a handler and of `onFailure` without a database or a worker.
 
+export type { RunHandler, RunHandlerContext } from "./task/run-handler"
 export {
   runFailure,
   type RunFailureArgs,

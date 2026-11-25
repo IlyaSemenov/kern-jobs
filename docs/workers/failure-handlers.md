@@ -116,7 +116,7 @@ import chargeOrder from "./charge-order"
 await runFailure(chargeOrder, { orderId: "42", generation: 3 })
 ```
 
-`runFailure` resolves to what `onFailure` returns, or rejects with what it throws.
+`runFailure` resolves to what `onFailure` returns, or rejects with what it throws; with [`runHandler`](./handlers#wrap-every-handler), it resolves or rejects as `runHandler` does.
 `onFailure` gets a `JobFailure` of a failure on the last attempt: the reason `handler-error`, the current time as `failedAt`, the payload through JSON, as [`runJob`](../testing/#run-a-handler) gives it to a handler, and as `job` the key, the queue, and `maxAttempts` that the options of the task give for the payload.
 Replace the fields of the `JobFailure` in the options, such as the reason, the error, or `job.attempt`:
 

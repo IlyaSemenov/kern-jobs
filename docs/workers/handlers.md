@@ -80,3 +80,27 @@ const worker = startWorker(driver, {
 
 The worker takes the outcome of `runHandler` as the outcome of the handler, also after [an abort](#stop-long-handlers), so call `run` at most once and return or await its promise.
 A `runHandler` that resolves without calling `run` completes the job without running its handler, such as the job of a [tenant](../tasks/scopes) that no longer exists.
+
+To test a `runHandler`, pass the one that you pass to `startWorker` to [`runJob`](../testing/#run-a-handler) of `kern-jobs/testing` in `runHandler`.
+`runJob` runs the handler through it with the context that a worker gives, and resolves to what `runHandler` resolves to, or rejects with what it throws.
+To check whether `runHandler` ran the handler, replace the handler of the implementation with a mock:
+
+```ts [src/worker/run-handler.test.ts]
+import { expect, mock, test } from "bun:test"
+import { runJob } from "kern-jobs/testing"
+
+import { runHandler } from "./run-handler"
+import buildReport from "./tasks/build-report"
+
+test("skips the job of a deleted tenant", async () => {
+  const handler = mock(() => {})
+  await runJob(
+    { ...buildReport, handler },
+    { reportId: "report-1" },
+    { job: { scope: "deleted-tenant" }, runHandler },
+  )
+  expect(handler).not.toHaveBeenCalled()
+})
+```
+
+[`runFailure`](./failure-handlers#test-onfailure), `testJobs.runJob`, and `testJobs.runFailure` take `runHandler` too; `runFailure` runs `onFailure` through it with the name of the failure task, such as `reports.build:failure`.

@@ -53,7 +53,9 @@ A worker runs the jobs of the tasks of its manifest, which `toWorkerTasks` turns
   The outcome of `runHandler` is the outcome of the handler for its settlement, its report, and an interruption by `stop`, so one that resolves without calling `run` completes the job without running the handler, such as of a deleted tenant.
   It must call `run` at most once and return or await its promise: each call runs the handler again in the same attempt, and a `runHandler` that calls `run` without returning or awaiting its promise lets the worker settle the job while the handler still runs.
   `run` returns a promise also when the handler throws synchronously.
-  It is one function of the worker rather than a wrapper of each implementation, so that a manifest is shared by workers of different contexts and the application does not rebuild it.
+  The worker and `runJob` of `kern-jobs/testing` each build a `RunHandlerContext` and pass it to `runTaskHandler` of `task/run-handler.ts`, so that a test of a `runHandler` runs the composition of a worker ([Testing](testing.md#run-of-a-handler)).
+  `runTaskHandler` creates `run` and gives the handler a context of only `signal` and `job`.
+  `runHandler` is one function of the worker rather than a wrapper of each implementation, so that a manifest is shared by workers of different contexts and the application does not rebuild it.
 - A handler fails its job for good with a `TerminalError`, and retries it after a given delay with a `RetryError`, such as the one of a `Retry-After` header, so that the error is decided where the handler meets it, and the definition, which producers import, holds no error classes of handlers ([decision](../decisions/tasks/handler-errors.md)).
 - A backoff is a function of the number of the failed attempt that returns seconds; `exponentialBackoff` and `fixedBackoff` build common ones, and `defaultBackoff`, which `exponentialBackoff()` builds, waits 2 seconds after the first attempt, doubled after each next one, up to an hour.
 - A delay of a retry is in the same [range](producer.md#options) as a delay of an enqueue; the factories and `RetryError` throw `RangeError` for a value outside it.

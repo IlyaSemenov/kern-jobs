@@ -11,6 +11,7 @@ export {
   type Manifest,
   mergeManifests,
 } from "./task/manifest"
+export type { RunHandler, RunHandlerContext } from "./task/run-handler"
 export type { AbortReason } from "./worker/events"
 export { HandlerAbort } from "./worker/heartbeat"
 export type { StopOptions, Worker, WorkerState } from "./worker/runtime"
@@ -20,7 +21,6 @@ export {
   waitForSignalAndStop,
   type WaitForSignalAndStopOptions,
 } from "./worker/shutdown"
-export type { RunHandler, RunHandlerContext } from "./worker/tasks"
 export {
   startWorker,
   type WorkerErrorInfo,

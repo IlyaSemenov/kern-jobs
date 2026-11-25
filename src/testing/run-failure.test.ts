@@ -1,8 +1,9 @@
-// Runs of onFailure in a test: the JobFailure, its defaults and overrides, the context of the failure job, the scope, the payload through JSON, and the outcome.
+// Runs of onFailure in a test: the JobFailure, its defaults and overrides, the context of the failure job, the scope, the payload through JSON, the outcome, and the run through runHandler.
 
 import { describe, expect, mock, test } from "bun:test"
 
 import type { JobFailure } from "../task/failure"
+import type { RunHandlerContext } from "../task/run-handler"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { runFailure } from "./run-failure"
@@ -320,5 +321,38 @@ describe("outcome", () => {
     await runFailure(implementation)
     expect(onFailure.mock.calls[0]![1].signal).toBe(controller.signal)
     expect(onFailure.mock.calls[1]![1].signal.aborted).toBe(false)
+  })
+})
+
+describe("runHandler", () => {
+  test("runs onFailure through runHandler with the context of the failure job, the name of the failure task, and the failure as the payload", async () => {
+    const onFailure = mock((_failure: JobFailure<void>, _context: HandlerContext<string>) => "done")
+    const contexts: RunHandlerContext[] = []
+    const result = await runFailure(
+      defineTask("t", { scoped: true }).implement(() => {}, { onFailure }),
+      undefined,
+      {
+        job: { scope: "a" },
+        runHandler: async (context, run) => {
+          contexts.push(context)
+          return [await run()]
+        },
+      },
+    )
+    expect(result).toEqual(["done"])
+    const [failure, context] = onFailure.mock.calls[0]!
+    expect(contexts).toEqual([
+      { task: "t:failure", payload: failure, job: context.job, signal: context.signal },
+    ])
+    expect(context.job).toMatchObject({ id: "2", scope: "a" })
+  })
+
+  test("resolves to what runHandler resolves to without running onFailure when it does not call run", async () => {
+    const onFailure = mock(() => {})
+    const implementation = defineTask("t").implement(() => {}, { onFailure })
+    expect(await runFailure(implementation, undefined, { runHandler: () => "skipped" })).toBe(
+      "skipped",
+    )
+    expect(onFailure).not.toHaveBeenCalled()
   })
 })

@@ -5,6 +5,8 @@ import type {
   RunFailureArgs,
   RunFailureJob,
   RunFailureOptions,
+  RunHandler,
+  RunJobOptions,
   TestJobCall,
   TestJobQueries,
 } from "kern-jobs/testing"
@@ -25,5 +27,6 @@ describe("emitted declarations of test helpers", () => {
     expectTypeOf(runIndexFailure).parameter(1).toEqualTypeOf<RunFailureOptions | undefined>()
     expectTypeOf<RunFailureOptions["job"]>().toEqualTypeOf<RunFailureJob | undefined>()
     expectTypeOf<[productId: string]>().toExtend<RunFailureArgs<string, string | null>>()
+    expectTypeOf<RunJobOptions["runHandler"]>().toEqualTypeOf<RunHandler | undefined>()
   })
 })

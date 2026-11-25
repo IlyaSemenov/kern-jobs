@@ -73,6 +73,7 @@ await runJob(sendWelcomeEmail, { userId: "user-1" })
 ```
 
 `runJob` resolves to what the handler returns, or rejects with what it throws.
+To run the handler through the [`runHandler`](../workers/handlers#wrap-every-handler) of your worker, pass it in `runHandler`: `runJob` then resolves or rejects as `runHandler` does.
 The handler gets the payload as a worker reads it from the database, through JSON, so a `Date` in the payload reaches it as a string.
 Its `job` has the key, the queue, and `maxAttempts` that the options of the task give for the payload, with `""` for `key: true`, and the first attempt.
 Replace them in `job`, such as to test the last attempt:
@@ -83,7 +84,7 @@ await runJob(sendWelcomeEmail, { userId: "user-1" }, { job: { attempt: 25 } })
 
 Pass an `AbortSignal` in `signal` to test how the handler [stops](../workers/handlers#stop-long-handlers).
 
-`runJob` calls the handler directly, without the [`runHandler`](../workers/handlers#wrap-every-handler) of a worker, [retries](../workers/retries), or `onFailure`; to test `onFailure`, run it by [`runFailure`](../workers/failure-handlers#test-onfailure).
+`runJob` calls the handler without [retries](../workers/retries) or `onFailure`; to test `onFailure`, run it by [`runFailure`](../workers/failure-handlers#test-onfailure).
 
 For a [scoped task](../tasks/scopes), pass the scope of its job to `runJob` in `job.scope`.
 To give its job the scope of `testJobs` instead, call `testJobs.runJob` without `job.scope`:

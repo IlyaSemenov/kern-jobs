@@ -1,9 +1,10 @@
-// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, the queries of a capture by task and scope, and the runs of a handler and of onFailure in its scope.
+// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, the queries of a capture by task and scope, and the runs of a handler and of onFailure in its scope, also through runHandler.
 
 import { describe, expect, mock, test } from "bun:test"
 
 import { ALL_SCOPES } from "../producer/jobs"
 import type { JobFailure } from "../task/failure"
+import type { RunHandler } from "../task/run-handler"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { createTestJobs } from "./test-jobs"
@@ -393,6 +394,22 @@ describe("runJob", () => {
     expect(getScope).not.toHaveBeenCalled()
   })
 
+  test("runs the handler through runHandler of options in the scope of createTestJobs", async () => {
+    const runHandler = mock<RunHandler>((_context, run) => run())
+    const jobs = createTestJobs({ scope: "a" })
+    expect(
+      await jobs.runJob(
+        reportTask.implement(() => "done"),
+        { id: 1 },
+        { runHandler },
+      ),
+    ).toBe("done")
+    expect(runHandler.mock.calls[0]![0]).toMatchObject({
+      task: "reports.build",
+      job: { scope: "a" },
+    })
+  })
+
   test("reads the scope of options.job once, and passes the signal and the job of options from getters of a class, as runJob does", async () => {
     const handler = mock((_payload: void, _context: HandlerContext) => {})
     const controller = new AbortController()
@@ -478,6 +495,17 @@ describe("runFailure", () => {
     )
     expect(onFailure.mock.calls.map(([failure]) => failure.job.scope)).toEqual([null, "b"])
     expect(getScope).not.toHaveBeenCalled()
+  })
+
+  test("runs onFailure through runHandler of options in the scope of createTestJobs", async () => {
+    const runHandler = mock<RunHandler>((_context, run) => run())
+    const implementation = reportTask.implement(() => {}, { onFailure: () => "done" })
+    const jobs = createTestJobs({ scope: "a" })
+    expect(await jobs.runFailure(implementation, { id: 1 }, { runHandler })).toBe("done")
+    expect(runHandler.mock.calls[0]![0]).toMatchObject({
+      task: "reports.build:failure",
+      job: { scope: "a" },
+    })
   })
 
   test("rejects a scoped task without a scope or with ALL_SCOPES with TypeError, as enqueue does, and an implementation without onFailure with TypeError, before it runs onFailure", async () => {

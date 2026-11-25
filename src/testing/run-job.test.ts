@@ -1,8 +1,9 @@
-// Runs of a handler in a test: the metadata of its job, its scope, its payload through JSON, its signal, and its outcome.
+// Runs of a handler in a test: the metadata of its job, its scope, its payload through JSON, its signal, its outcome, and its run through runHandler.
 
 import { describe, expect, mock, test } from "bun:test"
 
 import type { JobFailure } from "../task/failure"
+import type { RunHandlerContext } from "../task/run-handler"
 import { defineTask, type HandlerContext } from "../task/task"
 
 import { runJob } from "./run-job"
@@ -262,5 +263,81 @@ describe("outcome", () => {
     await runJob(implementation)
     expect(handler.mock.calls[0]![1].signal).toBe(controller.signal)
     expect(handler.mock.calls[1]![1].signal.aborted).toBe(false)
+  })
+})
+
+describe("runHandler", () => {
+  test("runs the handler through runHandler with the context of a worker: the task, the payload through JSON, the metadata, and the signal", async () => {
+    const handler = mock((_payload: { at: Date }, _context: HandlerContext<string>) => "done")
+    const contexts: RunHandlerContext[] = []
+    const controller = new AbortController()
+    const implementation = defineTask("t", { scoped: true, queue: "q" })
+      .withPayload<{ at: Date }>()
+      .implement(handler)
+    const result = await runJob(
+      implementation,
+      { at: new Date("2030-01-01T00:00:00.000Z") },
+      {
+        job: { scope: "a" },
+        signal: controller.signal,
+        runHandler: async (context, run) => {
+          contexts.push(context)
+          return [await run()]
+        },
+      },
+    )
+    expect(result).toEqual(["done"])
+    expect(contexts).toEqual([
+      {
+        task: "t",
+        payload: { at: "2030-01-01T00:00:00.000Z" },
+        job: { id: "1", scope: "a", attempt: 1, maxAttempts: 25, key: null, queue: "q" },
+        signal: controller.signal,
+      },
+    ])
+    const [payload, context] = handler.mock.calls[0]!
+    expect(payload).toBe(contexts[0]!.payload as never)
+    expect(context as HandlerContext).toEqual({ job: contexts[0]!.job, signal: controller.signal })
+  })
+
+  test("resolves to what runHandler resolves to without running the handler when it does not call run", async () => {
+    const handler = mock(() => "done")
+    expect(
+      await runJob(defineTask("t").implement(handler), undefined, { runHandler: () => "skipped" }),
+    ).toBe("skipped")
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  test("rejects with what runHandler throws, and with what the handler throws through run", async () => {
+    const handlerError = new Error("handler")
+    const runHandlerError = new Error("runHandler")
+    const implementation = defineTask("t").implement(() => {
+      throw handlerError
+    })
+    await expect(
+      runJob(implementation, undefined, {
+        runHandler: () => {
+          throw runHandlerError
+        },
+      }),
+    ).rejects.toBe(runHandlerError)
+    await expect(
+      runJob(implementation, undefined, { runHandler: (_context, run) => run() }),
+    ).rejects.toBe(handlerError)
+  })
+
+  test("gives runHandler the name of the failure task for a failure implementation", async () => {
+    const runHandler = mock((_context: RunHandlerContext, run: () => Promise<unknown>) => run())
+    const implementation = defineTask("t").implement(() => {}, { onFailure: () => {} })
+    const failure: JobFailure<void> = {
+      id: "1",
+      reason: "handler-error",
+      error: { message: "boom" },
+      failedAt: "2030-01-01T00:00:00.000Z",
+      job: { id: "1", task: "t", scope: null, attempt: 3, maxAttempts: 3, key: null, queue: null },
+      payload: undefined,
+    }
+    await runJob(implementation.failure, failure, { runHandler })
+    expect(runHandler.mock.calls[0]![0].task).toBe("t:failure")
   })
 })

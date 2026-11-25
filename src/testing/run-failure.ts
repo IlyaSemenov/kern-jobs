@@ -2,6 +2,7 @@
 
 import { decodePayload, encodePayload } from "../sql/job"
 import { FAILURE_MESSAGES, type FailureReason, type JobFailure } from "../task/failure"
+import type { RunHandler } from "../task/run-handler"
 import type { FailureImplementation, TaskImplementation } from "../task/task"
 
 import { resolveJobInfo, type RunJobInfo, runJobWithScope } from "./run-job"
@@ -21,6 +22,8 @@ export type RunFailureJob<Scope extends string | null = string | null> = RunJobI
 export type RunFailureOptions<Scope extends string | null = string | null> = {
   /** Signal of `onFailure`, which a test aborts to stop it; one that never aborts by default. */
   signal?: AbortSignal | undefined
+  /** `runHandler` of a worker, which runs `onFailure` as `runHandler` of `runJob` runs a handler, with the name of the failure task. */
+  runHandler?: RunHandler | undefined
   id?: string | undefined
   reason?: FailureReason | undefined
   /** Error of the failure, of which `onFailure` gets the message, such as of an `Error`. */
@@ -43,6 +46,7 @@ export type RunFailureArgs<P, Scope extends string | null> = null extends Scope
 
 /**
  * Runs the `onFailure` of a task implementation, as a worker runs it after a job of the task with the payload failed for good, and resolves to what `onFailure` returns, or rejects with what it throws.
+ * An `options.runHandler` runs `onFailure` as it runs a handler in `runJob`, with the name of the failure task, and `runFailure` then resolves or rejects as `runHandler` does.
  * The first argument of `onFailure` is a `JobFailure`: the id `"1"`, the reason `handler-error`, the error message that the worker records for the reason, or `job failed` for an error of the handler, the current time as `failedAt`, the payload of the failed job through JSON, as a worker reads it from the table, and as `job` the metadata of the failed job on its last attempt, as `runJob` gives them; `options` replaces them.
  * Its context is that of the failure job: the id after that of the failed job, the scope of the failed job, the first attempt, the attempts of `onFailure`, and no key or queue.
  * A task defined with `scoped: true` takes the scope of the failed job in `options.job.scope`; the job of another task has no scope unless `options.job.scope` gives one.
@@ -72,7 +76,7 @@ export async function runFailureWithScope<P>(
   if (failure === undefined) {
     throw new TypeError(`Task ${task.name} has no onFailure`)
   }
-  const { job = {}, signal, id, reason = "handler-error", error, failedAt } = options
+  const { job = {}, signal, runHandler, id, reason = "handler-error", error, failedAt } = options
   // The failed job takes the metadata of a job of the payload on its last attempt, which a failure for good of a job that did not fail by a TerminalError has.
   const info = resolveJobInfo(task, payload, job, getDefaultScope, maxAttempts => maxAttempts)
   const { task: jobTask } = job
@@ -88,7 +92,8 @@ export async function runFailureWithScope<P>(
   }
   // The failure job has the scope of the failed job, and the id after its id, since the identity of the table gives the failure job, inserted later, a greater one; `runJobWithScope` passes the failure through JSON.
   const failureJob = { id: String(BigInt(info.id) + 1n), scope: info.scope }
-  return await runJobWithScope(failure, jobFailure, { signal, job: failureJob }, () => info.scope)
+  const failureOptions = { signal, runHandler, job: failureJob }
+  return await runJobWithScope(failure, jobFailure, failureOptions, () => info.scope)
 }
 
 /** Returns the error message that the worker or the reaper records for a failure of a reason, or `job failed` for a reason that a thrown error causes. */

@@ -71,7 +71,7 @@ const worker = startWorker(driver, {
 })
 ```
 
-[Wrap every handler](../workers/handlers#wrap-every-handler) tells how the outcome of `runHandler` settles the job.
+[Wrap every handler](../workers/handlers#wrap-every-handler) tells how the outcome of `runHandler` settles the job, and how to test it.
 
 To enqueue more jobs of the same scope from a handler, pass `scope: job.scope` to `createJobs`.
 
