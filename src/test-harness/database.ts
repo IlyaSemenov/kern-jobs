@@ -126,26 +126,6 @@ export interface Conn extends Pick<Connection, "execute" | "executeScript"> {
   close(): Promise<void>
 }
 
-/** Opens a connection of the test schema of `db` on a client of its own. */
-export async function connectTo(
-  url: string,
-  db: WorkerDb,
-  options: TestDriverOptions = {},
-): Promise<Conn> {
-  const driver = createTestDriver(url, db.$schemaName!, { ...options, max: 1 })
-  const connection = await driver.acquire()
-  return {
-    pid: await getBackendPid(connection),
-    query: db.$queryOn(connection),
-    execute: statement => connection.execute(statement),
-    executeScript: text => connection.executeScript(text),
-    async close() {
-      await connection.release()
-      await driver.close()
-    },
-  }
-}
-
 /** PostgreSQL schema of a test with the job table, its pools, and a factory of connections to it. */
 export interface TestSchema {
   /** Name of the PostgreSQL schema. */
@@ -162,6 +142,7 @@ export interface TestSchema {
   createDriver(options?: TestDriverOptions): Driver
   /** Creates a worker database over the given driver or a new pool with the given options. */
   createDb(source: Driver | TestDriverOptions): WorkerDb
+  /** Opens a connection of the schema on a client of its own, which `dispose` closes. */
   connect(options?: TestDriverOptions): Promise<Conn>
   /** Connection for setup, checks, and observation. */
   conn: Conn
@@ -186,8 +167,19 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
   const database = createDatabase({ driver: drivers[0]! })
   const db = bindWorkerDb(database, schemaName)
   const conns: Conn[] = []
-  const connect = async (options: TestDriverOptions = {}) => {
-    const c = await connectTo(url, db, options)
+  const connect = async (options: TestDriverOptions = {}): Promise<Conn> => {
+    const driver = createTestDriver(url, schemaName, { ...options, max: 1 })
+    const connection = await driver.acquire()
+    const c: Conn = {
+      pid: await getBackendPid(connection),
+      query: db.$queryOn(connection),
+      execute: statement => connection.execute(statement),
+      executeScript: text => connection.executeScript(text),
+      async close() {
+        await connection.release()
+        await driver.close()
+      },
+    }
     conns.push(c)
     return c
   }
