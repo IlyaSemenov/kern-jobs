@@ -6,7 +6,8 @@ kern-jobs connects through the database client of your application in two ways:
   Pass it your client or the client of a transaction.
   You can also pass a function that returns the client of the current transaction: `createJobs` calls it each time it runs a statement, such as of an enqueue, once for all the jobs of `enqueueMany`.
 - The worker and `migrateJobs` take a driver that wraps the client: `postgresJsDriver` of `kern-jobs/drivers/postgres-js`, or `nodePostgresDriver` of `kern-jobs/drivers/node-postgres`.
-  The worker runs outside the transactions of your application, and so does `migrateJobs` on a driver; with [kern-orm or kern-db](#kern-orm-and-kern-db), `migrateJobs` can run in the current transaction instead.
+  The worker always runs outside the transactions of your application.
+  `migrateJobs` on a driver runs outside them too, but with [kern-orm or kern-db](#kern-orm-and-kern-db) or [Orchid ORM](#orchid-orm), it can run in the current transaction instead.
 
 Enqueue, retry, and delete jobs in transactions at `READ COMMITTED`, the default isolation level of PostgreSQL.
 
@@ -140,6 +141,19 @@ await db.$transaction(async () => {
   await jobs.enqueue(indexProductTask, { productId })
 })
 ```
+
+To create the schema in the current transaction of `db`, such as a test transaction that rolls it back, pass a callback that runs `migrateJobs` to `runInOrchidTransaction` of `@kern-orm/orchid-interop`:
+
+```ts
+import { runInOrchidTransaction } from "@kern-orm/orchid-interop"
+import { migrateJobs } from "kern-jobs/migrations"
+
+await db.$transaction(() => runInOrchidTransaction(db, database => migrateJobs(database)))
+```
+
+`runInOrchidTransaction` runs the callback in the innermost transaction of `db` that is running, also a nested or a test transaction of Orchid, so the schema commits or rolls back with it.
+It supports Orchid on postgres.js and rejects outside a transaction of Orchid.
+Outside your transactions, such as at a deploy, run `migrateJobs` on the driver of the worker, as [Create the schema](./getting-started#create-the-schema) shows.
 
 ## Transactions without an ORM
 
