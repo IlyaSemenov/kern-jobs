@@ -38,7 +38,7 @@ Keys are unique per scope and task ([decision](../decisions/enqueue/key-per-task
 
 ## SQL function
 
-The function `enqueue` of the schema, which migration `0005_enqueue_function` installs, enqueues one job from SQL, such as from a migration of the application, by a copy of the statement of one job of the core, and returns its `id` and `created` as `OUT` parameters, one row of each call.
+The function `enqueue` of the schema enqueues one job from SQL, such as from a migration of the application, by a copy of the statement of one job of the core, and returns its `id` and `created` as `OUT` parameters, one row of each call.
 
 - Its arguments are `task`, `payload`, and `scope`, and the options of an enqueue of the jobs API in snake case, `key`, `queue`, `key_mode`, `run_at`, `delay`, `max_wait`, `max_attempts`, and `reset_attempts`; only `task` is required.
 - An argument that is NULL takes its default, as an omitted one, so a column of a query that is NULL omits its option; `task` and `scope` reject NULL, and an omitted `scope` gives the empty scope, so that a scope that a query fails to find does not enqueue an unscoped job.

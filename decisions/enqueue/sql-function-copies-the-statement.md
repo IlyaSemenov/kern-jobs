@@ -1,6 +1,6 @@
 # The SQL function copies the statement of the core
 
-The SQL function `enqueue`, which migration `0005_enqueue_function` installs, holds a copy of the statement with which the core enqueues one job, and the jobs API keeps running its own statement.
+The SQL function `enqueue` holds a copy of the statement with which the core enqueues one job, and the jobs API keeps running its own statement.
 A test runs the same sequences of enqueues, retries, and claims through both in two scopes of one table and compares their rows and results after each step, at the time of the statement of the function to the microsecond.
 A change of the run time or the merge of a job changes both: the statement of the core, and the function by a new migration.
 The SQL function `retry` copies the statement of retry in the same way, and its test compares the two on the same jobs.
