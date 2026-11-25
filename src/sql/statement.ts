@@ -17,9 +17,6 @@ export interface ValuesTarget {
 /** Value of a statement parameter, which `encodeParam` turns into text. */
 export type Param = string | number | boolean | Date | readonly string[] | null | undefined
 
-/** Row of a result: the text of each column by its name, or null. */
-export type TextRow = Record<string, string | null>
-
 /**
  * Statement of kern-jobs that its label names, as `<area>:<statement>`, such as `claim:plain`.
  * No name is a prefix of another, so that a filter by the label of a statement finds no other, and a filter by `kern-jobs:<area>:` finds the statements of an area.

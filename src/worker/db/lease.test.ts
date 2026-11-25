@@ -1,7 +1,7 @@
 // Leases: the reaper with an existing pending job, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { sql } from "kern-orm/db"
+import { param, sql } from "kern-orm/db"
 import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -12,7 +12,6 @@ import {
   isPending,
   jobs,
   only,
-  query,
   recordLabels,
   secondsOf,
   T,
@@ -22,6 +21,8 @@ import {
 import { claimCycle, claimPlain } from "./claim"
 import { heartbeat, reap } from "./lease"
 import { complete, fail } from "./settlement"
+import { jobTableSql } from "./sql"
+import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
 let schema: TestSchema
@@ -123,12 +124,12 @@ describe("reaper with an existing pending job", () => {
     const { a } = await expiredWithPending({ withPending: false })
     const producer = await schema.connect()
     const reaper = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "k", now: T(5) })
     const stats = { uniqueViolations: 0 }
     const reaped = reap(reaper, schema.table, { now: T(11) }, stats)
     await waitForLock(schema.admin, reaper.pid)
-    await query(producer, "commit")
+    await producer.query`commit`
     expect(await reaped).toEqual([{ id: a.id, state: "pending", detached: true }])
     expect(stats.uniqueViolations).toBe(1)
   })
@@ -155,7 +156,7 @@ describe("reaper with an existing pending job", () => {
     })
     await claimPlain(schema.admin, schema.table, { ...W(), limit: 2, now: T(0) })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "blocked", now: T(5) })
 
     const reaper = await schema.connect()
@@ -171,8 +172,8 @@ describe("reaper with an existing pending job", () => {
     ])
 
     // The timeout left no setting on the connection, and the reaper works after the conflict.
-    expect(only(await query(reaper, "show lock_timeout"))["lock_timeout"]).toBe("0")
-    await query(producer, "rollback")
+    expect(await reaper.query`show lock_timeout`.get(t.text)).toBe("0")
+    await producer.query`rollback`
     expect(await reap(reaper, schema.table, { now: T(11), lockTimeout: 0.2 })).toEqual([
       { id: a.id, state: "pending", detached: false },
     ])
@@ -182,11 +183,11 @@ describe("reaper with an existing pending job", () => {
     await enqueue(schema.admin, schema.table, { task: "t", key: "blocked", now: T(0) })
     const a = only(await claimPlain(schema.admin, schema.table, { ...W(), limit: 1, now: T(0) }))
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "blocked", now: T(5) })
     const reaper = await schema.connect()
     expect(await reap(reaper, schema.table, { now: T(11), lockTimeout: 0.2 })).toEqual([])
-    await query(producer, "commit")
+    await producer.query`commit`
     expect(await reap(reaper, schema.table, { now: T(11), lockTimeout: 0.2 })).toEqual([
       { id: a.id, state: "pending", detached: true },
     ])
@@ -197,7 +198,7 @@ describe("reaper with an existing pending job", () => {
     const c = await enqueue(schema.admin, schema.table, { task: "t", now: T(0) })
     await claimPlain(schema.admin, schema.table, { ...W(), limit: 2, now: T(0) })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "blocked", now: T(5) })
     const stats = { uniqueViolations: 0, lockTimeouts: 0, forcedDetaches: 0 }
     // Every row of the fallback is a forced attempt; only the keyed one loses a key, and it does not wait for the producer.
@@ -207,7 +208,7 @@ describe("reaper with an existing pending job", () => {
       { now: T(11), lockTimeout: 0.2, maxRetries: 0 },
       stats,
     )
-    await query(producer, "rollback")
+    await producer.query`rollback`
     expect(reaped).toEqual([
       { id: a.id, state: "pending", detached: true },
       { id: c.id, state: "pending", detached: false },
@@ -235,16 +236,19 @@ describe("reaper with an existing pending job", () => {
     await claimPlain(schema.admin, schema.table, { ...W(), limit: 1, now: T(0) })
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(1) })
     await claimPlain(schema.admin, schema.table, { ...W(), limit: 1, now: T(1) })
-    const unrankedReaperSql = `update ${schema.table.name} j set
+    const jobTable = jobTableSql(schema.table)
+    const now = param(t.timestamptz, T(20))
+    const reapUnranked = () => schema.admin.query`
+      update ${jobTable} j set
         state = case when j.attempts >= j.max_attempts then 'failed' else 'pending' end,
         key = case
           when j.attempts >= j.max_attempts then j.key
-          when exists (select 1 from ${schema.table.name} p where p.state = 'pending' and p.scope = j.scope and p.task = j.task and p.key = j.key) then null
+          when exists (select 1 from ${jobTable} p where p.state = 'pending' and p.scope = j.scope and p.task = j.task and p.key = j.key) then null
           else j.key end,
-        run_at = $1, not_before = $1, window_started_at = $1, claim_id = null, locked_by = null, lease_until = null
-      where j.state = 'active' and j.lease_until < $1`
+        run_at = ${now}, not_before = ${now}, window_started_at = ${now}, claim_id = null, locked_by = null, lease_until = null
+      where j.state = 'active' and j.lease_until < ${now}`
     for (let i = 0; i < 3; i++) {
-      const err = await query(schema.admin, unrankedReaperSql, [T(20)]).catch(e => e)
+      const err = await reapUnranked().catch(e => e)
       expect(isUniqueViolation(err, "job_pending_key_idx")).toBe(true)
     }
   })
@@ -405,7 +409,7 @@ describe("fencing", () => {
   test("heartbeat in flight: reaper skips the locked row, lease is extended", async () => {
     const { a } = await expiredWithPending({ withPending: false })
     const worker = await schema.connect()
-    await query(worker, "begin")
+    await worker.query`begin`
     expect(
       await heartbeat(worker, schema.table, { claims: [{ ...a, lease: 10 }], now: T(10.5) }),
     ).toEqual({
@@ -413,7 +417,7 @@ describe("fencing", () => {
       busy: [],
     })
     expect(await reap(schema.admin, schema.table, { now: T(11) })).toEqual([])
-    await query(worker, "commit")
+    await worker.query`commit`
     expect(await reap(schema.admin, schema.table, { now: T(11) })).toEqual([])
     expect(secondsOf((await jobs(schema))[0]!.leaseUntil!)).toBe(20.5)
   })
@@ -423,7 +427,7 @@ describe("fencing", () => {
     const reaper = await schema.connect()
     const worker = schema.createDb({ max: 1 })
     const workerPid = await getBackendPid(worker.$database)
-    await query(reaper, "begin")
+    await reaper.query`begin`
     await reap(reaper, schema.table, { now: T(11) })
     const claims = [{ ...a, lease: 10 }]
     expect(await heartbeat(schema.admin, schema.table, { claims, now: T(11) })).toEqual({
@@ -432,7 +436,7 @@ describe("fencing", () => {
     })
     const done = complete(worker, a)
     await waitForLock(schema.admin, workerPid)
-    await query(reaper, "commit")
+    await reaper.query`commit`
     expect(await done).toBe(false)
     expect(await heartbeat(schema.admin, schema.table, { claims, now: T(11) })).toEqual({
       confirmed: [],
@@ -449,7 +453,7 @@ describe("fencing", () => {
     const c = claims.find(x => x.id !== keyed.id)
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", runAt: T(20), now: T(1) })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: T(20), now: T(1) })
     const failing = fail(schema.db, schema.table, a!, {
       error: "boom",
@@ -463,7 +467,7 @@ describe("fencing", () => {
     })
     expect(await isPending(beat, 500)).toBe(false)
     expect(await beat).toEqual({ confirmed: [c!.claimId], busy: [a!.claimId] })
-    await query(producer, "commit")
+    await producer.query`commit`
     expect(await failing).toBe("superseded")
     expect(secondsOf((await jobs(schema, sql`id = ${c!.id}`))[0]!.leaseUntil!)).toBe(13)
   })
@@ -547,10 +551,8 @@ describe("ownership after lease expiry and before reclaim", () => {
       }),
     )
     // Complete takes no virtual time, so the lease expires in server time.
-    await query(
-      schema.admin,
-      `update ${schema.table.name} set lease_until = now() - interval '1 second'`,
-    )
+    await schema.admin.query`
+      update ${jobTableSql(schema.table)} set lease_until = now() - interval '1 second'`
     expect(await complete(schema.db, a)).toBe(true)
   })
 

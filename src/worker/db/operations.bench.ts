@@ -1,13 +1,17 @@
 // Measurements of the SQL core: hot-key upsert churn, claim latency under backlog, idle cycle cost, reaper and fail latency, and the cost of failure jobs.
 // Run: bun --env-file=.env.test.local src/worker/db/operations.bench.ts
 
+import { param } from "kern-orm/db"
+
 import { enqueue } from "../../sql/enqueue"
 import type { KeyMode } from "../../sql/job"
-import { createTestSchema, query, type TestSchema } from "../../test-harness/database"
+import { createTestSchema, type TestSchema } from "../../test-harness/database"
 
 import { claimCycle, claimPlain, claimQueued } from "./claim"
 import { reap } from "./lease"
 import { complete, fail } from "./settlement"
+import { jobTableSql } from "./sql"
+import * as t from "./types"
 
 const percentile = (xs: number[], p: number) =>
   [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))]!
@@ -21,15 +25,15 @@ async function time<T>(fn: () => Promise<T>): Promise<[number, T]> {
 }
 
 async function sizes(schema: TestSchema) {
-  await query(schema.admin, `analyze ${schema.table.name}`)
-  const [r] = await query(
-    schema.admin,
-    `select pg_relation_size($1::text::regclass) as heap, pg_indexes_size($1::text::regclass) as idx,
-            (select n_dead_tup from pg_stat_user_tables where relid = $1::text::regclass) as dead,
-            (select n_live_tup from pg_stat_user_tables where relid = $1::text::regclass) as live`,
-    [schema.table.name],
-  )
-  return `heap ${(Number(r!.heap) / 1024).toFixed(0)} KiB, indexes ${(Number(r!.idx) / 1024).toFixed(0)} KiB, live ${r!.live}, dead ${r!.dead}`
+  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
+  const table = param(t.text, schema.table.name)
+  const r = await schema.admin.query`
+    select pg_relation_size(${table}::regclass) as heap, pg_indexes_size(${table}::regclass) as idx,
+           (select n_dead_tup from pg_stat_user_tables where relid = ${table}::regclass) as dead,
+           (select n_live_tup from pg_stat_user_tables where relid = ${table}::regclass) as live`
+    .select({ heap: t.bigintText, idx: t.bigintText, dead: t.bigintText, live: t.bigintText })
+    .take()
+  return `heap ${(Number(r.heap) / 1024).toFixed(0)} KiB, indexes ${(Number(r.idx) / 1024).toFixed(0)} KiB, live ${r.live}, dead ${r.dead}`
 }
 
 async function hotKey(mode: KeyMode) {
@@ -56,24 +60,20 @@ async function hotKey(mode: KeyMode) {
     `hot key ${mode}: ${total} upserts from 8 connections in ${ms.toFixed(0)} ms (${((total / ms) * 1000).toFixed(0)}/s)`,
   )
   console.log(`  before vacuum: ${await sizes(schema)}`)
-  await query(schema.admin, `vacuum ${schema.table.name}`)
+  await schema.admin.query`vacuum ${jobTableSql(schema.table)}`
   console.log(`  after vacuum:  ${await sizes(schema)}`)
   await schema.dispose()
 }
 
 async function claimBacklog() {
   const schema = await createTestSchema()
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', '{}', now() + interval '1 day', now(), now(), 25 from generate_series(1, 100000)`,
-  )
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 10000)`,
-  )
-  await query(schema.admin, `analyze ${schema.table.name}`)
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', '{}', now() + interval '1 day', now(), now(), 25 from generate_series(1, 100000)`
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 10000)`
+  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
   const lat: number[] = []
   for (let i = 0; i < 200; i++) {
     const [ms, claims] = await time(() =>
@@ -88,13 +88,10 @@ async function claimBacklog() {
 
 async function queueBacklog(queues: number) {
   const schema = await createTestSchema()
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', 'q' || (i % $1), '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 100000) i`,
-    [queues],
-  )
-  await query(schema.admin, `analyze ${schema.table.name}`)
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', 'q' || (i % ${queues}::int), '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 100000) i`
+  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
   const measure = async (label: string) => {
     const lat: number[] = []
     for (let i = 0; i < 100; i++) {
@@ -148,11 +145,9 @@ async function idleCycle() {
 
 async function reapAndFail() {
   const schema = await createTestSchema()
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', 'k' || i, '{}', now(), now(), now(), 25 from generate_series(1, 1000) i`,
-  )
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', 'k' || i, '{}', now(), now(), now(), 25 from generate_series(1, 1000) i`
   await claimPlain(schema.admin, schema.table, {
     worker: "dead",
     tasks: ["t"],
@@ -187,13 +182,11 @@ async function reapAndFail() {
 async function failureJobs() {
   const schema = await createTestSchema()
   const failureMaxAttempts = { t: 25 }
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', case when i % 2 = 0 then 'q' || ((i / 2) % 100) end, '{"id": 1}', now() - interval '1 second', now(), now(), 1
-     from generate_series(1, 20000) i`,
-  )
-  await query(schema.admin, `analyze ${schema.table.name}`)
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', case when i % 2 = 0 then 'q' || ((i / 2) % 100) end, '{"id": 1}', now() - interval '1 second', now(), now(), 1
+    from generate_series(1, 20000) i`
+  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
   const plain = { without: [] as number[], with: [] as number[] }
   const queued = { without: [] as number[], with: [] as number[] }
   for (let i = 0; i < 400; i++) {

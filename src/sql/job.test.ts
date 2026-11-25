@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { isQueryError } from "kern-orm/db"
 
-import { createTestSchema, jobs, only, query, T, type TestSchema } from "../test-harness/database"
+import { createTestSchema, jobs, only, T, type TestSchema } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimQueued } from "../worker/db/claim"
 import { fail } from "../worker/db/settlement"
+import { jobTableSql } from "../worker/db/sql"
+import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
 
@@ -17,7 +19,7 @@ beforeEach(async () => {
 afterEach(() => schema.dispose())
 
 /** Returns the constraint that rejected a write, or `null` when the write succeeded. */
-async function rejectedBy(write: Promise<unknown>): Promise<string | null> {
+async function rejectedBy(write: PromiseLike<unknown>): Promise<string | null> {
   try {
     await write
     return null
@@ -55,23 +57,11 @@ async function insertRow(fields: RowFields): Promise<string | null> {
     ...fields,
   }
   return rejectedBy(
-    query(
-      schema.admin,
-      `insert into ${schema.table.name}
-         (task, state, claim_id, lease_until, attempts, max_attempts, run_at, not_before, failed_at, window_started_at, created_at)
-       values ('t', $1::text, $2::text::bigint, $3::text::timestamptz, $4::text::int, $5::text::int,
-               $6::text::timestamptz, $7::text::timestamptz, $8::text::timestamptz, now(), now())`,
-      [
-        row.state,
-        row.claim_id,
-        row.lease_until,
-        row.attempts,
-        row.max_attempts,
-        row.run_at,
-        row.not_before,
-        row.failed_at,
-      ],
-    ),
+    schema.admin.query`
+      insert into ${jobTableSql(schema.table)}
+        (task, state, claim_id, lease_until, attempts, max_attempts, run_at, not_before, failed_at, window_started_at, created_at)
+      values ('t', ${row.state}, ${row.claim_id}, ${row.lease_until}, ${row.attempts}, ${row.max_attempts},
+              ${row.run_at}, ${row.not_before}, ${row.failed_at}, now(), now())`,
   )
 }
 
@@ -172,10 +162,11 @@ describe("names", () => {
       128, 128, 1024, 1024,
     ])
     expect(await enqueueNames({ ...names, now: T(0) })).toBeNull()
-    const [compression] = await query(
-      schema.admin,
-      `select pg_column_compression(queue) as queue, pg_column_compression(key) as key from ${schema.table.name}`,
-    )
+    const compression = await schema.admin.query`
+      select pg_column_compression(queue) as queue, pg_column_compression(key) as key
+      from ${jobTableSql(schema.table)}`
+      .select({ queue: t.text.nullable(), key: t.text.nullable() })
+      .take()
     expect(compression).toEqual({ queue: null, key: null })
     // The claim writes the entry of the active queue, and the retry the entries of a pending row again.
     const claimed = await claimQueued(schema.admin, schema.table, {

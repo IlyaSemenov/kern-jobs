@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import type { Driver } from "kern-orm/db"
+import { type Driver, identifier } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { defineSchedule, type Schedule, toWorkerSchedule } from "../../schedule/schedule"
@@ -14,7 +14,6 @@ import {
   getStatementLabel,
   jobs,
   only,
-  query,
   type TestSchema,
 } from "../../test-harness/database"
 import { proxyTo } from "../faults/proxy"
@@ -22,12 +21,15 @@ import { proxyTo } from "../faults/proxy"
 import { claimPlain } from "./claim"
 import { evaluateSchedule } from "./schedule"
 import { complete } from "./settlement"
+import * as t from "./types"
 
 let schema: TestSchema
 beforeEach(async () => {
   schema = await createTestSchema()
 })
 afterEach(() => schema.dispose())
+
+const scheduleTableSql = () => identifier(schema.name, "schedule")
 
 const task = defineTask("backup")
 const nightly = defineSchedule(task, { cron: { minute: 0, hour: 3 } })
@@ -122,21 +124,18 @@ test("a check reads the cursor and the clock exactly on a pool whose DateStyle a
     catchUp: { within: 3600 },
   })
   // Adding one minute to this cursor puts the lower bound one microsecond past the 19:59 occurrence.
-  await query(
-    schema.admin,
-    `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, '2030-01-02 19:58:00.000001+00')`,
-    [covered.id],
-  )
+  await schema.admin.query`
+    insert into ${scheduleTableSql()} (id, evaluated_through) values (${covered.id}, '2030-01-02 19:58:00.000001+00')`
   const current = defineSchedule(defineTask("current"), { cron: { minute: 0, hour: 20 } })
   for (const schedule of [covered, current]) {
     await evaluateSchedule(db, schema.table, toWorkerSchedule(schedule), { now })
   }
   expect((await jobs(schema)).map(job => [job.task, job.runAt])).toEqual([["current", now]])
-  const cursors = await query(
-    schema.admin,
-    `select id, extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule order by id`,
+  const cursors = await schema.admin.query`
+    select id, (extract(epoch from evaluated_through) * 1000)::float8 as cursor from ${scheduleTableSql()} order by id`.select(
+    { id: t.text, cursor: t.doublePrecision },
   )
-  expect(cursors.map(row => [row.id, Number(row.cursor)])).toEqual([
+  expect(cursors.map(row => [row.id, row.cursor])).toEqual([
     [covered.id, Date.parse("2030-01-02T20:00:00Z")],
     [current.id, Date.parse("2030-01-02T20:00:00Z")],
   ])
@@ -164,7 +163,9 @@ test("a rolled-back first registration leaves no cursor, so catch-up in the next
   })
   const schedule = defineSchedule(task, { cron: { minute: 0, hour: 3 }, catchUp: { within: 3600 } })
   await expect(run(schedule, instant("03:00:50"))).rejects.toThrow(failure)
-  expect(await query(schema.database, `select id from "${schema.name}".schedule`)).toEqual([])
+  expect(await schema.database.query`select id from ${scheduleTableSql()}`.pluck(t.text)).toEqual(
+    [],
+  )
   failure = undefined
   await run(schedule, instant("03:01:10"))
   expect(await jobs(schema)).toEqual([])
@@ -223,46 +224,40 @@ test("three replicas with equivalent calendars enqueue once, including after a f
 test("a check whose registration waits for a concurrent one locks the committed row and sets the run_at of its job to the start time of its transaction", async () => {
   const every = defineSchedule(task, { cron: { minute: "*" } })
   const registrar = await schema.connect()
-  await query(registrar, "begin")
-  await query(
-    registrar,
-    `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, date_trunc('minute', now()) - interval '1 minute')`,
-    [every.id],
-  )
+  await registrar.query`begin`
+  await registrar.query`
+    insert into ${scheduleTableSql()} (id, evaluated_through) values (${every.id}, date_trunc('minute', now()) - interval '1 minute')`
   // The default isolation of the pool is serializable, so the check must choose READ COMMITTED itself.
   // A pool of one connection, so that the backend of the check is known.
   const db = schema.createDb({ max: 1, defaultIsolation: "serializable" })
   const pid = await getBackendPid(db.$database)
   const check = evaluateSchedule(db, schema.table, toWorkerSchedule(every))
   await waitForLock(schema.admin, pid)
-  const [started] = await query(
-    schema.admin,
-    `select floor(extract(epoch from xact_start) * 1000) as ms from pg_stat_activity where pid = $1::text::int`,
-    [pid],
+  const started = await schema.admin.query`
+    select floor(extract(epoch from xact_start) * 1000)::float8 from pg_stat_activity where pid = ${pid}`.get(
+    t.doublePrecision,
   )
-  await query(registrar, "commit")
+  await registrar.query`commit`
   await check
   const job = only(await jobs(schema))
-  expect(job.runAt.getTime()).toBe(Number(started!.ms))
-  const [row] = await query(
-    schema.admin,
-    `select extract(epoch from evaluated_through) * 1000 as cursor from "${schema.name}".schedule`,
+  expect(job.runAt.getTime()).toBe(started)
+  const cursor = await schema.admin.query`
+    select (extract(epoch from evaluated_through) * 1000)::float8 from ${scheduleTableSql()}`.get(
+    t.doublePrecision,
   )
-  expect(Number(row!.cursor)).toBe(Math.floor(job.runAt.getTime() / 60000) * 60000)
+  expect(cursor).toBe(Math.floor(job.runAt.getTime() / 60000) * 60000)
 })
 
 test("a replica skips a locked schedule and a later evaluation can still enqueue it", async () => {
   await run(nightly, instant("02:59:00"))
   const owner = await schema.connect()
-  await query(owner, "begin")
+  await owner.query`begin`
   try {
-    await query(owner, `select id from "${schema.name}".schedule where id = $1::text for update`, [
-      nightly.id,
-    ])
+    await owner.query`select id from ${scheduleTableSql()} where id = ${nightly.id} for update`
     await run()
     expect(await jobs(schema)).toEqual([])
   } finally {
-    await query(owner, "rollback")
+    await owner.query`rollback`
   }
   await run()
   expect(only(await jobs(schema)).task).toBe(task.name)

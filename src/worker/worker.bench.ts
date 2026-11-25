@@ -1,22 +1,23 @@
 // Measurements of the worker runtime: throughput of no-op handlers by concurrency against a bare claim-and-complete loop of the SQL core, and the cost of a heartbeat by the number of its claims against a plain UPDATE that waits for locks.
 // Run: bun --env-file=.env.test.local src/worker/worker.bench.ts
 
-import { createTestSchema, query, type TestSchema } from "../test-harness/database"
+import { param } from "kern-orm/db"
+
+import { createTestSchema, type TestSchema } from "../test-harness/database"
 
 import { claimCycle, claimPlain, createClaimState } from "./db/claim"
 import { heartbeat } from "./db/lease"
 import { complete } from "./db/settlement"
+import { jobTableSql } from "./db/sql"
+import * as t from "./db/types"
 import { startRuntime } from "./runtime"
 
 const JOBS = 3000
 
 async function fill(schema: TestSchema, n: number) {
-  await query(
-    schema.admin,
-    `insert into ${schema.table.name} (task, payload, run_at, window_started_at, created_at, max_attempts)
-     select 't', '{}', now(), now(), now(), 25 from generate_series(1, $1::text::int)`,
-    [n],
-  )
+  await schema.admin.query`
+    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    select 't', '{}', now(), now(), now(), 25 from generate_series(1, ${n}::int)`
 }
 
 async function runtimeThroughput(concurrency: number): Promise<number> {
@@ -82,7 +83,7 @@ async function heartbeatCost(claimsCount: number) {
   })
   const refs = claims.map(c => ({ id: c.id, claimId: c.claimId, lease: 60 }))
   const rounds = 50
-  const time = async (fn: () => Promise<unknown>) => {
+  const time = async (fn: () => PromiseLike<unknown>) => {
     await fn()
     const t = performance.now()
     for (let i = 0; i < rounds; i++) await fn()
@@ -90,14 +91,20 @@ async function heartbeatCost(claimsCount: number) {
   }
   const skipping = await time(() => heartbeat(schema.admin, schema.table, { claims: refs }))
   const plain = await time(() =>
-    query(
-      schema.admin,
-      `update ${schema.table.name} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
-       from unnest($1::text::bigint[], $2::text::bigint[], $3::text::float8[]) as x(id, claim_id, lease)
-       where j.id = x.id and j.claim_id = x.claim_id and j.state = 'active'
-       returning j.claim_id`,
-      [refs.map(r => r.id), refs.map(r => r.claimId), refs.map(r => String(r.lease))],
-    ),
+    schema.admin.query`
+        update ${jobTableSql(schema.table)} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
+        from unnest(${param(
+          t.array(t.bigintText),
+          refs.map(r => r.id),
+        )}, ${param(
+          t.array(t.bigintText),
+          refs.map(r => r.claimId),
+        )}, ${param(
+          t.array(t.doublePrecision),
+          refs.map(r => r.lease),
+        )}) as x(id, claim_id, lease)
+        where j.id = x.id and j.claim_id = x.claim_id and j.state = 'active'
+        returning j.claim_id`.pluck(t.bigintText),
   )
   await schema.dispose()
   return { skipping, plain }

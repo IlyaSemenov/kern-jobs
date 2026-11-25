@@ -4,12 +4,14 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import type { Driver } from "kern-orm/db"
+import { type Driver, queryOn } from "kern-orm/db"
 
 import type { JobTable } from "../../sql/job-table"
-import { createTestSchema, query, sleep, type TestSchema } from "../../test-harness/database"
+import { createTestSchema, sleep, type TestSchema } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
+import { jobTableSql } from "../db/sql"
+import * as t from "../db/types"
 
 import type { WorkerConfig } from "./worker"
 
@@ -47,7 +49,7 @@ interface Event {
 async function countJobs(driver: Driver, table: JobTable): Promise<number> {
   for (;;) {
     try {
-      return Number((await query(driver, `select count(*)::int as n from ${table.name}`))[0]!.n)
+      return await queryOn(driver)`select count(*)::int from ${jobTableSql(table)}`.get(t.integer)
     } catch {
       await sleep(100)
     }
@@ -55,7 +57,7 @@ async function countJobs(driver: Driver, table: JobTable): Promise<number> {
 }
 
 /** Runs `fn` until it succeeds, while the server is unavailable. */
-async function retrying<T>(fn: () => Promise<T>, timeoutMs = 10_000): Promise<T> {
+async function retrying<T>(fn: () => PromiseLike<T>, timeoutMs = 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
@@ -107,12 +109,11 @@ describe("reaper after a restart", () => {
       const restartedAt = Date.now()
       pgCtl("-m", "fast", "restart")
       // Jobs of a dead worker whose leases expire after the restart.
-      await retrying(() =>
-        query(
-          schema.driver,
-          `insert into ${schema.table.name} (task, payload, run_at, window_started_at, created_at, max_attempts)
-           select 't', '{}', now(), now(), now(), 25 from generate_series(1, 5)`,
-        ),
+      await retrying(
+        () =>
+          queryOn(schema.driver)`
+            insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+            select 't', '{}', now(), now(), now(), 25 from generate_series(1, 5)`,
       )
       const claims = await claimPlain(schema.driver, schema.table, {
         worker: "dead",
@@ -124,13 +125,9 @@ describe("reaper after a restart", () => {
       const until = Date.now() + 10_000
       let pending = 0
       while (Date.now() < until) {
-        pending = Number(
-          (
-            await query(
-              schema.driver,
-              `select count(*) as n from ${schema.table.name} where state = 'pending'`,
-            )
-          )[0]!.n,
+        pending = await queryOn(schema.driver)`
+          select count(*)::int from ${jobTableSql(schema.table)} where state = 'pending'`.get(
+          t.integer,
         )
         if (pending === 5) break
         await sleep(100)
@@ -153,15 +150,13 @@ describe("PostgreSQL restart under load", () => {
   for (const mode of ["fast", "immediate"] as const) {
     test(`pg_ctl restart -m ${mode}: every job completes, workers recover`, async () => {
       const schema: TestSchema = await createTestSchema(URL)
-      await query(
-        schema.admin,
-        `insert into ${schema.table.name} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
-         select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
-                to_jsonb(i), now(), now(), now(), 25
-         from generate_series(1, 300) i`,
-      )
+      await schema.admin.query`
+        insert into ${jobTableSql(schema.table)} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
+        select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
+               to_jsonb(i), now(), now(), now(), 25
+        from generate_series(1, 300) i`
       const ids = new Set(
-        (await query(schema.admin, `select id from ${schema.table.name}`)).map(r => r.id),
+        await schema.admin.query`select id from ${jobTableSql(schema.table)}`.pluck(t.bigintText),
       )
       const observer = schema.createDriver({ max: 2 })
 

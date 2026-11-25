@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { hostname } from "node:os"
 
-import { type Driver, isQueryError, QueryError } from "kern-orm/db"
+import { type Driver, identifier, isQueryError, QueryError } from "kern-orm/db"
 import { waitForLockedStatement } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
@@ -14,10 +14,11 @@ import { fixedBackoff } from "../task/backoff"
 import { TerminalError } from "../task/errors"
 import { defineManifest } from "../task/manifest"
 import { defineTask, type JobInfo } from "../task/task"
-import { createTestSchema, jobs, query, sleep, type TestSchema } from "../test-harness/database"
+import { createTestSchema, jobs, sleep, type TestSchema } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
 import { evaluateSchedule } from "./db/schedule"
+import * as t from "./db/types"
 import { maxInterval } from "./loop"
 import type { StopOptions, Worker } from "./runtime"
 import { startWorker, type WorkerErrorInfo, type WorkerOptions } from "./start"
@@ -246,8 +247,10 @@ describe("a running worker", () => {
 
   test("runs a recovered occurrence once across three workers, also after all three stop and one restarts", async () => {
     // Pick a minute an hour ago so the next daily occurrence cannot arrive during the test.
-    const [clock] = await query(schema.admin, "select extract(epoch from now()) as seconds")
-    const at = new Date((Math.floor(Number(clock!.seconds) / 60) - 60) * 60000)
+    const seconds = await schema.admin.query`select extract(epoch from now())::float8`.get(
+      t.doublePrecision,
+    )
+    const at = new Date((Math.floor(seconds / 60) - 60) * 60000)
     const schedule = defineSchedule(indexProduct, {
       cron: { minute: at.getUTCMinutes(), hour: at.getUTCHours() },
       catchUp: { within: 7200 },
@@ -305,11 +308,8 @@ describe("a running worker", () => {
       enqueue: { key: "shared" },
     })
     // Register before either replica starts, so the second finds an existing schedule row.
-    await query(
-      schema.admin,
-      `insert into "${schema.name}".schedule (id, evaluated_through) values ($1::text, 'epoch')`,
-      [blocked.id],
-    )
+    await schema.admin.query`
+      insert into ${identifier(schema.name, "schedule")} (id, evaluated_through) values (${blocked.id}, 'epoch')`
     const independent = defineSchedule(purgeExpiredSessions, { cron: { minute: "*" } })
     const reported = Promise.withResolvers<WorkerErrorInfo>()
     const handled = Promise.withResolvers<void>()
@@ -330,7 +330,7 @@ describe("a running worker", () => {
       })
 
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     try {
       await enqueue(producer, schema.table, { task: indexProduct.name, key: "shared" })
       launch()
@@ -353,7 +353,7 @@ describe("a running worker", () => {
       ])
       expect(error).toEqual({ source: "schedule", id: blocked.id })
     } finally {
-      await query(producer, "rollback")
+      await producer.query`rollback`
     }
   })
 

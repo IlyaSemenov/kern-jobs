@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { runInNewContext } from "node:vm"
 
 import { bindSchema, defineSchema } from "kern-orm"
-import { createDatabase } from "kern-orm/db"
+import { createDatabase, param } from "kern-orm/db"
 import { postgresJsDriver } from "kern-orm/db/postgres-js"
 import pg from "pg"
 import postgres from "postgres"
@@ -15,9 +15,10 @@ import {
   databaseUrl,
   jobs as jobRows,
   only,
-  query,
   type TestSchema,
 } from "../test-harness/database"
+import { jobTableSql } from "../worker/db/sql"
+import * as t from "../worker/db/types"
 
 import type { JobsClient } from "./client"
 import {
@@ -149,13 +150,10 @@ afterEach(async () => {
 
 /** Marks a pending job of the test schema failed `age` seconds ago, as a worker does after the last attempt of the job. */
 const markFailed = (id: string, age = 0) =>
-  query(
-    schema.admin,
-    `update ${schema.table.name} set state = 'failed', attempts = 1, last_error = 'boom',
-       failed_at = now() - make_interval(secs => $2::text::float8)
-     where id = $1::text::bigint`,
-    [id, age],
-  )
+  schema.admin.query`
+    update ${jobTableSql(schema.table)} set state = 'failed', attempts = 1, last_error = 'boom',
+      failed_at = now() - make_interval(secs => ${param(t.doublePrecision, age)})
+    where id = ${id}`
 
 for (const [name, createClient] of clients) {
   describe(name, () => {

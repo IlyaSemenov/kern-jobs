@@ -1,7 +1,7 @@
 // Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { type Driver, sql, TransactionConnectionError } from "kern-orm/db"
+import { type Driver, literal, queryOn, sql, TransactionConnectionError } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { enqueue } from "../../sql/enqueue"
@@ -11,15 +11,17 @@ import {
   createTestSchema,
   jobs,
   only,
-  query,
   secondsOf,
   T,
   type TestSchema,
+  unsafeInteger,
 } from "../../test-harness/database"
 
 import { type Claim, claimCycle, claimPlain } from "./claim"
 import { reap } from "./lease"
 import { complete, fail, requeue } from "./settlement"
+import { jobTableSql } from "./sql"
+import * as t from "./types"
 
 let schema: TestSchema
 beforeEach(async () => {
@@ -32,15 +34,16 @@ afterEach(async () => {
 const W = { worker: "w1", tasks: ["t"] }
 
 test("complete matches both bigint ids beyond the safe integer range", async () => {
-  await query(
-    schema.admin,
-    `alter table ${schema.table.name} alter column id restart with 9007199254740993`,
-  )
-  await query(schema.admin, `alter sequence ${schema.table.sequence} restart with 9007199254740995`)
+  const id = unsafeInteger
+  // The next integer that a number cannot hold either.
+  const claimId = id + 2n
+  await schema.admin.query`
+    alter table ${jobTableSql(schema.table)} alter column id restart with ${literal(id)}`
+  await schema.admin.query`select setval(${schema.table.sequence}::regclass, ${claimId}, false)`
   await enqueue(schema.admin, schema.table, { task: "t" })
   const claim = only(await claimPlain(schema.admin, schema.table, { ...W, limit: 1 }))
-  expect([claim.id, claim.claimId]).toEqual(["9007199254740993", "9007199254740995"])
-  expect(await complete(schema.db, { ...claim, claimId: "9007199254740994" })).toBe(false)
+  expect([claim.id, claim.claimId]).toEqual([String(id), String(claimId)])
+  expect(await complete(schema.db, { ...claim, claimId: String(claimId - 1n) })).toBe(false)
   expect(await complete(schema.db, claim)).toBe(true)
 })
 
@@ -443,7 +446,7 @@ describe("races of the return to pending with enqueues", () => {
       const workerPid = await getBackendPid(worker)
       const producer = await schema.connect()
       const a = only(await claimPlain(worker, schema.table, { ...W, limit: 1, now: T(0) }))
-      await query(producer, "begin")
+      await producer.query`begin`
       await enqueue(producer, schema.table, { task: "t", key: "k", payload: "b", now: T(1) })
       const stats = { uniqueViolations: 0 }
       const outcome = fail(
@@ -454,7 +457,7 @@ describe("races of the return to pending with enqueues", () => {
         stats,
       )
       await waitForLock(schema.admin, workerPid)
-      await query(producer, end)
+      await (end === "commit" ? producer.query`commit` : producer.query`rollback`)
       if (end === "commit") {
         expect([await outcome, stats.uniqueViolations]).toEqual(["superseded", 1])
         expect((await jobs(schema)).map(r => r.payload)).toEqual(["b"])
@@ -504,7 +507,7 @@ describe("races of the return to pending with enqueues", () => {
       now: T(2),
       pause: {
         afterOwnLock: async tx => {
-          isolation = only(await query(tx, "show transaction_isolation")).transaction_isolation
+          isolation = await queryOn(tx)`show transaction_isolation`.get(t.text)
         },
       },
     })
@@ -574,8 +577,7 @@ describe("settlements of different handlers on one driver", () => {
   })
 })
 
-const terminate = (pid: number) =>
-  query(schema.admin, `select pg_terminate_backend($1::text::int)`, [pid])
+const terminate = (pid: number) => schema.admin.query`select pg_terminate_backend(${pid}::int)`
 
 /** Counts the transactions that a driver starts. */
 function countingBegins(driver: Driver) {

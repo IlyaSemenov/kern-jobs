@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
 
-import { type Connection, type Driver, QueryError, sql } from "kern-orm/db"
+import { type Connection, type Driver, identifier, QueryError, queryOn, sql } from "kern-orm/db"
 import { nodePostgresDriver } from "kern-orm/db/node-postgres"
 import { waitForLockedStatement } from "kern-orm/testing"
 import pg from "pg"
@@ -20,12 +20,12 @@ import {
   holdHook,
   jobs,
   only,
-  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
 
 import { claimPlain } from "./db/claim"
+import * as t from "./db/types"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { HandlerAbort } from "./heartbeat"
 import type { WorkerTask } from "./runtime"
@@ -207,7 +207,7 @@ describe("drivers", () => {
           [releaseError],
         ])
         // The driver released the connection before the failure, so the pool gives it to the next statement.
-        expect(await query(pool, "select 1 as one")).toEqual([{ one: "1" }])
+        expect(await queryOn(pool)`select 1`.get(t.integer)).toBe(1)
       } finally {
         await stopTestWorkers()
         if (pool !== schema.driver) await pool.close()
@@ -301,7 +301,7 @@ describe("schema check", () => {
     expect([statements, log.all("reap"), log.all("start")]).toEqual([0, [], []])
     expect((await jobs(schema)).map(job => job.state)).toEqual(["active", "pending"])
     // The pool of one connection gives it once the heartbeat has released it.
-    expect(await query(heartbeatSource, "select 1 as one")).toEqual([{ one: "1" }])
+    expect(await queryOn(heartbeatSource)`select 1`.get(t.integer)).toBe(1)
   })
 })
 
@@ -452,7 +452,7 @@ describe("slots", () => {
     // The pending job of the key, held by an open producer transaction, makes the fail of A wait.
     await enqueue(schema.admin, schema.table, { task: "fail", key: "k", runAt: far() })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "fail", key: "k", runAt: far() })
     failGate.resolve()
     await waitForLockedStatement(schema.admin, toStatementLabel("settle:lock-competitor"))
@@ -466,7 +466,7 @@ describe("slots", () => {
     expect(only(await jobs(schema, sql`id = ${c.id}`)).leaseUntil!.getTime()).toBeGreaterThan(
       Date.now(),
     )
-    await query(producer, "commit")
+    await producer.query`commit`
     expect((await log.waitFor("settled", e => e.claim.id === a.id)).outcome).toBe("superseded")
     const startD = await log.waitFor("start", e => e.claim.id === d.id)
     gates.open(log.all("start", e => e.claim.id === c.id)[0]!.claim.claimId)
@@ -851,7 +851,7 @@ describe("worker id", () => {
         defaultLease: 3600,
       })
       const producer = await schema.connect()
-      await query(producer, "begin")
+      await producer.query`begin`
       await enqueue(producer, schema.table, { task: "t", key: "k" })
       const heartbeat = createWatchedHeartbeat(schema.createDriver({ max: 1 }))
       const worker = startTestWorker(schema, {
@@ -866,7 +866,7 @@ describe("worker id", () => {
       else await stopped
       // The batch gives up its wait for the producer after a second, and would then return its rows one by one before the session closes.
       await heartbeat.released
-      await query(producer, "rollback")
+      await producer.query`rollback`
       expect(heartbeat.texts.slice(sent).filter(text => text.includes(schema.table.name))).toEqual(
         [],
       )
@@ -927,13 +927,13 @@ describe("worker id", () => {
         defaultLease: 3600,
       })
       const producer = await schema.connect()
-      await query(producer, "begin")
+      await producer.query`begin`
       await enqueue(producer, schema.table, { task: "t", key: "k0" })
       const log = recordEvents()
       startTestWorker(schema, { id: "same", tasks: {}, onEvent: log.onEvent })
       await log.waitFor("recover", e => e.jobs.some(j => j.id === ids.at(-1)), 15_000)
       const active = (await jobs(schema)).filter(r => r.state === "active").map(r => r.id)
-      await query(producer, "rollback")
+      await producer.query`rollback`
       expect(active).toEqual(ids.slice(0, 1))
     },
     { timeout: 20_000 },
@@ -1180,7 +1180,7 @@ describe("stop", () => {
     ])
     expect(Date.now() - stopAt).toBeGreaterThanOrEqual(200)
     // The pool of one connection gives it once the heartbeat has released it.
-    expect(await query(heartbeatSource, "select 1 as one")).toEqual([{ one: "1" }])
+    expect(await queryOn(heartbeatSource)`select 1`.get(t.integer)).toBe(1)
     await heartbeatSource.close()
   })
 
@@ -1532,7 +1532,11 @@ describe("stop", () => {
       await released.promise
       expect(resolvedOptions).toBe(0)
       expect(await jobs(schema)).toEqual([])
-      expect(await query(schema.admin, `select id from "${schema.name}".schedule`)).toEqual([])
+      expect(
+        await schema.admin.query`select id from ${identifier(schema.name, "schedule")}`.pluck(
+          t.text,
+        ),
+      ).toEqual([])
     },
   )
 
@@ -1556,7 +1560,7 @@ describe("stop", () => {
     expect(log.all("settled").map(e => e.outcome)).toEqual(["requeued"])
     await release()
     // The pool of one connection gives it once the heartbeat has released it.
-    expect(await query(heartbeatSource, "select 1 as one")).toEqual([{ one: "1" }])
+    expect(await queryOn(heartbeatSource)`select 1`.get(t.integer)).toBe(1)
     await heartbeatSource.close()
   })
 

@@ -13,7 +13,6 @@ import {
   holdHook,
   jobs,
   only,
-  query,
   recordLabels,
   T,
   type TestSchema,
@@ -229,13 +228,13 @@ describe("retry", () => {
       now: T(12),
     })
     const operator = await schema.connect()
-    await query(operator, "begin")
+    await operator.query`begin`
     expect(await retryFailedJob(operator, schema.table, { id: failed })).toEqual({
       retried: false,
       pendingId: pending,
     })
     expect(await deleteJob(operator, schema.table, { id: failed })).toBe(true)
-    await query(operator, "commit")
+    await operator.query`commit`
     expect((await jobs(schema)).map(r => r.id)).toEqual([pending])
   })
 
@@ -270,7 +269,7 @@ describe("retry", () => {
       const failed = await createFailedJob({ key: "k" })
       const producer = await schema.connect()
       const operator = await schema.connect()
-      await query(producer, "begin")
+      await producer.query`begin`
       const { id: pending } = await enqueue(producer, schema.table, {
         task: "t",
         key: "k",
@@ -278,7 +277,7 @@ describe("retry", () => {
       })
       const retried = retryFailedJob(operator, schema.table, { id: failed, now: T(20) })
       await waitForLock(schema.admin, operator.pid)
-      await query(producer, end)
+      await (end === "commit" ? producer.query`commit` : producer.query`rollback`)
       if (end === "commit") {
         // The snapshot of the retry missed the pending job, so the unique index rejects the update, which changes nothing.
         expect(isUniqueViolation(await getRejection(retried), "job_pending_key_idx")).toBe(true)
@@ -323,11 +322,11 @@ describe("retry", () => {
     })
     const worker = await schema.connect()
     const operator = await schema.connect()
-    await query(worker, "begin")
+    await worker.query`begin`
     only(await claimPlain(worker, schema.table, { ...W, limit: 1, now: T(13) }))
     const retried = retryFailedJob(operator, schema.table, { id: failed, now: T(20) })
     await waitForLock(schema.admin, operator.pid)
-    await query(worker, "commit")
+    await worker.query`commit`
     expect(await retried).toEqual({ retried: true })
     expect((await jobs(schema)).map(r => [r.id, r.state, r.key])).toEqual([
       [failed, "pending", "k"],
@@ -339,11 +338,11 @@ describe("retry", () => {
     const failed = await createFailedJob()
     const operator1 = await schema.connect()
     const operator2 = await schema.connect()
-    await query(operator1, "begin")
+    await operator1.query`begin`
     expect(await retryFailedJob(operator1, schema.table, { id: failed })).toEqual({ retried: true })
     const retried = retryFailedJob(operator2, schema.table, { id: failed })
     await waitForLock(schema.admin, operator2.pid)
-    await query(operator1, "commit")
+    await operator1.query`commit`
     expect(await retried).toBeNull()
     expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[failed, "pending"]])
   })
@@ -423,11 +422,11 @@ describe("delete", () => {
     const { id } = await enqueue(schema.admin, schema.table, { task: "t", now: T(0) })
     const worker = await schema.connect()
     const operator = await schema.connect()
-    await query(worker, "begin")
+    await worker.query`begin`
     only(await claimPlain(worker, schema.table, { ...W, limit: 1, now: T(1) }))
     const deleted = deleteJob(operator, schema.table, { id })
     await waitForLock(schema.admin, operator.pid)
-    await query(worker, "commit")
+    await worker.query`commit`
     expect(await deleted).toBe(false)
     expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[id, "active"]])
   })
@@ -441,13 +440,13 @@ describe("delete", () => {
     })
     const producer = await schema.connect()
     const operator = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     expect(
       await enqueue(producer, schema.table, { task: "t", key: "k", payload: 2, now: T(1) }),
     ).toEqual({ id, created: false })
     const deleted = deleteJob(operator, schema.table, { id })
     await waitForLock(schema.admin, operator.pid)
-    await query(producer, "commit")
+    await producer.query`commit`
     expect(await deleted).toBe(true)
     expect(await jobs(schema)).toEqual([])
   })
@@ -529,11 +528,11 @@ describe("delete pending", () => {
     })
     const worker = await schema.connect()
     const operator = await schema.connect()
-    await query(worker, "begin")
+    await worker.query`begin`
     only(await claimPlain(worker, schema.table, { ...W, limit: 1, now: T(1) }))
     const deleted = deletePendingJobs(operator, schema.table, { scope: "a", task: "t", key: "k" })
     await waitForLock(schema.admin, operator.pid)
-    await query(worker, "commit")
+    await worker.query`commit`
     expect(await deleted).toBe(0)
     expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[id, "active"]])
   })
@@ -584,11 +583,11 @@ describe("delete failed", () => {
     const failed = await createFailedJob()
     const operator1 = await schema.connect()
     const operator2 = await schema.connect()
-    await query(operator1, "begin")
+    await operator1.query`begin`
     expect(await retryFailedJob(operator1, schema.table, { id: failed })).toEqual({ retried: true })
     const deleted = deleteFailedJobs(operator2, schema.table, { task: "t" })
     await waitForLock(schema.admin, operator2.pid)
-    await query(operator1, "commit")
+    await operator1.query`commit`
     expect(await deleted).toBe(0)
     expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([[failed, "pending"]])
   })

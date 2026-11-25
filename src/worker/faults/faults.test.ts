@@ -14,12 +14,12 @@ import {
   databaseUrl,
   holdHook,
   jobs,
-  query,
   sleep,
   type TestSchema,
 } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
 import { reap } from "../db/lease"
+import { jobTableSql } from "../db/sql"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
@@ -110,8 +110,7 @@ function spawnWorker(id: string, overrides: Partial<WorkerConfig> = {}) {
 
 const row = async (id: string) => (await jobs(schema, sql`id = ${id}`))[0]
 const backendAlive = async (pid: number) =>
-  (await query(schema.admin, `select 1 from pg_stat_activity where pid = $1::text::int`, [pid]))
-    .length > 0
+  (await schema.admin.query`select 1 from pg_stat_activity where pid = ${pid}`) > 0
 
 /** Reaps until the predicate holds for the row. */
 async function reapUntil(id: string, pred: (r: any) => boolean, timeoutMs = 5000) {
@@ -192,11 +191,8 @@ describe("SIGKILL inside fail and reap", () => {
     await sleep(200)
     expect((await row(job.id))!.state).toBe("active")
     // The competitor is not locked any more.
-    await query(
-      schema.admin,
-      `select id from ${schema.table.name} where id = $1::text::bigint for update nowait`,
-      [b.id],
-    )
+    await schema.admin
+      .query`select id from ${jobTableSql(schema.table)} where id = ${b.id} for update nowait`
     const reaped = await reapUntil(job.id, r => r.state === "pending")
     expect([reaped.key, (await row(b.id))!.key]).toEqual([null, "k"])
   }, 30_000)
@@ -315,14 +311,14 @@ describe("slots and heartbeats", () => {
     // The pending job of the key, held by an open producer transaction, makes the fail of A wait.
     await enqueue(schema.admin, schema.table, { task: "t", key: "k", runAt: far() })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "k", runAt: far() })
     const c = await enqueue(schema.admin, schema.table, { task: "t" })
     writeFileSync(gateFile, "")
     await waitForLockedStatement(schema.admin, toStatementLabel("settle:lock-competitor"))
     await sleep(500)
     const startedEarly = w.events().some(e => e.ev === "start" && e.id === c.id)
-    await query(producer, "commit")
+    await producer.query`commit`
     await w.waitFor(e => e.ev === "settled" && e.id === a.id)
     await w.waitFor(e => e.ev === "start" && e.id === c.id)
     expect(startedEarly).toBe(false)
@@ -368,14 +364,11 @@ describe("slots and heartbeats", () => {
     const w = spawnWorker("a", { slots: 2, handlerMs: 2500, honorAbort: false })
     const first = await w.waitFor(e => e.ev === "start" && e.id === job.id)
     // The reaper returns the job while its handler runs.
-    await query(schema.admin, "begin")
-    await query(
-      schema.admin,
-      `update ${schema.table.name} set lease_until = now() - interval '1 second' where id = $1::text::bigint`,
-      [job.id],
-    )
+    await schema.admin.query`begin`
+    await schema.admin.query`
+      update ${jobTableSql(schema.table)} set lease_until = now() - interval '1 second' where id = ${job.id}`
     await reap(schema.admin, schema.table)
-    await query(schema.admin, "commit")
+    await schema.admin.query`commit`
     const second = await w.waitFor(e => e.ev === "start" && e.id === job.id && e.attempts === 2)
     const other = await enqueue(schema.admin, schema.table, { task: "t" })
     await sleep(500)
@@ -393,14 +386,14 @@ describe("long producer transaction", () => {
   test("holding a due row delays only that row; claim lag shows the delay", async () => {
     const held = await enqueue(schema.admin, schema.table, { task: "t", key: "held" })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "held", payload: "event" })
     const a = spawnWorker("a")
     const other = await enqueue(schema.admin, schema.table, { task: "t" })
     const otherStart = await a.waitFor(e => e.ev === "start" && e.id === other.id)
     await sleep(2000)
     expect(a.events().some(e => e.ev === "start" && e.id === held.id)).toBe(false)
-    await query(producer, "commit")
+    await producer.query`commit`
     const heldStart = await a.waitFor(e => e.ev === "start" && e.id === held.id)
     console.log(
       `long producer: other job lag ${otherStart.lag.toFixed(3)} s, held job lag ${heldStart.lag.toFixed(3)} s`,
@@ -485,13 +478,11 @@ describe("fairness across processes under continuous inflow", () => {
     const stopAt = Date.now() + 5000
     while (Date.now() < stopAt) {
       // About 200 plain jobs/s and 400 queued jobs/s against a capacity of about 300 jobs/s.
-      await query(
-        schema.admin,
-        `insert into ${schema.table.name} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
-         select 't', q, '{}', now(), now(), now(), 25
-         from unnest(array[null, null] || array(select 'q' || lpad(i::text, 2, '0') from generate_series(0, 19) i
-                                                where random() < 0.2)) q`,
-      )
+      await schema.admin.query`
+        insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+        select 't', q, '{}', now(), now(), now(), 25
+        from unnest(array[null, null] || array(select 'q' || lpad(i::text, 2, '0') from generate_series(0, 19) i
+                                               where random() < 0.2)) q`
       await sleep(10)
     }
     for (const w of workers) await w.kill()

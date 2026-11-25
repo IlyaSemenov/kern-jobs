@@ -7,18 +7,21 @@ import {
   createDatabase,
   type DriverResult,
   QueryError,
+  queryOn,
   type TextValue,
 } from "kern-orm/db"
 
 import { createJobTable } from "../sql/job-table"
-import type { TextRow } from "../sql/statement"
-import { query } from "../test-harness/database"
 
 import type { ClaimRef } from "./db/claim"
+import * as t from "./db/types"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
 import { monotonicNow, sleep } from "./loop"
 import { createAcquireOnlyDriver } from "./test-harness"
+
+/** Row of a result of the fake pool: the text of each column by its name, or null. */
+type TextRow = Record<string, string | null>
 
 interface Call {
   text: string
@@ -290,7 +293,9 @@ test("runLocked runs its statements in the session that holds the lock, and reje
   const fake = createFakeSource()
   const hb = start(fake.source)
   ;(await fake.call(0)).resolve([])
-  const ran = hb.runLocked(target => query(target, "select 42 as answer"))
+  const ran = hb.runLocked(
+    async target => await queryOn(target)`select 42 as answer`.get(t.integer),
+  )
   let index = 1
   let call = await fake.call(index)
   while (!call.text.includes("42")) {
@@ -298,7 +303,7 @@ test("runLocked runs its statements in the session that holds the lock, and reje
     call = await fake.call(++index)
   }
   call.resolve([{ answer: "42" }])
-  expect(await ran).toEqual([{ answer: "42" }])
+  expect(await ran).toBe(42)
   expect([fake.acquires(), fake.journal]).toEqual([1, ["lock 1"]])
   void hb.stop()
   await expect(hb.runLocked(async () => {})).rejects.toThrow("The heartbeat holds no lock")

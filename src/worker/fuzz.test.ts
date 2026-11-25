@@ -10,7 +10,7 @@
 // - after the drain, each failure job completed after a handler of it returned, or failed for good by its own budget.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
-import type { Driver } from "kern-orm/db"
+import { type Driver, identifier, param, queryOn } from "kern-orm/db"
 
 import { enqueue } from "../sql/enqueue"
 import type { KeyMode } from "../sql/job"
@@ -21,12 +21,13 @@ import {
   createTestDriver,
   createTestSchema,
   databaseUrl,
-  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 
+import { jobTableSql } from "./db/sql"
+import * as t from "./db/types"
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
 import { startRuntime, type Worker, type WorkerTask } from "./runtime"
@@ -99,15 +100,13 @@ function pause(ms: number, signal: AbortSignal | null): Promise<void> {
 
 test(`fuzz seed ${SEED}`, async () => {
   const random = createRandom(SEED)
-  await query(
-    schema.admin,
-    `create table ${schema.name}.data (key text primary key, version int not null default 0)`,
-  )
-  await query(
-    schema.admin,
-    `insert into ${schema.name}.data (key) select unnest($1::text::text[])`,
-    [KEYS],
-  )
+  const jobTable = jobTableSql(schema.table)
+  const data = identifier(schema.name, "data")
+  const terminalLedger = identifier(schema.name, "terminal_ledger")
+  const failureLedger = identifier(schema.name, "failure_ledger")
+  await schema.admin.query`
+    create table ${data} (key text primary key, version int not null default 0)`
+  await schema.admin.query`insert into ${data} (key) select unnest(${param(t.array(t.text), KEYS)})`
   await createLedger(schema.admin, schema.name, schema.table.name)
 
   const seen = new Map<string, number>()
@@ -156,7 +155,7 @@ test(`fuzz seed ${SEED}`, async () => {
       const roll = random.float()
       const queued = roll < 0.2
       const doomed = !queued && roll < 0.3
-      await query(c, "begin")
+      await c.query`begin`
       if (doomed) {
         // A budget of one or two attempts, so that handlers and faults fail them for good.
         await enqueue(c, schema.table, { task: "d", maxAttempts: random.int(1, 2) })
@@ -168,11 +167,7 @@ test(`fuzz seed ${SEED}`, async () => {
         })
       } else {
         const key = KEYS[random.int(0, KEYS.length - 1)]!
-        await query(
-          c,
-          `update ${schema.name}.data set version = version + 1 where key = $1::text`,
-          [key],
-        )
+        await c.query`update ${data} set version = version + 1 where key = ${key}`
         // Throttle-like run times in the near future keep the pending row alive while events arrive.
         const mode = modeOf(key)
         const runAt =
@@ -189,10 +184,10 @@ test(`fuzz seed ${SEED}`, async () => {
       }
       await sleep(random.float() * 8)
       if (random.float() < 0.1) {
-        await query(c, "rollback")
+        await c.query`rollback`
         stats.rolledBack++
       } else {
-        await query(c, "commit")
+        await c.query`commit`
         if (doomed) stats.doomed++
         else if (queued) stats.queueJobs++
         else stats.events++
@@ -217,14 +212,8 @@ test(`fuzz seed ${SEED}`, async () => {
       }
       try {
         const version = job.key
-          ? Number(
-              (
-                await query(
-                  schema.driver,
-                  `select version from ${schema.name}.data where key = $1::text`,
-                  [job.key],
-                )
-              )[0]!.version,
+          ? await queryOn(schema.driver)`select version from ${data} where key = ${job.key}`.get(
+              t.integer,
             )
           : 0
         const long = faults && random.float() < 0.1
@@ -365,21 +354,29 @@ test(`fuzz seed ${SEED}`, async () => {
   })()
 
   const idle = async () =>
-    (
-      await query(
-        schema.admin,
-        `select count(*)::int as n from ${schema.table.name} where state in ('pending', 'active')`,
-      )
-    )[0]!.n === "0"
+    (await schema.admin.query`
+      select count(*)::int from ${jobTable} where state in ('pending', 'active')`.get(
+      t.integer,
+    )) === 0
 
   /** Returns a JSON snapshot of the claims in flight, the states of the workers, and the unfinished jobs. */
   const describeDrain = async () => {
-    const jobs = await query(
-      schema.admin,
-      `select id, state, task, queue, key, attempts, claim_id, locked_by,
-         run_at - now() as run_in, not_before - now() as not_before_in, lease_until - now() as lease_left
-       from ${schema.table.name} where state in ('pending', 'active') order by id`,
-    )
+    const jobs = await schema.admin.query`
+      select id, state, task, queue, key, attempts, claim_id, locked_by,
+        (run_at - now())::text as run_in, (not_before - now())::text as not_before_in, (lease_until - now())::text as lease_left
+      from ${jobTable} where state in ('pending', 'active') order by id`.select({
+      id: t.bigintText,
+      state: t.text,
+      task: t.text,
+      queue: t.text.nullable(),
+      key: t.text.nullable(),
+      attempts: t.integer,
+      claim_id: t.bigintText.nullable(),
+      locked_by: t.text.nullable(),
+      run_in: t.text.nullable(),
+      not_before_in: t.text.nullable(),
+      lease_left: t.text.nullable(),
+    })
     return JSON.stringify({ inFlight: [...inFlight], workers: workers.map(w => w.state), jobs })
   }
 
@@ -417,12 +414,11 @@ test(`fuzz seed ${SEED}`, async () => {
       }
       await sleep(10)
     }
-    const finals = await query(
-      schema.admin,
-      `select key, version from ${schema.name}.data order by key`,
-    )
-    for (const row of finals) {
-      const [key, version] = [row.key!, Number(row.version)]
+    const finals = await schema.admin.query`select key, version from ${data} order by key`.select({
+      key: t.text,
+      version: t.integer,
+    })
+    for (const { key, version } of finals) {
       const s = seen.get(key) ?? 0
       if (s !== version) lost.push({ round, key, seen: s, version })
     }
@@ -433,67 +429,65 @@ test(`fuzz seed ${SEED}`, async () => {
   await Promise.all(workers.map(w => w.stop()))
   stats.queueDone = doneQueueIds.size
 
-  const s = schema.name
-  const ledger = await query(
-    schema.admin,
-    `select
-       (select count(*) from ${s}.terminal_ledger)::text as terminal,
-       (select count(*) from ${s}.failure_ledger)::text as failure,
-       (select count(*) from ${schema.table.name} where task = '${FAILURE_TASK}' and state = 'failed')::text as exhausted`,
-  )
-  console.log(`fuzz seed ${SEED}:`, JSON.stringify({ ...stats, ledger: ledger[0] }))
+  const ledger = await schema.admin.query`
+    select
+      (select count(*) from ${terminalLedger})::int as terminal,
+      (select count(*) from ${failureLedger})::int as failure,
+      (select count(*) from ${jobTable} where task = ${FAILURE_TASK} and state = 'failed')::int as exhausted`
+    .select({ terminal: t.integer, failure: t.integer, exhausted: t.integer })
+    .take()
+  console.log(`fuzz seed ${SEED}:`, JSON.stringify({ ...stats, ledger }))
   expect(lost).toEqual([])
   expect([stats.jobOverlaps, stats.doubleCompletions, stats.queueOverlaps]).toEqual([0, 0, 0])
   expect(stats.queueDone).toBe(stats.queueJobs)
   expect(stats.outcomes.error ?? 0).toBe(0)
   // Only doomed jobs and failure jobs that spent their budgets stay, as failed.
   expect(
-    await query(
-      schema.admin,
-      `select task, state from ${schema.table.name}
-       where not (state = 'failed' and task in ('d', '${FAILURE_TASK}')) order by id`,
-    ),
+    await schema.admin.query`
+      select task, state from ${jobTable}
+      where not (state = 'failed' and task in ('d', ${FAILURE_TASK})) order by id`.select({
+      task: t.text,
+      state: t.text,
+    }),
   ).toEqual([])
   // Each doomed job has no key and a handler that always throws, so each committed one failed for good once, with the stamp of every worker.
   expect(stats.doomed).toBeGreaterThan(0)
-  expect(Number(ledger[0]!.terminal)).toBe(stats.doomed)
+  expect(ledger.terminal).toBe(stats.doomed)
   // Each committed failure for good of a claim with a stamp inserted exactly one failure job of that failure, and no failure job names another.
   expect(
-    await query(
-      schema.admin,
-      `select t.claim_id::text, count(f.job_id)::text as failure_jobs
-       from ${s}.terminal_ledger t left join ${s}.failure_ledger f on f.failure_id = t.claim_id
-       group by t.claim_id having count(f.job_id) <> 1 or count(distinct t.job_id) <> 1 or count(*) <> count(f.job_id)`,
+    await schema.admin.query`
+      select t.claim_id, count(f.job_id)::int as failure_jobs
+      from ${terminalLedger} t left join ${failureLedger} f on f.failure_id = t.claim_id
+      group by t.claim_id having count(f.job_id) <> 1 or count(distinct t.job_id) <> 1 or count(*) <> count(f.job_id)`.select(
+      { claim_id: t.bigintText, failure_jobs: t.integer },
     ),
   ).toEqual([])
   expect(
-    await query(
-      schema.admin,
-      `select f.failure_id::text from ${s}.failure_ledger f
-       where not exists (select from ${s}.terminal_ledger t where t.claim_id = f.failure_id)`,
+    await schema.admin.query`
+      select f.failure_id from ${failureLedger} f
+      where not exists (select from ${terminalLedger} t where t.claim_id = f.failure_id)`.pluck(
+      t.bigintText,
     ),
   ).toEqual([])
   // The reason of a failure that the reaper recorded agrees with the error of the failed row.
   expect(
-    await query(
-      schema.admin,
-      `select f.failure_id::text, f.reason, t.last_error from ${s}.failure_ledger f
-       join ${s}.terminal_ledger t on t.claim_id = f.failure_id
-       where (f.reason = 'lease-expired') <> (t.last_error = 'lease expired')`,
-    ),
+    await schema.admin.query`
+      select f.failure_id, f.reason, t.last_error from ${failureLedger} f
+      join ${terminalLedger} t on t.claim_id = f.failure_id
+      where (f.reason = 'lease-expired') <> (t.last_error = 'lease expired')`.select({
+      failure_id: t.bigintText,
+      reason: t.text,
+      last_error: t.text.nullable(),
+    }),
   ).toEqual([])
   // Each failure handler that ran named a committed failure.
   const committed = new Set(
-    (await query(schema.admin, `select claim_id::text as id from ${s}.terminal_ledger`)).map(
-      r => r.id!,
-    ),
+    await schema.admin.query`select claim_id from ${terminalLedger}`.pluck(t.bigintText),
   )
   expect([...failureRuns].filter(id => !committed.has(id))).toEqual([])
   // A failure job that is gone completed, which follows a handler of it that returned; any other failed for good by its own budget.
-  const gone = await query(
-    schema.admin,
-    `select f.job_id::text as id from ${s}.failure_ledger f
-     where not exists (select from ${schema.table.name} j where j.id = f.job_id)`,
-  )
-  expect(gone.map(r => r.id!).filter(id => !failureReturned.has(id))).toEqual([])
+  const gone = await schema.admin.query`
+    select f.job_id from ${failureLedger} f
+    where not exists (select from ${jobTable} j where j.id = f.job_id)`.pluck(t.bigintText)
+  expect(gone.filter(id => !failureReturned.has(id))).toEqual([])
 }, 180_000)

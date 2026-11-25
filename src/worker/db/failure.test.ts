@@ -1,7 +1,7 @@
 // Failure jobs: the attempt budget that each claim stamps, the failure job that a terminal fail and the reaper insert with the JobFailure of the stored row, the outcomes that insert none, and the atomicity and uniqueness of the insert.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { QueryError, sql } from "kern-orm/db"
+import { literal, QueryError, queryOn, sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { retryFailedJob } from "../../producer/administration"
@@ -13,14 +13,15 @@ import {
   type JobRow,
   jobs,
   only,
-  query,
   T,
   type TestSchema,
+  unsafeInteger,
 } from "../../test-harness/database"
 
 import { type Claim, claimCycle, type ClaimOptions, claimPlain } from "./claim"
 import { reap } from "./lease"
 import { fail, requeue } from "./settlement"
+import { jobTableSql } from "./sql"
 
 let schema: TestSchema
 beforeEach(async () => {
@@ -189,7 +190,7 @@ describe("terminal fail", () => {
       { maxAttempts: 1, reason: "handler-error" },
     ] as const
     for (const { maxAttempts, reason } of cases) {
-      await query(schema.admin, `delete from ${schema.table.name}`)
+      await schema.admin.query`delete from ${jobTableSql(schema.table)}`
       const claim = await claimed({ maxAttempts })
       expect(await failAt(claim, { reason })).toBe("failed")
       expect((await jobFailure()).reason).toBe(reason)
@@ -206,7 +207,7 @@ describe("terminal fail", () => {
 
   test("the JobFailure omits the payload of a job enqueued without one, and keeps a JSON null", async () => {
     for (const payload of [undefined, null, "text"]) {
-      await query(schema.admin, `delete from ${schema.table.name}`)
+      await schema.admin.query`delete from ${jobTableSql(schema.table)}`
       await failAt(await claimed({ payload, maxAttempts: 1 }))
       const e = await jobFailure()
       if (payload === undefined) expect("payload" in e).toBe(false)
@@ -215,17 +216,15 @@ describe("terminal fail", () => {
   })
 
   test("ids of the JobFailure are text, also above the safe integers of JavaScript", async () => {
-    const big = "9007199254740993"
-    await query(
-      schema.admin,
-      `alter table ${schema.table.name} alter column id restart with ${big}`,
-    )
-    await query(schema.admin, `select setval('${schema.table.sequence}', ${big})`)
+    const id = unsafeInteger
+    await schema.admin.query`
+      alter table ${jobTableSql(schema.table)} alter column id restart with ${literal(id)}`
+    await schema.admin.query`select setval(${schema.table.sequence}::regclass, ${id})`
     const claim = await claimed({ maxAttempts: 1 })
     await failAt(claim)
     const e = (await jobFailure()) as { id: string; job: { id: string } }
-    expect([e.id, e.job.id]).toEqual(["9007199254740994", big])
-    expect([claim.claimId, claim.id]).toEqual(["9007199254740994", big])
+    expect([e.id, e.job.id]).toEqual([String(id + 1n), String(id)])
+    expect([claim.claimId, claim.id]).toEqual([String(id + 1n), String(id)])
   })
 
   test("failedAt is in UTC with milliseconds whatever the TimeZone and DateStyle of the session", async () => {
@@ -234,8 +233,8 @@ describe("terminal fail", () => {
       now: T(2.5),
       pause: {
         afterOwnLock: async tx => {
-          await query(tx, `set local timezone = 'Asia/Tokyo'`)
-          await query(tx, `set local datestyle = 'SQL, DMY'`)
+          await queryOn(tx)`set local timezone = 'Asia/Tokyo'`
+          await queryOn(tx)`set local datestyle = 'SQL, DMY'`
         },
       },
     })
@@ -320,10 +319,8 @@ describe("atomicity and uniqueness", () => {
   })
 
   test("a rejected insert of the failure job rejects the fail and leaves the job active", async () => {
-    await query(
-      schema.admin,
-      `alter table ${schema.table.name} add constraint test_reject check (task <> 't:failure')`,
-    )
+    await schema.admin.query`
+      alter table ${jobTableSql(schema.table)} add constraint test_reject check (task <> 't:failure')`
     const claim = await claimed({ maxAttempts: 1 })
     const error = await failAt(claim).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(QueryError)
@@ -419,10 +416,8 @@ describe("reaper", () => {
   })
 
   test("a rejected insert of a failure job rejects the reap, which leaves the rows of its batch active", async () => {
-    await query(
-      schema.admin,
-      `alter table ${schema.table.name} add constraint test_reject check (task <> 't:failure')`,
-    )
+    await schema.admin.query`
+      alter table ${jobTableSql(schema.table)} add constraint test_reject check (task <> 't:failure')`
     const rejected = await claimed({ maxAttempts: 1 })
     // A job that returns to pending inserts nothing, and stays active with the batch too.
     const other = await claimed({ maxAttempts: 5 })

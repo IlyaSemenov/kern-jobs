@@ -1,9 +1,10 @@
 // Test helpers of the worker runtime: recorded events, a worker of a test schema with short timings, a driver that only reserves connections, and terminating the backends of a pool.
-import type { Connection, Driver, StatementExecutor } from "kern-orm/db"
+import { type Connection, type Driver, queryOn, type StatementExecutor } from "kern-orm/db"
 
-import { query, type TestSchema } from "../test-harness/database"
+import type { TestSchema } from "../test-harness/database"
 
 import { reap } from "./db/lease"
+import { jobTableSql } from "./db/sql"
 import type { WorkerEvent } from "./events"
 import { type RuntimeOptions, startRuntime, type Worker } from "./runtime"
 
@@ -116,25 +117,18 @@ export async function terminateBackends(
   observer: StatementExecutor,
   applicationName: string,
 ): Promise<number> {
-  const rows = await query(
-    observer,
-    `select pg_terminate_backend(pid) from pg_stat_activity
-     where application_name = $1::text and pid <> pg_backend_pid()`,
-    [applicationName],
-  )
-  return rows.length
+  return await queryOn(observer)`
+    select pg_terminate_backend(pid) from pg_stat_activity
+    where application_name = ${applicationName} and pid <> pg_backend_pid()`
 }
 
 /** Moves the lease of a job into the past and reaps it in one transaction, while its handler may still run. */
 export async function reapNow(schema: TestSchema, id: string): Promise<void> {
   const conn = await schema.connect()
-  await query(conn, "begin")
-  await query(
-    conn,
-    `update ${schema.table.name} set lease_until = now() - interval '1 second' where id = $1::text::bigint`,
-    [id],
-  )
+  await conn.query`begin`
+  await conn.query`
+    update ${jobTableSql(schema.table)} set lease_until = now() - interval '1 second' where id = ${id}`
   await reap(conn, schema.table)
-  await query(conn, "commit")
+  await conn.query`commit`
   await conn.close()
 }

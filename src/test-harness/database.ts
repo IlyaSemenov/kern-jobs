@@ -8,10 +8,12 @@ import {
   createStatement,
   type Database,
   type Driver,
+  identifier,
   isDriver,
   queryOn,
   sql,
   type SqlFragment,
+  type SqlQueryTemplate,
   type SqlStatement,
   type StatementExecutor,
 } from "kern-orm/db"
@@ -22,7 +24,6 @@ import postgres from "postgres"
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier } from "../sql/postgres"
-import { type Param, type TextRow, toStatement } from "../sql/statement"
 import { bindWorkerDb, type WorkerDb } from "../worker/db/db"
 import { jobTableSql } from "../worker/db/sql"
 import { job } from "../worker/db/tables/job"
@@ -121,6 +122,8 @@ export function withHooks(driver: Driver, schemaName: string, hooks: string[]): 
 /** Connection of a test, held until `close`, with the pid of its backend. */
 export interface Conn extends Pick<Connection, "execute" | "executeScript"> {
   pid: number
+  /** Template of a statement on the connection, such as ``conn.query`begin` ``. */
+  query: SqlQueryTemplate
   close(): Promise<void>
 }
 
@@ -134,6 +137,7 @@ export async function connectTo(
   const connection = await driver.acquire()
   return {
     pid: await getBackendPid(connection),
+    query: queryOn(connection),
     execute: statement => connection.execute(statement),
     executeScript: text => connection.executeScript(text),
     async close() {
@@ -212,27 +216,11 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
       // The pool drops the schemas, since it reconnects when the connections of the test died, such as in a restart.
       for (const c of conns) await c.close().catch(() => {})
       for (const name of schemaNames) {
-        await query(drivers[0]!, `drop schema if exists ${quoteIdentifier(name)} cascade`)
+        await queryOn(drivers[0]!)`drop schema if exists ${identifier(name)} cascade`
       }
       for (const driver of drivers) await driver.close()
     },
   }
-}
-
-/**
- * Executes a statement of SQL text with parameters that `encodeParam` turns into text, such as for the setup or the checks of a test, and returns its rows by the names of their columns; of several columns of one name, the last one wins.
- */
-export async function query(
-  target: StatementExecutor,
-  text: string,
-  params: readonly Param[] = [],
-): Promise<TextRow[]> {
-  const { columns, rows } = await target.execute(toStatement(text, params))
-  return rows.map(values => {
-    const row: TextRow = {}
-    columns.forEach(({ name }, i) => (row[name] = values[i] ?? null))
-    return row
-  })
 }
 
 /** Holds breakpoint `name`: statements of connections with this hook block in it until `release()`. */
@@ -240,9 +228,9 @@ export async function holdHook(
   conn: StatementExecutor,
   name: string,
 ): Promise<() => Promise<void>> {
-  await query(conn, `select pg_advisory_lock(1, hashtext($1::text))`, [name])
+  await queryOn(conn)`select pg_advisory_lock(1, hashtext(${name}))`
   return async () => {
-    await query(conn, `select pg_advisory_unlock(1, hashtext($1::text))`, [name])
+    await queryOn(conn)`select pg_advisory_unlock(1, hashtext(${name}))`
   }
 }
 
@@ -298,6 +286,9 @@ export const T = (seconds: number) => new Date(BASE + Math.round(seconds * 1000)
 /** Converts virtual time back to seconds. */
 export const secondsOf = (d: Date) => (d.getTime() - BASE) / 1000
 
+/** The least integer that a JavaScript number cannot hold, 2^53 + 1, which a number rounds to 2^53; a bigint id from it checks that the id is not read as a number. */
+export const unsafeInteger = 2n ** 53n + 1n
+
 /** Row of the job table with all its columns. */
 export type JobRow = Selectable<typeof job>
 
@@ -307,7 +298,7 @@ export async function jobs(
   where: SqlFragment = sql`true`,
 ): Promise<JobRow[]> {
   const columns = columnsOf(job, "*", { alias: "j" })
-  const rows = await queryOn(schema.admin)`
+  const rows = await schema.admin.query`
     select ${columns} from ${jobTableSql(schema.table)} j where ${where} order by j.id`.select({
     job: columns,
   })

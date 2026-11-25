@@ -7,7 +7,6 @@ import {
   createTestSchema,
   databaseUrl,
   jobs,
-  query,
   sleep,
   type TestSchema,
 } from "../test-harness/database"
@@ -83,7 +82,7 @@ test("a producer that holds a pending insert of an expired job's key does not st
   })
   await sleep(20)
   const producer = await schema.connect()
-  await query(producer, "begin")
+  await producer.query`begin`
   await enqueue(producer, schema.table, { task: "t", key: "blocked" })
   const log = recordEvents()
   const reaper = startReaper(schema.driver, schema.table, {
@@ -97,7 +96,7 @@ test("a producer that holds a pending insert of an expired job's key does not st
       ["blocked", "active"],
       ["independent", "pending"],
     ])
-    await query(producer, "rollback")
+    await producer.query`rollback`
     await log.waitFor("reap", e => e.jobs.some(j => j.id === blocked.id))
     expect((await jobs(schema)).map(r => [r.key, r.state])).toEqual([
       ["blocked", "pending"],
@@ -105,7 +104,7 @@ test("a producer that holds a pending insert of an expired job's key does not st
     ])
     expect(log.all("reap-error")).toEqual([])
   } finally {
-    await query(producer, "rollback")
+    await producer.query`rollback`
     await reaper.stop()
   }
 })

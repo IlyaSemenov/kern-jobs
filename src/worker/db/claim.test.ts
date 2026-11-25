@@ -12,7 +12,6 @@ import {
   isPending,
   jobs,
   only,
-  query,
   recordLabels,
   secondsOf,
   sleep,
@@ -31,6 +30,8 @@ import {
 } from "./claim"
 import type { WorkerDb } from "./db"
 import { complete } from "./settlement"
+import { jobTableSql } from "./sql"
+import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
 let schema: TestSchema
@@ -83,10 +84,10 @@ describe("queue mutex", () => {
   test("two active jobs in one (scope, queue) are structurally impossible", async () => {
     await enqueue(schema.admin, schema.table, { task: "t", queue: "q", now: T(0) })
     await enqueue(schema.admin, schema.table, { task: "t", queue: "q", now: T(0) })
-    const err = await query(
-      schema.admin,
-      `update ${schema.table.name} set state = 'active', claim_id = id, lease_until = now()`,
-    ).catch(e => e)
+    const err = await schema.admin.query`
+      update ${jobTableSql(schema.table)} set state = 'active', claim_id = id, lease_until = now()`.catch(
+      e => e,
+    )
     expect(isUniqueViolation(err, "job_active_queue_idx")).toBe(true)
   })
 
@@ -137,14 +138,14 @@ describe("start order", () => {
     })
     const a = await schema.connect()
     const b = await schema.connect()
-    await query(a, "begin")
+    await a.query`begin`
     const ra = await claimQueued(a, schema.table, { ...W("a"), now: T(5) })
     expect(ra.kind === "job" && ra.claim.id).toBe(j1.id)
     // B does not block: the uncommitted claim of A holds the advisory lock of the queue.
     const rb = claimQueued(b, schema.table, { ...W("b"), now: T(5) })
     expect(await isPending(rb, 300)).toBe(false)
     expect((await rb).kind).toBe("none")
-    await query(a, "commit")
+    await a.query`commit`
     expect((await claimQueued(b, schema.table, { ...W("b"), now: T(5) })).kind).toBe("none")
     if (ra.kind !== "job") throw new Error()
     expect(await complete(schema.db, ra.claim)).toBe(true)
@@ -168,7 +169,7 @@ describe("start order", () => {
       now: T(2),
     })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await enqueue(producer, schema.table, {
       task: "t",
       queue: "q",
@@ -183,7 +184,7 @@ describe("start order", () => {
     expect(
       await claimCycle(schema.admin, schema.table, { ...W("a"), slots: 4, now: T(5) }),
     ).toEqual([])
-    await query(producer, "commit")
+    await producer.query`commit`
     const claim = only(
       await claimCycle(schema.admin, schema.table, { ...W("a"), slots: 4, now: T(5) }),
     )
@@ -337,18 +338,12 @@ describe("stress", () => {
   test("8 workers × 4 slots, 1000 jobs in 10 queues and 500 without a queue", async () => {
     const queued = 1000
     const plain = 500
-    await query(
-      schema.admin,
-      `insert into ${schema.table.name} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
-       select 't', 'q' || (i % 10), to_jsonb(i), now(), now(), now(), 25 from generate_series(1, $1) i`,
-      [queued],
-    )
-    await query(
-      schema.admin,
-      `insert into ${schema.table.name} (task, payload, run_at, window_started_at, created_at, max_attempts)
-       select 't', to_jsonb(i), now(), now(), now(), 25 from generate_series(1, $1) i`,
-      [plain],
-    )
+    await schema.admin.query`
+      insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+      select 't', 'q' || (i % 10), to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${queued}::int) i`
+    await schema.admin.query`
+      insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+      select 't', to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${plain}::int) i`
     const order = new Map<string, number[]>()
     const running = new Map<string, number>()
     const completed = new Map<string, number>()
@@ -559,7 +554,7 @@ describe("an interrupted claim cycle", () => {
       onClaim: claim => received.push(claim),
     })
     await waitForLock(schema.admin, worker.pid)
-    await query(schema.admin, `select pg_terminate_backend($1::text::int)`, [worker.pid])
+    await schema.admin.query`select pg_terminate_backend(${worker.pid}::int)`
     await expect(cycle).rejects.toBeInstanceOf(ConnectionError)
     await release()
     expect(received.map(c => c.id)).toEqual([plain.id])
@@ -585,43 +580,41 @@ describe("an interrupted claim cycle", () => {
   })
 })
 
+/** Planner settings that each plan turns off. */
 const PLANS = [
   [],
-  ["enable_nestloop = off"],
-  ["enable_hashjoin = off", "enable_mergejoin = off"],
-  ["enable_indexscan = off", "enable_indexonlyscan = off"],
-  ["enable_indexscan = off", "enable_indexonlyscan = off", "enable_bitmapscan = off"],
-  ["enable_seqscan = off"],
-  ["enable_material = off", "enable_memoize = off"],
+  ["enable_nestloop"],
+  ["enable_hashjoin", "enable_mergejoin"],
+  ["enable_indexscan", "enable_indexonlyscan"],
+  ["enable_indexscan", "enable_indexonlyscan", "enable_bitmapscan"],
+  ["enable_seqscan"],
+  ["enable_material", "enable_memoize"],
 ]
 
 describe("advisory locks of claimQueued", () => {
   for (const busy of [0, 5, 50]) {
     for (const plan of PLANS) {
-      test(`${busy} busy of 60 queues, plan [${plan.join(", ") || "default"}]: one lock held`, async () => {
+      test(`${busy} busy of 60 queues, plan [${plan.map(setting => `${setting} = off`).join(", ") || "default"}]: one lock held`, async () => {
         for (let i = 0; i < 60; i++)
           await enqueue(schema.admin, schema.table, { task: "t", queue: queueName(i), now: T(0) })
-        await query(
-          schema.admin,
-          `update ${schema.table.name} set state = 'active', claim_id = id, lease_until = $1 where queue < $2`,
-          [T(3600), queueName(busy)],
-        )
+        await schema.admin.query`
+          update ${jobTableSql(schema.table)} set state = 'active', claim_id = id, lease_until = ${T(3600)}
+          where queue < ${queueName(busy)}`
         for (let i = 0; i < busy; i++)
           await enqueue(schema.admin, schema.table, { task: "t", queue: queueName(i), now: T(0) })
-        await query(schema.admin, `analyze ${schema.table.name}`)
+        await schema.admin.query`analyze ${jobTableSql(schema.table)}`
         const c = await schema.connect()
-        for (const setting of plan) await query(c, `set ${setting}`)
+        for (const setting of plan) await c.query`select set_config(${setting}, 'off', false)`
         // An explicit transaction keeps xact locks until commit, which makes extra locks observable.
-        await query(c, "begin")
+        await c.query`begin`
         const r = await claimQueued(c, schema.table, { worker: "w", tasks: ["t"], now: T(1) })
-        const rows = await query(
-          schema.admin,
-          `select count(*)::int as n from pg_locks where pid = $1::text::int and locktype = 'advisory'`,
-          [c.pid],
+        const locks = await schema.admin.query`
+          select count(*)::int from pg_locks where pid = ${c.pid} and locktype = 'advisory'`.get(
+          t.integer,
         )
-        await query(c, "rollback")
+        await c.query`rollback`
         expect(r.kind).toBe("job")
-        expect(rows[0]!.n).toBe("1")
+        expect(locks).toBe(1)
       })
     }
   }

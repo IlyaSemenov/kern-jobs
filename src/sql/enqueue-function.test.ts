@@ -1,23 +1,19 @@
 // The SQL function `enqueue` of the schema: the same jobs and results as the enqueue of the core, its arguments, many rows of one statement, transactions and concurrent producers, and its independence of the search path and the name of the schema.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
+import { identifier, joinSql, param, sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
-import {
-  type Conn,
-  createTestSchema,
-  isPending,
-  query,
-  type TestSchema,
-} from "../test-harness/database"
+import { type Conn, createTestSchema, isPending, type TestSchema } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimPlain } from "../worker/db/claim"
+import { jobTableSql } from "../worker/db/sql"
+import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
 import type { JobTable } from "./job-table"
-import { quoteIdentifier } from "./postgres"
-import { queryValues, type ValuesTarget } from "./statement"
+import { encodeParam, type ValuesTarget } from "./statement"
 
 let schema: TestSchema
 beforeEach(async () => {
@@ -27,23 +23,22 @@ afterEach(async () => {
   await schema.dispose()
 })
 
-/** Types of the arguments of the SQL function by their names. */
-const argTypes = {
-  task: "text",
-  payload: "jsonb",
-  scope: "text",
-  key: "text",
-  queue: "text",
-  key_mode: "text",
-  run_at: "timestamptz",
-  delay: "float8",
-  max_wait: "float8",
-  max_attempts: "int",
-  reset_attempts: "boolean",
-}
+/** Names of the arguments of the SQL function. */
+type SqlArgName =
+  | "task"
+  | "payload"
+  | "scope"
+  | "key"
+  | "queue"
+  | "key_mode"
+  | "run_at"
+  | "delay"
+  | "max_wait"
+  | "max_attempts"
+  | "reset_attempts"
 
 /** Arguments of the SQL function by their names, a payload as its JSON text; an absent one is omitted from the call. */
-type SqlArgs = Partial<Record<keyof typeof argTypes, string | number | boolean | null>>
+type SqlArgs = Partial<Record<SqlArgName, string | number | boolean | null>>
 
 /** Result of a call of the SQL function, with the time of its statement as text. */
 interface SqlResult {
@@ -52,44 +47,51 @@ interface SqlResult {
   now: string
 }
 
-/** Calls the SQL function of a job table with the given arguments in named notation, and returns its result. */
+/** Calls the SQL function of a job table with the given arguments in named notation, each passed as text of the type of the argument, and returns the id of the job, whether it created the job, and the time of the statement as text. */
 async function callEnqueue(
-  target: ValuesTarget,
+  conn: Conn,
   args: SqlArgs,
   table: JobTable = schema.table,
 ): Promise<SqlResult> {
-  const names = Object.keys(args) as (keyof typeof argTypes)[]
-  const list = names.map((name, i) => `${name} => $${i + 1}::text::${argTypes[name]}`).join(", ")
-  const values = await queryValues(
-    target,
-    `select e.id::text, e.created::text, statement_timestamp()::text
-     from ${quoteIdentifier(table.schemaName)}.enqueue(${list}) e`,
-    names.map(name => args[name]),
+  const names = Object.keys(args) as SqlArgName[]
+  const list = joinSql(
+    // A parameter without a type takes the type of its argument, which PostgreSQL parses from the text.
+    names.map(name => sql`${identifier(name)} => ${encodeParam(args[name])}`),
   )
-  const [id, created, now] = values[0]!
-  return { id: id!, created: created === "true", now: now! }
+  return await conn.query`
+    select e.id, e.created, statement_timestamp()::text as now
+    from ${identifier(table.schemaName, "enqueue")}(${list}) e`
+    .select({ id: t.bigintText, created: t.boolean, now: t.text })
+    .take()
 }
 
-/** Returns the rows of a scope in the order of their ids, with every column that an enqueue sets as text, other than the id and the scope. */
+/** Returns the rows of a scope in the order of their ids, with every column that an enqueue sets other than the id and the scope, and its JSON and times as text to compare them exactly. */
 async function rowsOf(scope: string) {
-  return query(
-    schema.admin,
-    `select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
-            window_started_at::text as window_started_at, created_at::text as created_at, attempts::text as attempts,
-            max_attempts::text as max_attempts, state
-     from ${schema.table.name} where scope = $1 order by id`,
-    [scope],
-  )
+  return schema.admin.query`
+    select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
+           window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state
+    from ${jobTableSql(schema.table)} where scope = ${scope} order by id`.select({
+    task: t.text,
+    queue: t.text.nullable(),
+    key: t.text.nullable(),
+    key_mode: t.text,
+    payload: t.text.nullable(),
+    run_at: t.text,
+    not_before: t.text.nullable(),
+    window_started_at: t.text,
+    created_at: t.text,
+    attempts: t.integer,
+    max_attempts: t.integer,
+    state: t.text,
+  })
 }
 
 /** Returns the ids of the rows of a scope in their order. */
 async function idsOf(scope: string): Promise<string[]> {
-  const rows = await query(
-    schema.admin,
-    `select j.id::text as id from ${schema.table.name} j where scope = $1 order by j.id`,
-    [scope],
+  return await schema.admin.query`
+    select j.id from ${jobTableSql(schema.table)} j where scope = ${scope} order by j.id`.pluck(
+    t.bigintText,
   )
-  return rows.map(row => row.id!)
 }
 
 describe("the same jobs as the enqueue of the core", () => {
@@ -136,49 +138,41 @@ describe("the same jobs as the enqueue of the core", () => {
 
   /** Runs a step in both scopes and checks that they give the same result and the same rows. */
   async function runStep(step: Step): Promise<void> {
-    const table = schema.table.name
+    const table = jobTableSql(schema.table)
     if ("enqueue" in step) {
-      const sql = await callEnqueue(schema.admin, toSqlArgs(step.enqueue))
-      const core = await enqueue(atTime(sql.now), schema.table, {
+      const called = await callEnqueue(schema.admin, toSqlArgs(step.enqueue))
+      const core = await enqueue(atTime(called.now), schema.table, {
         task: "t",
         scope: "core",
         ...step.enqueue,
       })
-      expect(sql.created).toBe(core.created)
+      expect(called.created).toBe(core.created)
       // The rows of the two scopes match by their order, so each result is the row of the same position.
-      expect((await idsOf("sql")).indexOf(sql.id)).toBe((await idsOf("core")).indexOf(core.id))
+      expect((await idsOf("sql")).indexOf(called.id)).toBe((await idsOf("core")).indexOf(core.id))
     } else if ("wait" in step) {
-      await query(
-        schema.admin,
-        `update ${table} set run_at = run_at - make_interval(secs => $1::text::float8),
-           not_before = not_before - make_interval(secs => $1::text::float8),
-           window_started_at = window_started_at - make_interval(secs => $1::text::float8),
-           created_at = created_at - make_interval(secs => $1::text::float8)`,
-        [step.wait],
-      )
+      const wait = param(t.doublePrecision, step.wait)
+      await schema.admin.query`
+        update ${table} set run_at = run_at - make_interval(secs => ${wait}),
+          not_before = not_before - make_interval(secs => ${wait}),
+          window_started_at = window_started_at - make_interval(secs => ${wait}),
+          created_at = created_at - make_interval(secs => ${wait})`
     } else if ("claim" in step) {
-      await query(
-        schema.admin,
-        `update ${table} j set state = 'active', attempts = attempts + 1, claim_id = nextval('${schema.table.sequence}'),
-           lease_until = statement_timestamp() + interval '1 hour', locked_by = 'w', locked_at = statement_timestamp()
-         where key = $1::text and state = 'pending'
-           and not exists (select from ${table} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`,
-        [step.claim],
-      )
+      await schema.admin.query`
+        update ${table} j set state = 'active', attempts = attempts + 1, claim_id = nextval(${schema.table.sequence}::regclass),
+          lease_until = statement_timestamp() + interval '1 hour', locked_by = 'w', locked_at = statement_timestamp()
+        where key = ${step.claim} and state = 'pending'
+          and not exists (select from ${table} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`
     } else if ("fail" in step) {
-      await query(
-        schema.admin,
-        `update ${table} j set state = 'pending', claim_id = null, lease_until = null,
-           not_before = statement_timestamp() + make_interval(secs => $2::text::float8),
-           run_at = statement_timestamp() + make_interval(secs => $2::text::float8), window_started_at = statement_timestamp()
-         where j.id = (select min(a.id) from ${table} a where a.scope = j.scope and a.key = $1::text and a.state = 'active')
-           and not exists (select from ${table} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`,
-        [step.fail, step.seconds],
-      )
+      const backoff = param(t.doublePrecision, step.seconds)
+      await schema.admin.query`
+        update ${table} j set state = 'pending', claim_id = null, lease_until = null,
+          not_before = statement_timestamp() + make_interval(secs => ${backoff}),
+          run_at = statement_timestamp() + make_interval(secs => ${backoff}), window_started_at = statement_timestamp()
+        where j.id = (select min(a.id) from ${table} a where a.scope = j.scope and a.key = ${step.fail} and a.state = 'active')
+          and not exists (select from ${table} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`
     } else {
-      await query(schema.admin, `delete from ${table} where key = $1::text and state = 'active'`, [
-        step.complete,
-      ])
+      await schema.admin
+        .query`delete from ${table} where key = ${step.complete} and state = 'active'`
     }
     expect(await rowsOf("sql")).toEqual(await rowsOf("core"))
   }
@@ -319,20 +313,27 @@ describe("arguments", () => {
       reset_attempts: null,
     })
     expect([omitted.created, nulls.created]).toEqual([true, true])
-    const rows = await query(
-      schema.admin,
-      `select j.id::text as id, scope, (payload is null)::text as no_payload, key, queue, key_mode,
-              max_attempts::text as max_attempts, (run_at = window_started_at and run_at = created_at)::text as at_now
-       from ${schema.table.name} j order by j.id`,
-    )
+    const rows = await schema.admin.query`
+      select j.id, scope, payload is null as no_payload, key, queue, key_mode, max_attempts,
+             (run_at = window_started_at and run_at = created_at) as at_now
+      from ${jobTableSql(schema.table)} j order by j.id`.select({
+      id: t.bigintText,
+      scope: t.text,
+      no_payload: t.boolean,
+      key: t.text.nullable(),
+      queue: t.text.nullable(),
+      key_mode: t.text,
+      max_attempts: t.integer,
+      at_now: t.boolean,
+    })
     const defaults = {
       scope: "",
-      no_payload: "true",
+      no_payload: true,
       key: null,
       queue: null,
       key_mode: "replace",
-      max_attempts: "25",
-      at_now: "true",
+      max_attempts: 25,
+      at_now: true,
     }
     expect(rows).toEqual([
       { id: omitted.id, ...defaults },
@@ -341,24 +342,26 @@ describe("arguments", () => {
   })
 
   test("takes the bounds of the options of the jobs API: delay and max_wait of 1e12 seconds, run_at in the years 1 and 9999, and max_attempts of 2^31 − 1", async () => {
-    const t = { task: "t" }
+    const base = { task: "t" }
     await callEnqueue(schema.admin, {
-      ...t,
+      ...base,
       run_at: "0001-01-01T00:00:00Z",
       max_attempts: 2 ** 31 - 1,
     })
-    await callEnqueue(schema.admin, { ...t, run_at: "9999-12-31T23:59:59.999999Z" })
-    await callEnqueue(schema.admin, { ...t, delay: 1e12 })
-    await callEnqueue(schema.admin, { ...t, key_mode: "debounce", delay: 1e12, max_wait: 1e12 })
+    await callEnqueue(schema.admin, { ...base, run_at: "9999-12-31T23:59:59.999999Z" })
+    await callEnqueue(schema.admin, { ...base, delay: 1e12 })
+    await callEnqueue(schema.admin, { ...base, key_mode: "debounce", delay: 1e12, max_wait: 1e12 })
     // Outside debounce, max_wait is ignored.
-    await callEnqueue(schema.admin, { ...t, key_mode: "replace", max_wait: -1 })
+    await callEnqueue(schema.admin, { ...base, key_mode: "replace", max_wait: -1 })
     expect(
-      (await query(schema.admin, `select count(*)::text as n from ${schema.table.name}`))[0]!.n,
-    ).toBe("5")
+      await schema.admin.query`select count(*)::int from ${jobTableSql(schema.table)}`.get(
+        t.integer,
+      ),
+    ).toBe(5)
   })
 
   test("rejects a wrong argument with its error, and the table rejects a value over its limit", async () => {
-    const t = { task: "t" }
+    const base = { task: "t" }
     const debounce = { key_mode: "debounce", delay: 2, max_wait: 10 }
     const cases: [SqlArgs, string, string][] = [
       [{ task: null }, "22004", "task must not be null"],
@@ -367,122 +370,130 @@ describe("arguments", () => {
         "22023",
         "The name of a task must not end with :failure, which names the failure task of a task, got t:failure",
       ],
-      [{ ...t, scope: null }, "22004", "scope must not be null: omit it for an unscoped job"],
+      [{ ...base, scope: null }, "22004", "scope must not be null: omit it for an unscoped job"],
       [
-        { ...t, key_mode: "merge" },
+        { ...base, key_mode: "merge" },
         "22023",
         "key_mode must be replace, keep, or debounce, got merge",
       ],
       [
-        { ...t, delay: 1, run_at: "2030-01-01T00:00:00Z" },
+        { ...base, delay: 1, run_at: "2030-01-01T00:00:00Z" },
         "22023",
         "Pass either delay or run_at, not both",
       ],
       [
-        { ...debounce, ...t, delay: null },
+        { ...debounce, ...base, delay: null },
         "22023",
         "key_mode debounce takes delay and max_wait, and no run_at",
       ],
       [
-        { ...debounce, ...t, max_wait: null },
+        { ...debounce, ...base, max_wait: null },
         "22023",
         "key_mode debounce takes delay and max_wait, and no run_at",
       ],
       [
-        { ...t, key_mode: "debounce", max_wait: 10, run_at: "2030-01-01T00:00:00Z" },
+        { ...base, key_mode: "debounce", max_wait: 10, run_at: "2030-01-01T00:00:00Z" },
         "22023",
         "key_mode debounce takes delay and max_wait, and no run_at",
       ],
-      [{ ...t, delay: -1 }, "22023", "delay must be a number of seconds from 0 to 1e12, got -1"],
-      [{ ...t, delay: 1e13 }, "22023", "delay must be a number of seconds from 0 to 1e12"],
+      [{ ...base, delay: -1 }, "22023", "delay must be a number of seconds from 0 to 1e12, got -1"],
+      [{ ...base, delay: 1e13 }, "22023", "delay must be a number of seconds from 0 to 1e12"],
       [
-        { ...t, delay: "NaN" },
+        { ...base, delay: "NaN" },
         "22023",
         "delay must be a number of seconds from 0 to 1e12, got NaN",
       ],
-      [{ ...t, delay: "Infinity" }, "22023", "delay must be a number of seconds from 0 to 1e12"],
+      [{ ...base, delay: "Infinity" }, "22023", "delay must be a number of seconds from 0 to 1e12"],
       [
-        { ...debounce, ...t, max_wait: -1 },
+        { ...debounce, ...base, max_wait: -1 },
         "22023",
         "max_wait must be a number of seconds from 0 to 1e12, got -1",
       ],
       [
-        { ...t, run_at: "infinity" },
+        { ...base, run_at: "infinity" },
         "22023",
         "run_at must be a time in the years 1 to 9999, got infinity",
       ],
-      [{ ...t, run_at: "-infinity" }, "22023", "run_at must be a time in the years 1 to 9999"],
+      [{ ...base, run_at: "-infinity" }, "22023", "run_at must be a time in the years 1 to 9999"],
       [
-        { ...t, run_at: "10000-01-01T00:00:00Z" },
+        { ...base, run_at: "10000-01-01T00:00:00Z" },
         "22023",
         "run_at must be a time in the years 1 to 9999",
       ],
       [
-        { ...t, max_attempts: 0 },
+        { ...base, max_attempts: 0 },
         "22023",
         "max_attempts must be an integer from 1 to 2147483647, got 0",
       ],
       [{ task: "t".repeat(129) }, "23514", 'violates check constraint "job_task_check"'],
-      [{ ...t, scope: "s".repeat(129) }, "23514", 'violates check constraint "job_scope_check"'],
-      [{ ...t, key: "k".repeat(1025) }, "23514", 'violates check constraint "job_key_check"'],
-      [{ ...t, queue: "q".repeat(1025) }, "23514", 'violates check constraint "job_queue_check"'],
+      [{ ...base, scope: "s".repeat(129) }, "23514", 'violates check constraint "job_scope_check"'],
+      [{ ...base, key: "k".repeat(1025) }, "23514", 'violates check constraint "job_key_check"'],
+      [
+        { ...base, queue: "q".repeat(1025) },
+        "23514",
+        'violates check constraint "job_queue_check"',
+      ],
     ]
     for (const [args, code, message] of cases) {
       const outcome = callEnqueue(schema.admin, args)
       await expect(outcome).rejects.toMatchObject({ code })
       await expect(outcome).rejects.toThrow(message)
     }
-    const count = await query(schema.admin, `select count(*)::text as n from ${schema.table.name}`)
-    expect(count[0]!.n).toBe("0")
+    expect(
+      await schema.admin.query`select count(*)::int from ${jobTableSql(schema.table)}`.get(
+        t.integer,
+      ),
+    ).toBe(0)
   })
 })
 
 describe("many rows of one statement", () => {
   test("enqueues a job for each row, merging the rows of one key one after another, as separate enqueues", async () => {
-    const results = await query(
-      schema.admin,
-      `select e.id::text as id, e.created::text as created
-       from (values (1, 'a'), (2, 'a'), (3, null), (4, 'b'), (5, 'a')) v(n, k)
-       cross join lateral ${quoteIdentifier(schema.name)}.enqueue(task => 't', key => v.k, payload => to_jsonb(v.n)) e
-       order by v.n`,
-    )
+    const results = await schema.admin.query`
+      select e.id, e.created
+      from (values (1, 'a'), (2, 'a'), (3, null), (4, 'b'), (5, 'a')) v(n, k)
+      cross join lateral ${identifier(schema.name, "enqueue")}(task => 't', key => v.k, payload => to_jsonb(v.n)) e
+      order by v.n`.select({ id: t.bigintText, created: t.boolean })
     const [a, b] = [results[0]!.id, results[3]!.id]
-    expect(results.map(r => r.created)).toEqual(["true", "false", "true", "true", "false"])
+    expect(results.map(r => r.created)).toEqual([true, false, true, true, false])
     expect(results.map(r => r.id)).toEqual([a, a, results[2]!.id, b, a])
-    const rows = await query(
-      schema.admin,
-      `select key, payload::text as payload from ${schema.table.name} order by id`,
-    )
+    const rows = await schema.admin.query`
+      select key, payload from ${jobTableSql(schema.table)} order by id`.select({
+      key: t.text.nullable(),
+      payload: t.jsonb,
+    })
     expect(rows).toEqual([
-      { key: "a", payload: "5" },
-      { key: null, payload: "3" },
-      { key: "b", payload: "4" },
+      { key: "a", payload: 5 },
+      { key: null, payload: 3 },
+      { key: "b", payload: 4 },
     ])
   })
 
   test("every row takes the time of the statement that calls the function, not of its transaction, so the debounce of repeated keys keeps the run time of the first", async () => {
     const producer = await schema.connect()
-    await query(producer, "begin")
-    await query(producer, "select pg_sleep(0.01)")
-    const [call] = await query(
-      producer,
-      `select statement_timestamp()::text as now, transaction_timestamp()::text as began, count(*)::text as n
-       from (
-         select ${quoteIdentifier(schema.name)}.enqueue(task => 't', key => v.k, key_mode => 'debounce', delay => 2, max_wait => 10)
-         from (values ('a'), ('a'), ('b')) v(k)
-       ) e`,
-    )
-    await query(producer, "commit")
-    expect(call!.n).toBe("3")
-    expect(call!.now).not.toBe(call!.began)
-    const rows = await query(
-      schema.admin,
-      `select key, created_at::text as created_at, (run_at - created_at)::text as wait
-       from ${schema.table.name} order by id`,
-    )
+    await producer.query`begin`
+    await producer.query`select pg_sleep(0.01)`
+    const call = await producer.query`
+      select statement_timestamp()::text as now, transaction_timestamp()::text as began, count(*)::int as n
+      from (
+        select ${identifier(schema.name, "enqueue")}(task => 't', key => v.k, key_mode => 'debounce', delay => 2, max_wait => 10)
+        from (values ('a'), ('a'), ('b')) v(k)
+      ) e`
+      .select({ now: t.text, began: t.text, n: t.integer })
+      .take()
+    await producer.query`commit`
+    expect(call.n).toBe(3)
+    expect(call.now).not.toBe(call.began)
+    const rows = await schema.admin.query`
+      select key, created_at::text as created_at, (run_at - created_at)::text as wait
+      from ${jobTableSql(schema.table)} order by id`.select({
+      key: t.text,
+      created_at: t.text,
+      wait: t.text,
+    })
     expect(rows).toEqual([
-      { key: "a", created_at: call!.now!, wait: "00:00:02" },
-      { key: "b", created_at: call!.now!, wait: "00:00:02" },
+      { key: "a", created_at: call.now, wait: "00:00:02" },
+      { key: "b", created_at: call.now, wait: "00:00:02" },
     ])
   })
 })
@@ -492,47 +503,45 @@ describe("transactions", () => {
 
   test("the job is invisible to workers until the transaction of the caller commits, and a rollback removes it", async () => {
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     await callEnqueue(producer, { task: "t", key: "rolled-back" })
     expect(await claimPlain(schema.admin, schema.table, W)).toEqual([])
-    await query(producer, "rollback")
-    await query(producer, "begin")
+    await producer.query`rollback`
+    await producer.query`begin`
     const { id } = await callEnqueue(producer, { task: "t", key: "committed" })
     expect(await claimPlain(schema.admin, schema.table, W)).toEqual([])
-    await query(producer, "commit")
+    await producer.query`commit`
     expect((await claimPlain(schema.admin, schema.table, W)).map(claim => claim.id)).toEqual([id])
   })
 
   for (const outcome of ["commit", "rollback"] as const) {
     test(`a producer of a key waits for an uncommitted enqueue of the key, and after its ${outcome} ${outcome === "commit" ? "merges into the job" : "inserts its own"}`, async () => {
       const [first, second] = [await schema.connect(), await schema.connect()]
-      await query(first, "begin")
+      await first.query`begin`
       const a = await callEnqueue(first, { task: "t", key: "k", payload: "1" })
       const event = callEnqueue(second, { task: "t", key: "k", payload: "2" })
       await waitForLock(schema.admin, second.pid)
       expect(await isPending(event)).toBe(true)
-      await query(first, outcome)
+      await (outcome === "commit" ? first.query`commit` : first.query`rollback`)
       const b = await event
       expect(b.created).toBe(outcome === "rollback")
       expect(b.id === a.id).toBe(outcome === "commit")
-      const rows = await query(
-        schema.admin,
-        `select payload::text as payload from ${schema.table.name}`,
-      )
-      expect(rows).toEqual([{ payload: "2" }])
+      expect(
+        await schema.admin.query`select payload from ${jobTableSql(schema.table)}`.pluck(t.jsonb),
+      ).toEqual([2])
     })
   }
 
   test("keep holds the pending job until the transaction of the caller ends, so a claim skips it", async () => {
     const { id } = await callEnqueue(schema.admin, { task: "t", key: "k" })
     const producer = await schema.connect()
-    await query(producer, "begin")
+    await producer.query`begin`
     expect(await callEnqueue(producer, { task: "t", key: "k", key_mode: "keep" })).toMatchObject({
       id,
       created: false,
     })
     expect(await claimPlain(schema.admin, schema.table, W)).toEqual([])
-    await query(producer, "commit")
+    await producer.query`commit`
     expect((await claimPlain(schema.admin, schema.table, W)).map(claim => claim.id)).toEqual([id])
   })
 })
@@ -548,30 +557,28 @@ describe("schema", () => {
   test("enqueues into its own schema, whatever the search path of the caller and its temporary table of the same name", async () => {
     const table = await migrateQuoted()
     const caller: Conn = await schema.connect()
-    await query(caller, `set search_path = pg_temp, ${quoteIdentifier(schema.name)}`)
-    await query(caller, "create temporary table job (id bigint, task text)")
+    await caller.query`set search_path = pg_temp, ${identifier(schema.name)}`
+    await caller.query`create temporary table job (id bigint, task text)`
     const { id } = await callEnqueue(caller, { task: "t", scope: "tenant" }, table)
-    const rows = await query(
-      schema.admin,
-      `select 'quoted' as source, id::text as id, scope from ${table.name}
-       union all select 'test', id::text, scope from ${schema.table.name}`,
-    )
+    const rows = await schema.admin.query`
+      select 'quoted' as source, id, scope from ${jobTableSql(table)}
+      union all select 'test', id, scope from ${jobTableSql(schema.table)}`.select({
+      source: t.text,
+      id: t.bigintText,
+      scope: t.text,
+    })
     expect(rows).toEqual([{ source: "quoted", id, scope: "tenant" }])
   })
 
   test("checks its arguments by the operators of PostgreSQL, whatever operators the search path of the caller gives", async () => {
-    const ops = quoteIdentifier(schema.unmigratedTable("ops").schemaName)
-    await query(schema.admin, `create schema ${ops}`)
-    await query(
-      schema.admin,
-      `create function ${ops}.accept(float8, int) returns boolean language sql immutable return true`,
-    )
-    await query(
-      schema.admin,
-      `create operator ${ops}.>= (leftarg = float8, rightarg = int, function = ${ops}.accept)`,
-    )
+    const ops = identifier(schema.unmigratedTable("ops").schemaName)
+    await schema.admin.query`create schema ${ops}`
+    await schema.admin.query`
+      create function ${ops}.accept(float8, int) returns boolean language sql immutable return true`
+    await schema.admin.query`
+      create operator ${ops}.>= (leftarg = float8, rightarg = int, function = ${ops}.accept)`
     const caller = await schema.connect()
-    await query(caller, `set search_path = ${ops}, pg_catalog`)
+    await caller.query`set search_path = ${ops}, pg_catalog`
     const outcome = callEnqueue(caller, { task: "t", delay: -1 })
     await expect(outcome).rejects.toMatchObject({ code: "22023" })
   })
@@ -579,12 +586,11 @@ describe("schema", () => {
   test("keeps enqueueing into its table after the schema is renamed", async () => {
     const table = await migrateQuoted()
     const renamed = schema.unmigratedTable("renamed")
-    await query(
-      schema.admin,
-      `alter schema ${quoteIdentifier(table.schemaName)} rename to ${quoteIdentifier(renamed.schemaName)}`,
-    )
+    await schema.admin.query`
+      alter schema ${identifier(table.schemaName)} rename to ${identifier(renamed.schemaName)}`
     const { id } = await callEnqueue(schema.admin, { task: "t" }, renamed)
-    const rows = await query(schema.admin, `select id::text as id from ${renamed.name}`)
-    expect(rows).toEqual([{ id }])
+    expect(
+      await schema.admin.query`select id from ${jobTableSql(renamed)}`.pluck(t.bigintText),
+    ).toEqual([id])
   })
 })
