@@ -1,9 +1,17 @@
 // Test double of the jobs API: it records the enqueues of the code under test in memory, without a database, and checks them as `createJobs` does.
 
-import { createJobsApi, getTaskScope, type Jobs, type JobsOptions } from "../producer/jobs"
+import {
+  createJobsApi,
+  getEnqueueScope,
+  getTaskScope,
+  type Jobs,
+  type JobsOptions,
+} from "../producer/jobs"
 import type { EnqueueJob, EnqueueResult } from "../sql/enqueue"
 import { encodePayload } from "../sql/job"
-import type { Task } from "../task/task"
+import type { Task, TaskImplementation } from "../task/task"
+
+import { type RunJobArgs, type RunJobOptions, runJobWithScope } from "./run-job"
 
 /** Options of `createTestJobs`. */
 export interface TestJobsOptions {
@@ -65,6 +73,17 @@ export interface TestJobs extends Jobs {
    * Finish the setup of fixtures before the capture, and await it before the next step, so that their enqueues stay out.
    */
   capture<R>(action: () => R): Promise<TestJobQueries<Awaited<R>>>
+  /**
+   * Runs the handler of a task implementation as `runJob` does, and gives its job a scope as an enqueue through this jobs API does.
+   * A task defined with `scoped: true` gets the scope of `createTestJobs` at the call, and another task gets none.
+   * `options.job.scope` replaces that scope, and then the scope function of `createTestJobs` is not called.
+   * It rejects with the errors of `runJob`.
+   * Without `options.job.scope`, a scoped task also rejects with the errors of `enqueue` for the scope, such as `TypeError` when `createTestJobs` has no scope or has `ALL_SCOPES`.
+   */
+  runJob<P>(
+    implementation: TaskImplementation<string, P>,
+    ...args: NoInfer<RunJobArgs<P, string | null>>
+  ): Promise<unknown>
 }
 
 /** Pending job of the memory of `createTestJobs`. */
@@ -131,7 +150,7 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
         return jobs.map(params => {
           const call: TestJobCall = {
             task,
-            scope: jobScope === "" ? null : jobScope,
+            scope: toJobScope(jobScope),
             payload: params.payload,
             options: toTestEnqueueOptions(params),
           }
@@ -185,7 +204,21 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
         captures.delete(captured)
       }
     },
+    async runJob<P>(
+      implementation: TaskImplementation<string, P>,
+      ...args: [payload?: P, options?: RunJobOptions]
+    ): Promise<unknown> {
+      const [payload, options] = args as [P, RunJobOptions?]
+      return await runJobWithScope(implementation, payload, options, () =>
+        toJobScope(getEnqueueScope(implementation.task, scope)),
+      )
+    },
   }
+}
+
+/** Returns the scope of a job as `job.scope` gives it from the scope that the table stores: `null` for the empty scope of a job without one. */
+function toJobScope(scope: string): string | null {
+  return scope === "" ? null : scope
 }
 
 /** Whether a value is a promise or another thenable, which `await` resolves. */

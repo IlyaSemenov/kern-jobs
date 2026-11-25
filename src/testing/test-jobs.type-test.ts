@@ -1,8 +1,9 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
 import type { Jobs } from "../producer/jobs"
-import { defineTask } from "../task/task"
+import { defineTask, type TaskImplementation } from "../task/task"
 
+import type { RunJobInfo } from "./run-job"
 import { createTestJobs, type TestJobCall, type TestJobQueries } from "./test-jobs"
 
 const sendEmailTask = defineTask("email.send").withPayload<{ to: string }>()
@@ -30,6 +31,43 @@ describe("createTestJobs", () => {
     expectTypeOf(
       (await jobs.capture(() => ({}) as PromiseLike<boolean>)).result,
     ).toEqualTypeOf<boolean>()
+  })
+
+  test("runJob takes the payload of the task, optional for a void payload, and an optional scope for a scoped task", () => {
+    const jobs = createTestJobs({ scope: "a" })
+    const sendEmail = sendEmailTask.implement(() => {})
+    void jobs.runJob(sendEmail, { to: "a" }, { job: { attempt: 2 } })
+    void jobs.runJob(purgeExpiredSessionsTask.implement(() => {}))
+    void jobs.runJob(
+      reportTask.implement(() => {}),
+      { id: 1 },
+    )
+    void jobs.runJob(
+      reportTask.implement(() => {}),
+      { id: 1 },
+      { job: { scope: "b" } },
+    )
+    // @ts-expect-error The task needs a payload.
+    void jobs.runJob(sendEmail)
+    // @ts-expect-error The payload has the type of the task.
+    void jobs.runJob(sendEmail, { to: 1 })
+  })
+
+  test("runJob takes the arguments of a wrapper generic over the payload without a cast", () => {
+    const jobs = createTestJobs({ scope: "a" })
+    const runTestJob = <P>(
+      implementation: TaskImplementation<string, P>,
+      payload: P,
+      job: RunJobInfo = {},
+    ) => jobs.runJob(implementation, payload, { job })
+    void runTestJob(
+      reportTask.implement(() => {}),
+      { id: 1 },
+    )
+    void runTestJob(
+      sendEmailTask.implement(() => {}),
+      { to: "a" },
+    )
   })
 
   test("TestJobCall and TestJobQueries take their type arguments by default", () => {

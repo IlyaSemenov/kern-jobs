@@ -81,8 +81,23 @@ Replace them in `job`, such as to test the last attempt:
 await runJob(sendWelcomeEmail, { userId: "user-1" }, { job: { attempt: 25 } })
 ```
 
-Pass the scope of the job of a scoped task in `job.scope`, and an `AbortSignal` in `signal` to test how the handler [stops](../workers/handlers#stop-long-handlers).
+Pass an `AbortSignal` in `signal` to test how the handler [stops](../workers/handlers#stop-long-handlers).
+
 `runJob` calls the handler directly, without the [`runHandler`](../workers/handlers#wrap-every-handler) of a worker, [retries](../workers/retries), or `onFailure`; to test `onFailure`, [run it with a `JobFailure`](../workers/failure-handlers#test-onfailure).
+
+For a [scoped task](../tasks/scopes), pass the scope of its job to `runJob` in `job.scope`.
+To give its job the scope of `testJobs` instead, call `testJobs.runJob` without `job.scope`:
+
+```ts [src/worker/tasks/build-report.test.ts]
+import { testJobs } from "../../testing/jobs"
+
+import buildReport from "./build-report"
+
+await testJobs.runJob(buildReport, { reportId: "report-1" })
+```
+
+Its job gets the scope that the `scope` of `createTestJobs` gives at the call, such as the tenant of the current test; a job of a task that is not scoped gets none.
+Pass `job.scope` to `testJobs.runJob` to give the job another scope.
 
 ## Check the manifest
 

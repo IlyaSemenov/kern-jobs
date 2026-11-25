@@ -20,10 +20,11 @@ export type RunJobOptions<Scope extends string | null = string | null> = {
   : { job: RunJobInfo<Scope> & { scope: string } })
 
 /** Arguments of `runJob` after the implementation: a task defined with `scoped: true` takes the options with the scope of its job. */
+// The arguments of a task that is not scoped are a union whose first member, with a payload, is not conditional on the payload type, so that a wrapper generic over the payload passes a payload and options without a cast.
 export type RunJobArgs<P, Scope extends string | null> = null extends Scope
-  ? undefined extends P
-    ? [payload?: P, options?: RunJobOptions<Scope>]
-    : [payload: P, options?: RunJobOptions<Scope>]
+  ?
+      | [payload: P, options?: RunJobOptions<Scope>]
+      | (undefined extends P ? [payload?: P, options?: RunJobOptions<Scope>] : never)
   : [payload: P, options: RunJobOptions<Scope>]
 
 /**
@@ -37,10 +38,24 @@ export async function runJob<P, Scope extends string | null>(
   implementation: TaskImplementation<string, P, Scope>,
   ...args: NoInfer<RunJobArgs<P, Scope>>
 ): Promise<unknown> {
-  const [payload, options = {}] = args as [P, RunJobOptions?]
+  const [payload, options] = args as [P, RunJobOptions?]
+  return await runJobWithScope(implementation, payload, options, () => null)
+}
+
+/**
+ * Runs a handler as `runJob` does, with the scope of `options.job`, or the scope that `getDefaultScope` returns when it is `undefined`.
+ * It reads each field of `options` and `options.job` once, since a getter may return another value on each read.
+ */
+export async function runJobWithScope<P>(
+  implementation: TaskImplementation<string, P>,
+  payload: P,
+  options: RunJobOptions = {},
+  getDefaultScope: () => string | null,
+): Promise<unknown> {
   const { task } = implementation
   const { job = {}, signal = new AbortController().signal } = options
-  const scope = job.scope ?? null
+  const jobScope = job.scope
+  const scope = jobScope === undefined ? getDefaultScope() : jobScope
   if (scope === null) {
     // A worker does not run the job of a scoped task without a scope, so its handler, typed with a string scope, never gets one.
     if (task.scoped === true) {
@@ -50,17 +65,16 @@ export async function runJob<P, Scope extends string | null>(
     checkScope(scope)
   }
   const params = getTaskEnqueueParams(task, payload)
+  // The other fields are read after the checks of the scope and the options of the task, so that they reject first.
+  const { id, attempt, maxAttempts, key, queue } = job
   const info: JobInfo = {
-    id: job.id ?? "1",
+    id: id ?? "1",
     scope,
-    attempt: job.attempt ?? 1,
-    maxAttempts: job.maxAttempts ?? params.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
-    key: job.key === undefined ? (params.key ?? null) : job.key,
-    queue: job.queue === undefined ? (params.queue ?? null) : job.queue,
+    attempt: attempt ?? 1,
+    maxAttempts: maxAttempts ?? params.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    key: key === undefined ? (params.key ?? null) : key,
+    queue: queue === undefined ? (params.queue ?? null) : queue,
   }
   const context: HandlerContext = { signal, job: info }
-  return await implementation.handler(
-    decodePayload(encodePayload(payload)) as P,
-    context as HandlerContext<Scope>,
-  )
+  return await implementation.handler(decodePayload(encodePayload(payload)) as P, context)
 }

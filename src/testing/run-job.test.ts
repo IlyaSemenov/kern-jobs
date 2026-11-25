@@ -81,12 +81,75 @@ describe("job", () => {
     })
   })
 
-  test("rejects with the errors of an enqueue for invalid options of the task, before it runs the handler", async () => {
+  test("reads each field of options and options.job once, also of a getter of a class", async () => {
+    const handler = mock((_payload: void, _context: HandlerContext) => {})
+    const reads: string[] = []
+    const controller = new AbortController()
+    class Job {
+      get scope() {
+        reads.push("scope")
+        return `s${reads.filter(field => field === "scope").length}`
+      }
+      get attempt() {
+        reads.push("attempt")
+        return 2
+      }
+      get key() {
+        reads.push("key")
+        return "k"
+      }
+      get queue() {
+        reads.push("queue")
+        return "q"
+      }
+    }
+    class Options {
+      job = new Job()
+      get signal() {
+        reads.push("signal")
+        return controller.signal
+      }
+    }
+    await runJob(defineTask("t").implement(handler), undefined, new Options())
+    expect(reads.toSorted()).toEqual(["attempt", "key", "queue", "scope", "signal"])
+    expect(handler.mock.calls[0]![1].job).toMatchObject({
+      scope: "s1",
+      attempt: 2,
+      key: "k",
+      queue: "q",
+    })
+    expect(handler.mock.calls[0]![1].signal).toBe(controller.signal)
+  })
+
+  test("checks the scope before it reads the other fields of options.job", async () => {
     const handler = mock(() => {})
+    const getKey = mock(() => "k")
+    const job = {
+      scope: "",
+      get key() {
+        return getKey()
+      },
+    }
+    await expect(runJob(defineTask("t").implement(handler), undefined, { job })).rejects.toThrow(
+      RangeError,
+    )
+    expect(getKey).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  test("rejects with the errors of an enqueue for invalid options of the task, before it reads the other fields of options.job and runs the handler", async () => {
+    const handler = mock(() => {})
+    const getKey = mock(() => "k")
     const task = defineTask("t")
       .withPayload<number>()
       .withOptions(() => ({ delay: -1 }))
-    await expect(runJob(task.implement(handler), 1)).rejects.toThrow(RangeError)
+    const job = {
+      get key() {
+        return getKey()
+      },
+    }
+    await expect(runJob(task.implement(handler), 1, { job })).rejects.toThrow(RangeError)
+    expect(getKey).not.toHaveBeenCalled()
     expect(handler).not.toHaveBeenCalled()
   })
 })

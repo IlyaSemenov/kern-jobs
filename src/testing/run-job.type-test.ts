@@ -1,8 +1,8 @@
 import { describe, test } from "bun:test"
 
-import { defineTask } from "../task/task"
+import { defineTask, type TaskImplementation } from "../task/task"
 
-import { runJob, type RunJobOptions } from "./run-job"
+import { runJob, type RunJobInfo, type RunJobOptions } from "./run-job"
 
 const sendEmailTask = defineTask("email.send").withPayload<{ to: string }>()
 const purgeExpiredSessionsTask = defineTask("sessions.purgeExpired")
@@ -40,6 +40,23 @@ describe("runJob", () => {
     // @ts-expect-error The options of a scoped task need the scope of its job.
     const missing: RunJobOptions<string> = {}
     void missing
+  })
+
+  test("takes the arguments of a wrapper generic over the payload without a cast", () => {
+    const runWithScope = <P>(
+      implementation: TaskImplementation<string, P, any>,
+      payload: P,
+      job: RunJobInfo = {},
+    ) => runJob(implementation, payload, { job: { scope: "a", ...job } })
+    void runWithScope(
+      reportTask.implement(() => {}),
+      { id: 1 },
+    )
+    void runWithScope(
+      sendEmailTask.implement(() => {}),
+      { to: "a" },
+      { attempt: 2 },
+    )
   })
 
   test("takes a null scope or a string for a task that is not scoped", () => {

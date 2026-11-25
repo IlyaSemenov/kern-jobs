@@ -1,9 +1,9 @@
-// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, and the queries of a capture by task and scope.
+// The test double of the jobs API: recorded enqueues and their options, its pending jobs, captures, the queries of a capture by task and scope, and the run of a handler in its scope.
 
 import { describe, expect, mock, test } from "bun:test"
 
 import { ALL_SCOPES } from "../producer/jobs"
-import { defineTask } from "../task/task"
+import { defineTask, type HandlerContext } from "../task/task"
 
 import { createTestJobs } from "./test-jobs"
 
@@ -349,5 +349,92 @@ describe("clear", () => {
     expect(await jobs.enqueue(indexProductTask, { productId: "1" })).toMatchObject({
       created: true,
     })
+  })
+})
+
+describe("runJob", () => {
+  test("runs the handler of a scoped task in the scope of createTestJobs at the call, as runJob does with the payload and the metadata", async () => {
+    let scope = "a"
+    const handler = mock((_payload: { id: number }, _context: HandlerContext<string>) => "done")
+    const implementation = defineTask("t", { scoped: true, queue: "q" })
+      .withPayload<{ id: number }>()
+      .implement(handler)
+    const jobs = createTestJobs({ scope: () => scope })
+    expect(await jobs.runJob(implementation, { id: 1 })).toBe("done")
+    scope = "b"
+    await jobs.runJob(implementation, { id: 2 }, { job: { attempt: 3 } })
+    expect(handler.mock.calls.map(([payload, context]) => [payload, context.job])).toEqual([
+      [{ id: 1 }, { id: "1", scope: "a", attempt: 1, maxAttempts: 25, key: null, queue: "q" }],
+      [{ id: 2 }, { id: "1", scope: "b", attempt: 3, maxAttempts: 25, key: null, queue: "q" }],
+    ])
+  })
+
+  test("runs the handler of an unscoped task without a scope, without calling the function of the scope", async () => {
+    const handler = mock((_payload: void, _context: HandlerContext) => {})
+    const getScope = mock(() => "a")
+    await createTestJobs({ scope: getScope }).runJob(defineTask("t").implement(handler))
+    expect(handler.mock.calls[0]![1].job.scope).toBeNull()
+    expect(getScope).not.toHaveBeenCalled()
+  })
+
+  test("takes the scope of options.job, without calling the function of the scope, and the signal of options", async () => {
+    const handler = mock((_payload: void, _context: HandlerContext) => {})
+    const getScope = mock(() => "a")
+    const jobs = createTestJobs({ scope: getScope })
+    const controller = new AbortController()
+    await jobs.runJob(defineTask("t", { scoped: true }).implement(handler), undefined, {
+      job: { scope: "b" },
+      signal: controller.signal,
+    })
+    await jobs.runJob(defineTask("u").implement(handler), undefined, { job: { scope: "c" } })
+    expect(handler.mock.calls.map(([, context]) => context.job.scope)).toEqual(["b", "c"])
+    expect(handler.mock.calls[0]![1].signal).toBe(controller.signal)
+    expect(getScope).not.toHaveBeenCalled()
+  })
+
+  test("reads the scope of options.job once, and passes the signal and the job of options from getters of a class, as runJob does", async () => {
+    const handler = mock((_payload: void, _context: HandlerContext) => {})
+    const controller = new AbortController()
+    let scopeReads = 0
+    class Job {
+      get scope() {
+        return `s${++scopeReads}`
+      }
+      get attempt() {
+        return 2
+      }
+    }
+    class Options {
+      get job() {
+        return new Job()
+      }
+      get signal() {
+        return controller.signal
+      }
+    }
+    await createTestJobs({ scope: "a" }).runJob(
+      defineTask("t", { scoped: true }).implement(handler),
+      undefined,
+      new Options(),
+    )
+    expect(scopeReads).toBe(1)
+    expect(handler.mock.calls[0]![1].job).toMatchObject({ scope: "s1", attempt: 2 })
+    expect(handler.mock.calls[0]![1].signal).toBe(controller.signal)
+  })
+
+  test("rejects a scoped task without a scope or with ALL_SCOPES with TypeError, and an invalid scope of the function with its error, as enqueue does, before it runs the handler", async () => {
+    const handler = mock(() => {})
+    const implementation = reportTask.implement(handler)
+    await expect(createTestJobs().runJob(implementation, { id: 1 })).rejects.toThrow(TypeError)
+    await expect(
+      createTestJobs({ scope: ALL_SCOPES }).runJob(implementation, { id: 1 }),
+    ).rejects.toThrow(TypeError)
+    await expect(
+      createTestJobs({ scope: () => "" }).runJob(implementation, { id: 1 }),
+    ).rejects.toThrow(RangeError)
+    await expect(
+      createTestJobs({ scope: "a" }).runJob(implementation, { id: 1 }, { job: { scope: null } }),
+    ).rejects.toThrow(TypeError)
+    expect(handler).not.toHaveBeenCalled()
   })
 })

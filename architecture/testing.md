@@ -22,5 +22,13 @@
 - `runJob` gives the handler the context that the worker would give a job enqueued with the payload and no overrides: the key, the queue, and `maxAttempts` of `getTaskEnqueueParams`, which also checks the options of the task, `DEFAULT_MAX_ATTEMPTS` of `sql/enqueue.ts` when they give none, the first attempt, and the id `"1"`; a field of `job` other than `undefined` replaces its default.
 - The payload goes through `encodePayload` and `decodePayload` of `sql/job.ts`, as an enqueue stores it and the worker reads it, so a payload without JSON text, such as `undefined` or an object whose `toJSON` returns `undefined`, reaches the handler as `undefined`.
 - A scoped task takes a scope, which the types require and `runJob` rejects with `TypeError` without, since the worker does not run such a job; a scope that `job` gives, of any task, passes `checkScope` of `producer/jobs.ts`.
+- The arguments of a task that is not scoped are a union whose first member, with a payload, is not conditional on the payload type, so that a wrapper generic over the payload passes a payload and options.
+- `runJob` reads each field of `options` and `options.job` at most once, since a getter may return another value on each read.
+  It checks the scope and resolves the options of the task before it reads the other fields of `job`.
 - `runJob` does not run the `runHandler` of a worker, nor turn `RetryError` and `TerminalError` into a settlement: it resolves or rejects as the handler does.
 - It runs the `onFailure` of an implementation as the handler of its failure implementation, `implementation.failure`, with a `JobFailure` as the payload ([Failure jobs](failure-jobs.md#failure-tasks)).
+- `testJobs.runJob` passes its options as they are to `runJobWithScope`, the body of `runJob`, so its job gets `options.job.scope` when it is not `undefined`.
+  Otherwise its job gets the scope that an enqueue through the double gives, from `getEnqueueScope` of `producer/jobs.ts` at the call.
+  A scoped task gets the scope of `createTestJobs` and rejects with the errors of an enqueue without one or with `ALL_SCOPES`.
+  Another task gets `null`, and the function of the scope is not called.
+  Its arguments are those of `runJob` for a task that is not scoped, which do not require `job.scope`.

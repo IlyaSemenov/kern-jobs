@@ -243,7 +243,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
 /**
  * Returns the scope of the jobs that an enqueue of a task adds, as `getTaskScope` gives it, and throws `TypeError` for `ALL_SCOPES` with a scoped task, since a job belongs to one scope.
  */
-function getEnqueueScope(task: Task<string, unknown>, scope: JobsOptions["scope"]): string {
+export function getEnqueueScope(task: Task<string, unknown>, scope: JobsOptions["scope"]): string {
   const taskScope = getTaskScope(task, scope)
   if (taskScope === null) {
     throw new TypeError(
