@@ -6,6 +6,7 @@ import type { TestSchema } from "../test-harness/database"
 
 import { workerSchema } from "./db/db"
 import { reap } from "./db/lease"
+import * as t from "./db/types"
 import type { WorkerEvent } from "./events"
 import { type RuntimeOptions, startRuntime, type Worker } from "./runtime"
 
@@ -118,9 +119,12 @@ export async function terminateBackends(
   observer: StatementExecutor,
   applicationName: string,
 ): Promise<number> {
+  // A backend that exits between the selection and the call is not terminated: `pg_terminate_backend` returns false for it.
   return await queryOn(observer)`
-    select pg_terminate_backend(pid) from pg_stat_activity
-    where application_name = ${applicationName} and pid <> pg_backend_pid()`
+    select count(*) filter (where terminated)::int from (
+      select pg_terminate_backend(pid) as terminated from pg_stat_activity
+      where application_name = ${applicationName} and pid <> pg_backend_pid()
+    ) s`.get(t.integer)
 }
 
 /** Moves the lease of a job into the past and reaps it in one transaction, while its handler may still run. */
