@@ -82,7 +82,7 @@ export const remindAboutDraftTask = defineTask("documents.remindAboutDraft", {
 await jobs.deletePending({ task: remindAboutDraftTask, key: `document:${documentId}` })
 ```
 
-In one scope, `deletePending` resolves to `1` if it deleted the pending job of the key and to `0` otherwise; the job takes with it the events that merged into it.
+In one scope, `deletePending` resolves to `1` if it deleted the pending job of the key and to `0` otherwise; deleting the job cancels every enqueue that merged into it.
 For a [scoped](./scopes) task, it deletes the job of the scope of `jobs`, which an enqueue through `jobs` would merge into; for another task, it does not call the scope function of `jobs`.
 Through `jobs` with [`ALL_SCOPES`](../operations/managing-jobs#jobs-of-a-scope), it deletes the job of the key of a scoped task in every scope, and resolves to their total.
 

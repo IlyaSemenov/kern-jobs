@@ -54,7 +54,7 @@ To give up a failed job, or to keep a pending one from running, delete it:
 await jobs.delete(id)
 ```
 
-A pending job of a key carries the events that the enqueues of its key merged into it, so they are deleted with it; an enqueue after the delete adds a new job.
+Deleting a pending job of a key cancels every enqueue that merged into it; an enqueue after the delete adds a new job.
 
 `delete` resolves to `false` when no pending or failed job has the id, such as one that has completed or that a worker runs.
 A worker cannot stop a running handler at the request of the database, so wait until the job ends: if it fails, or returns to pending for another attempt, delete it then.
@@ -85,7 +85,7 @@ Through `jobs` with [`ALL_SCOPES`](#jobs-of-a-scope), it deletes the pending job
 To delete the pending job of a key, pass the task and the key, as in [Cancel a pending job](../tasks/keys#cancel-a-pending-job).
 
 `deletePending` resolves to the number of the jobs it deleted, and leaves the jobs that run or failed.
-Each job takes with it the events that the enqueues of its key merged into it.
+It cancels every enqueue that merged into the jobs it deletes.
 
 ## Delete failed jobs
 
