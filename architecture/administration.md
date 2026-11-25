@@ -4,7 +4,8 @@ An application retries failed jobs and deletes pending or failed ones by id thro
 None of them changes an active row, since the database cannot stop the handler of a running job.
 A failure job is an ordinary job of its failure task, which they reach as any job of that task, the `failure.task` of the implementation, and none of them changes a failure job by the job whose failure inserted it ([Failure jobs](failure-jobs.md#consequences-of-ordinary-jobs)).
 
-The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)), and must change the table only through `jobs`, since workers and enqueues rely on the rows that they write.
+The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)).
+It deletes pending and failed jobs through `jobs` or by a statement of its own ([Delete from SQL](#delete-from-sql)), and must change the table otherwise only through `jobs` and the [SQL function](enqueue.md#sql-function) `enqueue`, since workers and enqueues rely on the rows that they write.
 
 ## Retry
 
@@ -54,6 +55,15 @@ With `olderThan`, it deletes only the jobs that failed more than that many secon
 - `olderThan` takes the range of a delay, seconds from 0 to 1e12, checked before the client is called; the statement compares `failed_at` plus `olderThan` with its own time, by the clock of the database, since its time less 1e12 seconds is before the earliest timestamp of PostgreSQL.
 - It deletes only failed rows; pending and active jobs stay.
 - A failed job that a retry holds is deleted only if it is still failed after the retry ends, at `READ COMMITTED` ([PostgreSQL](postgresql.md#isolation)), so a job that a retry returns to pending is not deleted.
+
+## Delete from SQL
+
+An application deletes pending and failed jobs also by a `DELETE` of its own on the table, where it has no `jobs`, such as in a migration of its own or from psql, and filters them by any condition, such as on the payload ([decision](../decisions/administration/delete-from-sql.md)).
+
+- The statement must limit the delete to pending or failed rows by a condition on `state`, with which it deletes them as [delete](#delete), `deletePending`, and `deleteFailed` do: it rechecks a row that another transaction holds at `READ COMMITTED` ([PostgreSQL](postgresql.md#isolation)), and a pending job of a key takes with it the events that merged into it.
+- A delete of an active row would break the guarantees of its claim: its handler can run on, the next job of its queue can start beside it, and its terminal failure inserts no failure job, since no fail records it.
+- The application must not update the table, since a retry changes the columns of a new cycle of attempts together and handles the pending job of its key ([Retry](#retry)), and the check constraints and the unique indexes reject only some mistaken updates.
+- The table `job` of the schema of the installation and the columns that the user documentation names for such a delete, `id`, `state`, `task`, `scope`, `key`, `payload`, and `failed_at`, with their types and values, are a contract that a migration keeps ([Migrations](migrations.md#history)).
 
 ## Scope
 

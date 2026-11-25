@@ -131,6 +131,44 @@ export const manifest = defineManifest({
 
 The schedule enqueues at most one job a night however many workers list it.
 
+## Delete jobs from SQL
+
+To delete jobs where you have no `jobs`, such as in a migration of your application or in `psql`, delete their rows from the table `job` in the schema of kern-jobs, `kern_jobs` by default, with a condition on `state`:
+
+```sql
+delete from kern_jobs.job
+where state = 'pending' and task = 'documents.remindAboutDraft' and scope = '' and key = 'document:42'
+```
+
+Filter the jobs by any condition, such as on the payload.
+For example, cancel the emails of newsletter campaign 42 that wait to be sent, in every scope:
+
+```sql
+delete from kern_jobs.job
+where state = 'pending' and task = 'newsletter.send' and payload @> '{"campaignId": 42}'
+```
+
+Filter the jobs by these columns, which later versions of kern-jobs keep with their meanings:
+
+- `id`: the id of the job, as `jobs.delete` takes it.
+- `state`: `'pending'` for the jobs that wait to run, also for a retry, and `'failed'` for the jobs that failed.
+- `task`: the name of the task.
+- `scope`: the [scope](../tasks/scopes) of the job, or `''` for an unscoped job; without a condition on it, the delete reaches every scope.
+- `key`: the [key](../tasks/keys) of the job, `''` for the key `true`, or null for a job without a key.
+- `payload`: the payload as `jsonb`, or null for a job enqueued without one.
+- `failed_at`: when the job failed.
+
+To delete the jobs that failed more than 30 days ago:
+
+```sql
+delete from kern_jobs.job
+where state = 'failed' and failed_at < now() - interval '30 days'
+```
+
+Never delete a running job, whose `state` is `'active'`: its handler runs on, the next job of its [queue](../tasks/queues) can start beside it, and its [`onFailure`](../workers/failure-handlers) does not run if it fails.
+
+Do not update the rows: retry a failed job through [`jobs.retry`](#retry-a-failed-job), which resets its attempts and run time together and keeps it from conflicting with the pending job of its key.
+
 ## Jobs of a scope
 
 Through `jobs` with a [scope](../tasks/scopes), `retry`, `delete`, and, without a task, `deletePending` and `deleteFailed` act only on the jobs of that scope and call its function each time, so a function that reads the scope of the current request needs a request.
