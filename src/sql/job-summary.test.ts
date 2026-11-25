@@ -15,7 +15,7 @@ beforeEach(async () => {
 afterEach(() => schema.dispose())
 
 test("has the columns of its contract", async () => {
-  const rows = await schema.admin.query`
+  const rows = await schema.conn.query`
     select column_name, data_type from information_schema.columns
     where table_schema = ${schema.name} and table_name = 'job_summary' order by ordinal_position`.select(
     {
@@ -42,7 +42,7 @@ test("summarizes the jobs of each task in each scope by the time of the statemen
   // The rows take their times relative to a reference of the clock of the database.
   const reference = param(
     t.timestamptz,
-    await schema.admin.query`select statement_timestamp()::text`.get(t.text),
+    await schema.conn.query`select statement_timestamp()::text`.get(t.text),
   )
   const at = (seconds: number) =>
     sql`${reference} + make_interval(secs => ${param(t.doublePrecision, seconds)})`
@@ -82,19 +82,19 @@ test("summarizes the jobs of each task in each scope by the time of the statemen
     pending("", "reset", 0, 120, 60),
     pending("tenant", "a", 0, 3600),
   ]
-  await schema.admin.query`
+  await schema.conn.query`
     insert into ${workerSchema.job}
       (scope, task, state, attempts, max_attempts, run_at, not_before, window_started_at, created_at, claim_id, locked_at, lease_until, failed_at)
     values ${joinSql(values)}`
   // The select runs in a transaction that began earlier, whose start is not the time of the statement, and the job of task "turning" becomes due between them.
-  await schema.admin.query`begin`
-  await schema.admin.query`
+  await schema.conn.query`begin`
+  await schema.conn.query`
     insert into ${workerSchema.job} (scope, task, state, attempts, max_attempts, run_at, not_before, window_started_at, created_at, claim_id, locked_at, lease_until, failed_at)
     values ('', 'turning', 'pending', 1, 10,
       transaction_timestamp() + interval '50 milliseconds', transaction_timestamp() + interval '50 milliseconds',
       transaction_timestamp(), transaction_timestamp(), null, null, null, null)`
-  await schema.admin.query`select pg_sleep(0.1)`
-  const rows = await schema.admin.query`
+  await schema.conn.query`select pg_sleep(0.1)`
+  const rows = await schema.conn.query`
     select extract(epoch from statement_timestamp() - ${reference})::float8 as elapsed, s.*
     from ${identifier(schema.name, "job_summary")} s order by scope, task`.select({
     elapsed: t.doublePrecision,
@@ -110,7 +110,7 @@ test("summarizes the jobs of each task in each scope by the time of the statemen
     oldest_failed_seconds: t.doublePrecision.nullable(),
     most_attempts: t.integer.nullable(),
   })
-  await schema.admin.query`commit`
+  await schema.conn.query`commit`
   const summaries = rows.map(row => {
     const { elapsed, ...summary } = row
     // An age less the time since the reference, rounded, since the times of the rows and of the statement are of microseconds.

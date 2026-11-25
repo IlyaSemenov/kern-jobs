@@ -58,7 +58,7 @@ async function insertRow(fields: RowFields): Promise<string | null> {
     ...fields,
   }
   return rejectedBy(
-    schema.admin.query`
+    schema.conn.query`
       insert into ${workerSchema.job}
         (task, state, claim_id, lease_until, attempts, max_attempts, run_at, not_before, failed_at, window_started_at, created_at)
       values ('t', ${row.state}, ${row.claim_id}, ${row.lease_until}, ${row.attempts}, ${row.max_attempts},
@@ -129,7 +129,7 @@ test("run_at is not below not_before, the end of the backoff", async () => {
 describe("names", () => {
   /** Enqueues a job of task `t` with the names given over it, and returns the constraint that rejected it, or `null`. */
   const enqueueNames = (names: Partial<EnqueueParams>) =>
-    rejectedBy(enqueue(schema.admin, schema.table, { task: "t", ...names }))
+    rejectedBy(enqueue(schema.conn, schema.table, { task: "t", ...names }))
 
   test("task and scope are at most 128 bytes, and queue and key at most 1024 bytes", async () => {
     // "é" takes 2 bytes in UTF-8, and "😀" takes 4.
@@ -163,14 +163,14 @@ describe("names", () => {
       128, 128, 1024, 1024,
     ])
     expect(await enqueueNames({ ...names, now: T(0) })).toBeNull()
-    const compression = await schema.admin.query`
+    const compression = await schema.conn.query`
       select pg_column_compression(queue) as queue, pg_column_compression(key) as key
       from ${workerSchema.job}`
       .select({ queue: t.text.nullable(), key: t.text.nullable() })
       .take()
     expect(compression).toEqual({ queue: null, key: null })
     // The claim writes the entry of the active queue, and the retry the entries of a pending row again.
-    const claimed = await claimQueued(schema.admin.query, {
+    const claimed = await claimQueued(schema.conn.query, {
       worker: "w",
       tasks: [names.task],
       now: T(1),
@@ -183,6 +183,6 @@ describe("names", () => {
         now: T(2),
       }),
     ).toBe("retry")
-    expect(only(await jobs(schema.admin.query))).toMatchObject({ ...names, state: "pending" })
+    expect(only(await jobs(schema.conn.query))).toMatchObject({ ...names, state: "pending" })
   })
 })

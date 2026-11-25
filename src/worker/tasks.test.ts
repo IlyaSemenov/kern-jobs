@@ -345,11 +345,11 @@ describe("a worker of a manifest", () => {
     const purge = defineTask("sessions.purgeExpired").implement((payload, { job }) => {
       payloads.set(job.id, payload)
     })
-    const indexed = await enqueue(schema.admin, schema.table, {
+    const indexed = await enqueue(schema.conn, schema.table, {
       task: "search.indexProduct",
       payload: { productId: "42" },
     })
-    const purged = await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    const purged = await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const log = recordEvents()
     try {
       startTestWorker(schema, {
@@ -361,7 +361,7 @@ describe("a worker of a manifest", () => {
         "completed",
       )
       await log.waitFor("start", e => e.claim.id === indexed.id)
-      const row = only(await jobs(schema.admin.query, sql`id = ${indexed.id}`))
+      const row = only(await jobs(schema.conn.query, sql`id = ${indexed.id}`))
       // The task lease of 5 seconds, not the test lease of the worker, of 1 second.
       expect(row.leaseUntil!.getTime() - row.lockedAt!.getTime()).toBeGreaterThanOrEqual(4900)
     } finally {
@@ -409,7 +409,7 @@ describe("a worker of a manifest", () => {
     }
 
     test("a job that fails for good adds a failure job, which runs onFailure with the JobFailure of the stored row and the context of its own job", async () => {
-      const source = await enqueue(schema.admin, schema.table, {
+      const source = await enqueue(schema.conn, schema.table, {
         task: "orders.charge",
         payload: { orderId: "42" },
         maxAttempts: 1,
@@ -447,7 +447,7 @@ describe("a worker of a manifest", () => {
         queue: null,
       })
       expect(job.id).not.toBe(source.id)
-      expect((await jobs(schema.admin.query)).map(r => [r.task, r.state])).toEqual([
+      expect((await jobs(schema.conn.query)).map(r => [r.task, r.state])).toEqual([
         ["orders.charge", "failed"],
       ])
     })
@@ -463,7 +463,7 @@ describe("a worker of a manifest", () => {
       ] as const
       const ids = await Promise.all(
         cases.map(({ maxAttempts }, i) =>
-          enqueue(schema.admin, schema.table, {
+          enqueue(schema.conn, schema.table, {
             task: "orders.charge",
             payload: { orderId: String(i) },
             maxAttempts,
@@ -486,7 +486,7 @@ describe("a worker of a manifest", () => {
       }>()
       const seen: [JobFailure, string][] = []
       for (const scope of ["acme", undefined]) {
-        await enqueue(schema.admin, schema.table, { task: "orders.charge", scope, maxAttempts: 1 })
+        await enqueue(schema.conn, schema.table, { task: "orders.charge", scope, maxAttempts: 1 })
       }
       const log = recordEvents()
       startTestWorker(schema, {
@@ -506,7 +506,7 @@ describe("a worker of a manifest", () => {
       await log.waitFor("settled", e => isFailureJob(e) && e.outcome === "failed")
       const [failure, scope] = only(seen)
       expect([failure.job.scope, failure.reason, scope]).toEqual(["acme", "handler-error", "acme"])
-      const failed = only(await jobs(schema.admin.query, sql`task = 'orders.charge:failure'`))
+      const failed = only(await jobs(schema.conn.query, sql`task = 'orders.charge:failure'`))
       expect([failed.state, failed.scope, failed.lastError]).toEqual([
         "failed",
         "",
@@ -516,7 +516,7 @@ describe("a worker of a manifest", () => {
     })
 
     test("a job interrupted by stop on its last attempt returns to pending and adds no failure job", async () => {
-      const source = await enqueue(schema.admin, schema.table, {
+      const source = await enqueue(schema.conn, schema.table, {
         task: "orders.charge",
         payload: { orderId: "1" },
         maxAttempts: 1,
@@ -536,13 +536,13 @@ describe("a worker of a manifest", () => {
       })
       await log.waitFor("start", e => e.claim.id === source.id)
       await worker.stop({ abortAfter: 0 })
-      expect((await jobs(schema.admin.query)).map(r => [r.task, r.state, r.attempts])).toEqual([
+      expect((await jobs(schema.conn.query)).map(r => [r.task, r.state, r.attempts])).toEqual([
         ["orders.charge", "pending", 0],
       ])
     })
 
     test("a failure job that spends the maxAttempts of onFailure fails for good, and adds no failure job of its own", async () => {
-      await enqueue(schema.admin, schema.table, { task: "orders.charge", maxAttempts: 1 })
+      await enqueue(schema.conn, schema.table, { task: "orders.charge", maxAttempts: 1 })
       const log = recordEvents()
       startTestWorker(schema, {
         concurrency: 2,
@@ -567,7 +567,7 @@ describe("a worker of a manifest", () => {
         (await log.waitFor("settled", e => e.claim.job.task === "orders.charge:failure")).outcome,
       ).toBe("failed")
       expect(
-        (await jobs(schema.admin.query)).map(r => [r.task, r.state, r.maxAttempts, r.lastError]),
+        (await jobs(schema.conn.query)).map(r => [r.task, r.state, r.maxAttempts, r.lastError]),
       ).toEqual([
         ["orders.charge", "failed", 1, "card declined"],
         ["orders.charge:failure", "failed", 1, "mail server down"],
@@ -575,7 +575,7 @@ describe("a worker of a manifest", () => {
     })
 
     test("a failure job whose onFailure throws retries as any job, with its own attempts and error, and its JobFailure keeps the error of the failed job", async () => {
-      await enqueue(schema.admin, schema.table, {
+      await enqueue(schema.conn, schema.table, {
         task: "orders.charge",
         payload: { orderId: "1" },
         maxAttempts: 1,
@@ -593,7 +593,7 @@ describe("a worker of a manifest", () => {
       expect(
         (await log.waitFor("settled", e => e.claim.job.task === "orders.charge:failure")).outcome,
       ).toBe("retry")
-      const failure = only(await jobs(schema.admin.query, sql`task = 'orders.charge:failure'`))
+      const failure = only(await jobs(schema.conn.query, sql`task = 'orders.charge:failure'`))
       expect([failure.state, failure.attempts, failure.maxAttempts, failure.lastError]).toEqual([
         "pending",
         1,
@@ -604,9 +604,9 @@ describe("a worker of a manifest", () => {
     })
 
     test("a worker that does not implement the task returns the jobs of its id and adds the failure job, which stays pending without an implementation", async () => {
-      await enqueue(schema.admin, schema.table, { task: "orders.charge", maxAttempts: 1 })
+      await enqueue(schema.conn, schema.table, { task: "orders.charge", maxAttempts: 1 })
       const claim = only(
-        await claimPlain(schema.admin.query, {
+        await claimPlain(schema.conn.query, {
           worker: "restarted",
           tasks: ["orders.charge"],
           limit: 1,
@@ -617,7 +617,7 @@ describe("a worker of a manifest", () => {
       startTestWorker(schema, { id: "restarted", tasks: {}, onEvent: log.onEvent })
       await log.waitFor("recover")
       await sleep(100)
-      const failed = only(await jobs(schema.admin.query, sql`task = 'orders.charge:failure'`))
+      const failed = only(await jobs(schema.conn.query, sql`task = 'orders.charge:failure'`))
       expect([failed.state, failed.maxAttempts]).toEqual(["pending", 4])
       expect(failed.payload).toMatchObject({ id: claim.claimId, reason: "worker-restarted" })
     })

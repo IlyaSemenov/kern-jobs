@@ -37,35 +37,35 @@ const W = { worker: "w1", tasks: ["t"] }
 
 describe("run time", () => {
   test("is the time of the statement plus delay, which runAt overrides", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "now", now: T(1) })
-    await enqueue(schema.admin, schema.table, { task: "t", key: "delay", delay: 5, now: T(1) })
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, { task: "t", key: "now", now: T(1) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "delay", delay: 5, now: T(1) })
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "runAt",
       runAt: T(7),
       delay: 5,
       now: T(1),
     })
-    expect((await jobs(schema.admin.query)).map(row => secondsOf(row.runAt))).toEqual([1, 6, 7])
+    expect((await jobs(schema.conn.query)).map(row => secondsOf(row.runAt))).toEqual([1, 6, 7])
   })
 
   test("replace takes the delay from its own statement, and keep keeps the run time", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 5, now: T(1) })
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 5, now: T(3) })
-    expect(secondsOf(only(await jobs(schema.admin.query)).runAt)).toBe(8)
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", delay: 5, now: T(1) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", delay: 5, now: T(3) })
+    expect(secondsOf(only(await jobs(schema.conn.query)).runAt)).toBe(8)
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "keep",
       delay: 1,
       now: T(4),
     })
-    expect(secondsOf(only(await jobs(schema.admin.query)).runAt)).toBe(8)
+    expect(secondsOf(only(await jobs(schema.conn.query)).runAt)).toBe(8)
   })
 
   test("takes the bounds of the options of an enqueue: delay and maxWait of 1e12 seconds, runAt in the years 1 and 9999", async () => {
     const enqueueAt = (key: string, o: Partial<EnqueueParams>) =>
-      enqueue(schema.admin, schema.table, { task: "t", key, now: T(0), ...o })
+      enqueue(schema.conn, schema.table, { task: "t", key, now: T(0), ...o })
     const first = new Date("0001-01-01T00:00:00.000Z")
     const last = new Date("9999-12-31T23:59:59.999Z")
     await enqueueAt("first", { runAt: first, maxAttempts: 2 ** 31 - 1 })
@@ -74,7 +74,7 @@ describe("run time", () => {
     await enqueueAt("debounce", { mode: "debounce", delay: 1e12, maxWait: 1e12 })
     // Over the pending row, the debounce adds delay to the time of its enqueue and maxWait to the start of the window.
     await enqueueAt("debounce", { mode: "debounce", delay: 1e12, maxWait: 1e12, now: T(1) })
-    const rows = await jobs(schema.admin.query)
+    const rows = await jobs(schema.conn.query)
     expect(rows.map(row => [row.key, row.runAt.getTime()])).toEqual([
       ["first", first.getTime()],
       ["last", last.getTime()],
@@ -86,17 +86,17 @@ describe("run time", () => {
 })
 
 test("stores an absent payload as SQL NULL, read as undefined, and keeps a null payload as JSON", async () => {
-  await enqueue(schema.admin, schema.table, { task: "absent" })
-  await enqueue(schema.admin, schema.table, { task: "null", payload: null })
-  const absent = await schema.admin.query`
+  await enqueue(schema.conn, schema.table, { task: "absent" })
+  await enqueue(schema.conn, schema.table, { task: "null", payload: null })
+  const absent = await schema.conn.query`
     select payload is null from ${workerSchema.job} order by id`.pluck(t.boolean)
   expect(absent).toEqual([true, false])
-  expect((await jobs(schema.admin.query)).map(row => row.payload)).toEqual([undefined, null])
+  expect((await jobs(schema.conn.query)).map(row => row.payload)).toEqual([undefined, null])
 })
 
 describe("key modes with an existing pending job", () => {
   test("keep changes neither payload, run_at, nor max_attempts", async () => {
-    const a = await enqueue(schema.admin, schema.table, {
+    const a = await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       payload: 1,
@@ -105,7 +105,7 @@ describe("key modes with an existing pending job", () => {
       mode: "keep",
       now: T(0),
     })
-    const b = await enqueue(schema.admin, schema.table, {
+    const b = await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       payload: 2,
@@ -116,16 +116,16 @@ describe("key modes with an existing pending job", () => {
     })
     expect(a.created).toBe(true)
     expect(b).toEqual({ id: a.id, created: false })
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect(row.payload).toBe(1)
     expect(secondsOf(row.runAt)).toBe(5)
     expect(row.maxAttempts).toBe(3)
   })
 
   test("replace changes payload, run_at, and max_attempts and keeps attempts", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
-    await schema.admin.query`update ${workerSchema.job} set attempts = 3`
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
+    await schema.conn.query`update ${workerSchema.job} set attempts = 3`
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       payload: 2,
@@ -133,7 +133,7 @@ describe("key modes with an existing pending job", () => {
       maxAttempts: 9,
       now: T(1),
     })
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect(row.payload).toBe(2)
     expect(secondsOf(row.runAt)).toBe(7)
     expect(row.maxAttempts).toBe(9)
@@ -141,22 +141,22 @@ describe("key modes with an existing pending job", () => {
   })
 
   test("replace with resetAttempts resets attempts", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(0) })
-    await schema.admin.query`update ${workerSchema.job} set attempts = 3`
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
+    await schema.conn.query`update ${workerSchema.job} set attempts = 3`
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       resetAttempts: true,
       now: T(1),
     })
-    expect((await jobs(schema.admin.query))[0]!.attempts).toBe(0)
+    expect((await jobs(schema.conn.query))[0]!.attempts).toBe(0)
   })
 
   test("a key is unique within (scope, task)", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(0) })
-    await enqueue(schema.admin, schema.table, { task: "u", key: "k", now: T(0) })
-    await enqueue(schema.admin, schema.table, { task: "t", scope: "s2", key: "k", now: T(0) })
-    expect(await jobs(schema.admin.query)).toHaveLength(3)
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
+    await enqueue(schema.conn, schema.table, { task: "u", key: "k", now: T(0) })
+    await enqueue(schema.conn, schema.table, { task: "t", scope: "s2", key: "k", now: T(0) })
+    expect(await jobs(schema.conn.query)).toHaveLength(3)
   })
 })
 
@@ -164,13 +164,13 @@ describe("enqueueMany", () => {
   /** Returns a target of the statements of the test schema that gives the rows of each result in reverse, an order that the statement does not exclude. */
   const createReversingTarget = (): ValuesTarget => ({
     async execute(statement) {
-      const result = await schema.admin.execute(statement)
+      const result = await schema.conn.execute(statement)
       return { ...result, rows: [...result.rows].reverse() }
     },
   })
 
   test("inserts new rows in the order of the jobs, and resolves to the result of each job in that order, a merged job to the id of the pending job of its key, whatever the order of the rows of the result", async () => {
-    const existing = await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 0 })
+    const existing = await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 0 })
     const results = await enqueueMany(createReversingTarget(), schema.table, {
       task: "t",
       jobs: [
@@ -184,7 +184,7 @@ describe("enqueueMany", () => {
     })
     expect(results.map(r => r.created)).toEqual([true, false, true, true, true, true])
     expect(results[1]).toEqual({ id: existing.id, created: false })
-    const rows = await jobs(schema.admin.query)
+    const rows = await jobs(schema.conn.query)
     const payloadOf = (id: string) => rows.find(row => row.id === id)!.payload
     expect(results.map(r => payloadOf(r.id))).toEqual([
       "unkeyed 1",
@@ -207,7 +207,7 @@ describe("enqueueMany", () => {
 
   test("merges each job into the pending job of its key by its own mode and settings", async () => {
     const enqueueAt = (key: string, o: Partial<EnqueueParams>) =>
-      enqueue(schema.admin, schema.table, { task: "t", key, payload: 1, now: T(0), ...o })
+      enqueue(schema.conn, schema.table, { task: "t", key, payload: 1, now: T(0), ...o })
     const debounce = { mode: "debounce", delay: 2, maxWait: 10 } as const
     await enqueueAt("keep", { runAt: T(5), maxAttempts: 3 })
     await enqueueAt("replace", {})
@@ -218,11 +218,11 @@ describe("enqueueMany", () => {
     await enqueueAt("opens", {})
     await enqueueAt("backoff", {})
     const backoffEnd = param(t.timestamptz, T(30))
-    await schema.admin.query`
+    await schema.conn.query`
       update ${workerSchema.job} set attempts = 3,
         not_before = case when key in ('held', 'backoff') then ${backoffEnd} end,
         run_at = case when key in ('held', 'backoff') then ${backoffEnd} else run_at end`
-    const results = await enqueueMany(schema.admin, schema.table, {
+    const results = await enqueueMany(schema.conn, schema.table, {
       task: "t",
       now: T(1),
       jobs: [
@@ -241,7 +241,7 @@ describe("enqueueMany", () => {
       ],
     })
     expect(results.every(r => !r.created)).toBe(true)
-    const rows = await jobs(schema.admin.query)
+    const rows = await jobs(schema.conn.query)
     expect(
       rows.map(row => [
         row.key,
@@ -264,7 +264,7 @@ describe("enqueueMany", () => {
   })
 
   test("stores each payload as enqueue serializes it: by its own toJSON with the empty key, absent as SQL NULL, and null as JSON", async () => {
-    const results = await enqueueMany(schema.admin, schema.table, {
+    const results = await enqueueMany(schema.conn, schema.table, {
       task: "t",
       jobs: [
         { payload: { toJSON: (key: string) => key } },
@@ -272,7 +272,7 @@ describe("enqueueMany", () => {
         { payload: null },
       ],
     })
-    const stored = await schema.admin.query`
+    const stored = await schema.conn.query`
       select id, payload::text from ${workerSchema.job} order by id`.select({
       id: t.bigintText,
       payload: t.text.nullable(),
@@ -285,14 +285,14 @@ describe("enqueueMany", () => {
   })
 
   test("enqueues all jobs or none: a job that a check of the table rejects rolls back the others", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1 })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 1 })
     await expect(
-      enqueueMany(schema.admin, schema.table, {
+      enqueueMany(schema.conn, schema.table, {
         task: "t",
         jobs: [{ key: "k", payload: 2 }, { payload: 3 }, { key: "a".repeat(1025), payload: 4 }],
       }),
     ).rejects.toThrow()
-    expect((await jobs(schema.admin.query)).map(row => [row.key, row.payload])).toEqual([["k", 1]])
+    expect((await jobs(schema.conn.query)).map(row => [row.key, row.payload])).toEqual([["k", 1]])
   })
 
   test("resolves to no results without a statement for no jobs", async () => {
@@ -310,7 +310,7 @@ describe("enqueueMany", () => {
         task: "t",
         jobs: [{ payload: 2 }, { key: "k", payload: 3 }],
       })
-      await waitForLock(schema.admin, p2.pid)
+      await waitForLock(schema.conn, p2.pid)
       await (outcome === "commit" ? p1.query`commit` : p1.query`rollback`)
       const [unkeyed, keyed] = await batch
       expect(unkeyed!.created).toBe(true)
@@ -319,7 +319,7 @@ describe("enqueueMany", () => {
           ? { id: first.id, created: false }
           : { id: expect.not.stringMatching(`^${first.id}$`), created: true },
       )
-      const rows = await jobs(schema.admin.query)
+      const rows = await jobs(schema.conn.query)
       expect(rows.find(row => row.id === keyed!.id)!.payload).toBe(3)
       expect(rows).toHaveLength(2)
     })
@@ -352,7 +352,7 @@ describe("concurrent producers", () => {
       ).flat()
       expect(results.filter(r => r.created)).toHaveLength(1)
       expect(new Set(results.map(r => r.id)).size).toBe(1)
-      const rows = await jobs(schema.admin.query)
+      const rows = await jobs(schema.conn.query)
       expect(rows).toHaveLength(1)
       if (mode === "debounce") {
         // Monotonic: run_at is not before the latest event + delay, and not after the window.
@@ -367,10 +367,10 @@ describe("concurrent producers", () => {
     await p1.query`begin`
     const a = await enqueue(p1, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
     const second = enqueue(p2, schema.table, { task: "t", key: "k", payload: 2, now: T(0) })
-    await waitForLock(schema.admin, p2.pid)
+    await waitForLock(schema.conn, p2.pid)
     await p1.query`commit`
     expect(await second).toEqual({ id: a.id, created: false })
-    expect((await jobs(schema.admin.query))[0]!.payload).toBe(2)
+    expect((await jobs(schema.conn.query))[0]!.payload).toBe(2)
   })
 
   test("a second producer inserts its own row when the first rolls back", async () => {
@@ -379,18 +379,18 @@ describe("concurrent producers", () => {
     await p1.query`begin`
     await enqueue(p1, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
     const second = enqueue(p2, schema.table, { task: "t", key: "k", payload: 2, now: T(0) })
-    await waitForLock(schema.admin, p2.pid)
+    await waitForLock(schema.conn, p2.pid)
     await p1.query`rollback`
     expect((await second).created).toBe(true)
-    expect((await jobs(schema.admin.query)).map(r => r.payload)).toEqual([2])
+    expect((await jobs(schema.conn.query)).map(r => r.payload)).toEqual([2])
   })
 })
 
 describe("event during active", () => {
   test("creates a second pending row; the active job keeps its key and completes", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
-    const claim = only(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(0) }))
-    const b = await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
+    const claim = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    const b = await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       payload: 2,
@@ -398,39 +398,39 @@ describe("event during active", () => {
       now: T(1),
     })
     expect(b.created).toBe(true)
-    const rows = await jobs(schema.admin.query)
+    const rows = await jobs(schema.conn.query)
     expect(rows.map(r => [r.state, r.key, r.payload])).toEqual([
       ["active", "k", 1],
       ["pending", "k", 2],
     ])
     expect(await complete(schema.db, claim)).toBe(true)
-    expect((await jobs(schema.admin.query)).map(r => r.id)).toEqual([b.id])
+    expect((await jobs(schema.conn.query)).map(r => r.id)).toEqual([b.id])
   })
 
   test("the next pending row of a key starts while the active job runs", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
-    only(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(0) }))
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 2, now: T(1) })
-    only(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(1) }))
-    expect((await jobs(schema.admin.query)).map(r => [r.state, r.key, r.payload])).toEqual([
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
+    only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 2, now: T(1) })
+    only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(1) }))
+    expect((await jobs(schema.conn.query)).map(r => [r.state, r.key, r.payload])).toEqual([
       ["active", "k", 1],
       ["active", "k", 2],
     ])
   })
 
   test("a producer blocked by an uncommitted claim inserts a new row after the claim commits", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: 1, now: T(0) })
     const worker = await schema.connect()
     const producer = await schema.connect()
     await worker.query`begin`
     const claim = only(await claimPlain(worker.query, { ...W, limit: 1, now: T(0) }))
     const event = enqueue(producer, schema.table, { task: "t", key: "k", payload: 2, now: T(0) })
-    await waitForLock(schema.admin, producer.pid)
+    await waitForLock(schema.conn, producer.pid)
     await worker.query`commit`
     const r = await event
     expect(r.created).toBe(true)
     expect(r.id).not.toBe(claim.id)
-    expect((await jobs(schema.admin.query)).map(r => [r.state, r.payload])).toEqual([
+    expect((await jobs(schema.conn.query)).map(r => [r.state, r.payload])).toEqual([
       ["active", 1],
       ["pending", 2],
     ])
@@ -441,7 +441,7 @@ describe("an uncommitted enqueue keeps the pending row from being claimed", () =
   // Without the row lock, the job would start before the transaction of the event commits and miss its data.
   for (const mode of ["replace", "keep", "debounce"] as KeyMode[]) {
     test(mode, async () => {
-      await enqueue(schema.admin, schema.table, {
+      await enqueue(schema.conn, schema.table, {
         task: "t",
         key: "k",
         payload: 1,
@@ -461,18 +461,18 @@ describe("an uncommitted enqueue keeps the pending row from being claimed", () =
         maxWait: 10,
         now: T(1),
       })
-      expect(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(5) })).toEqual([])
+      expect(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(5) })).toEqual([])
       await producer.query`commit`
-      expect(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(5) })).toHaveLength(1)
+      expect(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(5) })).toHaveLength(1)
     })
   }
 
   test("claiming without a queue does not block on the row of the producer", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", now: T(0) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
     const producer = await schema.connect()
     await producer.query`begin`
     await enqueue(producer, schema.table, { task: "t", key: "k", now: T(0) })
-    const claim = claimPlain(schema.admin.query, { ...W, limit: 1, now: T(1) })
+    const claim = claimPlain(schema.conn.query, { ...W, limit: 1, now: T(1) })
     expect(await isPending(claim, 200)).toBe(false)
     await producer.query`rollback`
   })
@@ -578,20 +578,20 @@ async function runTicks(
 
 describe("debounce on virtual time", () => {
   test("50 events every 0.5 s, delay 2, maxWait 10: three runs at 10, 20.5, 26.5", async () => {
-    const ledger = await runTicks(schema.admin, { events: t => t <= 24.5, until: 40 })
+    const ledger = await runTicks(schema.conn, { events: t => t <= 24.5, until: 40 })
     expect(ledger.executions.map(x => x.start)).toEqual([10, 20.5, 26.5])
     expect(ledger.executions.map(x => x.events.length)).toEqual([21, 21, 8])
     ledger.check()
   })
 
   test("an event exactly at the window end before the claim joins the current window", async () => {
-    const ledger = await runTicks(schema.admin, { events: t => t <= 10, until: 20 })
+    const ledger = await runTicks(schema.conn, { events: t => t <= 10, until: 20 })
     expect(ledger.executions.map(x => [x.start, Math.max(...x.events)])).toEqual([[10, 10]])
     ledger.check()
   })
 
   test("an event exactly at the window end after the claim opens a new window", async () => {
-    const ledger = await runTicks(schema.admin, {
+    const ledger = await runTicks(schema.conn, {
       events: t => t <= 10,
       until: 20,
       order: t => (t === 10 ? "claim-first" : "event-first"),
@@ -605,7 +605,7 @@ describe("debounce on virtual time", () => {
 
   test("an event at the run_at of its delay before the claim postpones the run", async () => {
     // Events at 0 and 2: run_at after the first is 2, and the event at tick 2 moves it to 4.
-    const ledger = await runTicks(schema.admin, { events: t => t === 0 || t === 2, until: 10 })
+    const ledger = await runTicks(schema.conn, { events: t => t === 0 || t === 2, until: 10 })
     expect(ledger.executions.map(x => [x.start, x.events])).toEqual([[4, [0, 2]]])
     ledger.check()
   })
@@ -613,7 +613,7 @@ describe("debounce on virtual time", () => {
   test("a failure with backoff 30 at tick 10 under a stream of events: a run at 40, then a new window", async () => {
     const ledger = new Ledger()
     let failed = false
-    await runTicks(schema.admin, {
+    await runTicks(schema.conn, {
       events: t => t <= 50,
       until: 70,
       ledger,
@@ -638,7 +638,7 @@ describe("debounce on virtual time", () => {
 
 describe("debounce: maxWait bounds the computed deadline, not the claim", () => {
   test("a long producer transaction holding the due row delays the claim past maxWait; lag is reported", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -655,17 +655,17 @@ describe("debounce: maxWait bounds the computed deadline, not the claim", () => 
       now: T(2),
     })
     for (let tick = 2; tick < 15; tick += 0.5)
-      expect(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(tick) })).toEqual([])
+      expect(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(tick) })).toEqual([])
     await producer.query`commit`
-    const claim = only(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(15) }))
+    const claim = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(15) }))
     // Deadline min(2 + 2, 0 + 10) = 4 respected; the claim is 11 s late, 5 s past window start + maxWait.
-    expect([secondsOf(only(await jobs(schema.admin.query)).runAt), claim.lag]).toEqual([4, 11])
+    expect([secondsOf(only(await jobs(schema.conn.query)).runAt), claim.lag]).toEqual([4, 11])
   })
 })
 
 describe("debounce: maxWait below delay", () => {
   test("the first event is capped by maxWait, not only the following ones", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -673,13 +673,13 @@ describe("debounce: maxWait below delay", () => {
       maxWait: 2,
       now: T(0),
     })
-    expect(secondsOf((await jobs(schema.admin.query))[0]!.runAt)).toBe(2)
+    expect(secondsOf((await jobs(schema.conn.query))[0]!.runAt)).toBe(2)
   })
 })
 
 describe("debounce: changes of settings and key modes", () => {
   const debounce = (key: string, now: number, settings: { delay: number; maxWait: number }) =>
-    enqueue(schema.admin, schema.table, {
+    enqueue(schema.conn, schema.table, {
       task: "t",
       key,
       mode: "debounce",
@@ -687,7 +687,7 @@ describe("debounce: changes of settings and key modes", () => {
       now: T(now),
     })
   const runAt = async (key: string) =>
-    secondsOf(only(await jobs(schema.admin.query, sql`key = ${key}`)).runAt)
+    secondsOf(only(await jobs(schema.conn.query, sql`key = ${key}`)).runAt)
 
   test("a later event never moves run_at back, also with a smaller maxWait, and the commit order does not change it", async () => {
     await debounce("in-order", 0, { delay: 8, maxWait: 3 })
@@ -705,9 +705,9 @@ describe("debounce: changes of settings and key modes", () => {
   })
 
   test("a debounce enqueue over a pending job of another mode opens a new window", async () => {
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", delay: 100, now: T(0) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", delay: 100, now: T(0) })
     await debounce("k", 50, DEBOUNCE)
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect([secondsOf(row.runAt), secondsOf(row.windowStartedAt)]).toEqual([52, 50])
     await debounce("k", 59, DEBOUNCE)
     expect(await runAt("k")).toBe(60)
@@ -715,10 +715,10 @@ describe("debounce: changes of settings and key modes", () => {
 
   test("an enqueue in another mode ends the window", async () => {
     await debounce("k", 0, { delay: 8, maxWait: 10 })
-    await enqueue(schema.admin, schema.table, { task: "t", key: "k", mode: "keep", now: T(1) })
+    await enqueue(schema.conn, schema.table, { task: "t", key: "k", mode: "keep", now: T(1) })
     expect(await runAt("k")).toBe(8)
     await debounce("k", 2, DEBOUNCE)
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect([secondsOf(row.runAt), secondsOf(row.windowStartedAt)]).toEqual([4, 2])
   })
 })
@@ -726,33 +726,33 @@ describe("debounce: changes of settings and key modes", () => {
 describe("debounce under concurrency", () => {
   test("a producer with an earlier now that commits later does not move run_at back", async () => {
     // In production, now of a producer is the start of its statement, and commits arrive in another order.
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
       ...DEBOUNCE,
       now: T(0),
     })
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
       ...DEBOUNCE,
       now: T(6),
     })
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
       ...DEBOUNCE,
       now: T(5),
     })
-    expect(secondsOf((await jobs(schema.admin.query))[0]!.runAt)).toBe(8)
+    expect(secondsOf((await jobs(schema.conn.query))[0]!.runAt)).toBe(8)
     // A formula without monotonicity would give 7, a run 1 s after the event at 6.
   })
 
   test("a producer with an earlier now that joins a later window counts maxWait from the window", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -760,7 +760,7 @@ describe("debounce under concurrency", () => {
       maxWait: 2,
       now: T(10),
     })
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -768,19 +768,19 @@ describe("debounce under concurrency", () => {
       maxWait: 2,
       now: T(9),
     })
-    expect(secondsOf(only(await jobs(schema.admin.query)).runAt)).toBe(12)
+    expect(secondsOf(only(await jobs(schema.conn.query)).runAt)).toBe(12)
     // A cap from the now of the producer would give 9 + 2 = 11.
   })
 
   test("an event holds the row in an open transaction: the claim at the deadline skips it and takes it with the event after the commit", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
       ...DEBOUNCE,
       now: T(0),
     })
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -797,14 +797,14 @@ describe("debounce under concurrency", () => {
       payload: "edge",
       now: T(10),
     })
-    expect(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(10) })).toEqual([])
+    expect(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(10) })).toEqual([])
     await producer.query`commit`
-    const claim = only(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(10) }))
+    const claim = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(10) }))
     expect(claim.job.payload).toBe("edge")
   })
 
   test("a claim holds the row in an open transaction: the event waits and opens a new window after the commit", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -822,10 +822,10 @@ describe("debounce under concurrency", () => {
       ...DEBOUNCE,
       now: T(10),
     })
-    await waitForLock(schema.admin, producer.pid)
+    await waitForLock(schema.conn, producer.pid)
     await worker.query`commit`
     expect((await event).created).toBe(true)
-    const rows = await jobs(schema.admin.query, sql`state = 'pending'`)
+    const rows = await jobs(schema.conn.query, sql`state = 'pending'`)
     expect([secondsOf(rows[0]!.windowStartedAt), secondsOf(rows[0]!.runAt)]).toEqual([10, 12])
   })
 
@@ -874,11 +874,11 @@ describe("debounce under concurrency", () => {
       `debounce concurrent: ${ledger.events.length} events, ${ledger.executions.length} executions, ` +
         `${lateness.length} past maxWait, max lateness ${Math.max(0, ...lateness)} s`,
     )
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
   })
 
   test("a producer holding the due row at every poll starves it past maxWait", async () => {
-    await enqueue(schema.admin, schema.table, {
+    await enqueue(schema.conn, schema.table, {
       task: "t",
       key: "k",
       mode: "debounce",
@@ -895,10 +895,10 @@ describe("debounce under concurrency", () => {
         ...DEBOUNCE,
         now: T(tick),
       })
-      expect(await claimPlain(schema.admin.query, { ...W, limit: 1, now: T(tick) })).toEqual([])
+      expect(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(tick) })).toEqual([])
       await producer.query`commit`
     }
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect([row.state, secondsOf(row.runAt)]).toEqual(["pending", 10])
   })
 })

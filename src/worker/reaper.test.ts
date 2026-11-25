@@ -28,8 +28,8 @@ afterEach(async () => {
 
 /** Claims `n` jobs for a dead worker whose leases expire at once. */
 async function expire(n: number) {
-  for (let i = 0; i < n; i++) await enqueue(schema.admin, schema.table, { task: "t" })
-  await claimPlain(schema.admin.query, {
+  for (let i = 0; i < n; i++) await enqueue(schema.conn, schema.table, { task: "t" })
+  await claimPlain(schema.conn.query, {
     worker: "dead",
     tasks: ["t"],
     limit: n,
@@ -54,7 +54,7 @@ test("after connection errors, the reaper returns expired jobs once the server i
   proxy.refuse = false
   while (!events.some(e => e.type === "reap")) await sleep(10)
   await reaper.stop()
-  expect((await jobs(schema.admin.query)).map(r => r.state)).toEqual(["pending"])
+  expect((await jobs(schema.conn.query)).map(r => r.state)).toEqual(["pending"])
   await driver.close()
   await proxy.close()
 })
@@ -73,9 +73,9 @@ test("a full batch starts the next round at once", async () => {
 })
 
 test("a producer that holds a pending insert of an expired job's key does not stop the return of other expired jobs, and the reaper returns the job once the producer ends", async () => {
-  const blocked = await enqueue(schema.admin, schema.table, { task: "t", key: "blocked" })
-  const independent = await enqueue(schema.admin, schema.table, { task: "t", key: "independent" })
-  await claimPlain(schema.admin.query, {
+  const blocked = await enqueue(schema.conn, schema.table, { task: "t", key: "blocked" })
+  const independent = await enqueue(schema.conn, schema.table, { task: "t", key: "independent" })
+  await claimPlain(schema.conn.query, {
     worker: "dead",
     tasks: ["t"],
     limit: 2,
@@ -93,13 +93,13 @@ test("a producer that holds a pending insert of an expired job's key does not st
   })
   try {
     await log.waitFor("reap", e => e.jobs.some(j => j.id === independent.id))
-    expect((await jobs(schema.admin.query)).map(r => [r.key, r.state])).toEqual([
+    expect((await jobs(schema.conn.query)).map(r => [r.key, r.state])).toEqual([
       ["blocked", "active"],
       ["independent", "pending"],
     ])
     await producer.query`rollback`
     await log.waitFor("reap", e => e.jobs.some(j => j.id === blocked.id))
-    expect((await jobs(schema.admin.query)).map(r => [r.key, r.state])).toEqual([
+    expect((await jobs(schema.conn.query)).map(r => [r.key, r.state])).toEqual([
       ["blocked", "pending"],
       ["independent", "pending"],
     ])

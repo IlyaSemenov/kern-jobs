@@ -151,7 +151,7 @@ afterEach(async () => {
 
 /** Marks a pending job of the test schema failed `age` seconds ago, as a worker does after the last attempt of the job. */
 const markFailed = (id: string, age = 0) =>
-  schema.admin.query`
+  schema.conn.query`
     update ${workerSchema.job} set state = 'failed', attempts = 1, last_error = 'boom',
       failed_at = now() - make_interval(secs => ${param(t.doublePrecision, age)})
     where id = ${id}`
@@ -170,7 +170,7 @@ for (const [name, createClient] of clients) {
 
     test("enqueues a job outside a transaction", async () => {
       const result = await createTestJobs().enqueue(sendEmail, { to: "a@example.com" })
-      const row = only(await jobRows(schema.admin.query))
+      const row = only(await jobRows(schema.conn.query))
       expect(result).toEqual({ id: row.id, created: true })
       expect([row.task, row.payload]).toEqual(["email.send", { to: "a@example.com" }])
     })
@@ -179,9 +179,9 @@ for (const [name, createClient] of clients) {
       const jobs = createTestJobs()
       await client.transaction(async () => {
         await jobs.enqueue(sendEmail, { to: "a@example.com" })
-        expect(await jobRows(schema.admin.query)).toEqual([])
+        expect(await jobRows(schema.conn.query)).toEqual([])
       })
-      expect(await jobRows(schema.admin.query)).toHaveLength(1)
+      expect(await jobRows(schema.conn.query)).toHaveLength(1)
     })
 
     test("enqueues in a transaction through the client of the transaction", async () => {
@@ -189,9 +189,9 @@ for (const [name, createClient] of clients) {
         await createJobs(tx, { schemaName: schema.name }).enqueue(sendEmail, {
           to: "a@example.com",
         })
-        expect(await jobRows(schema.admin.query)).toEqual([])
+        expect(await jobRows(schema.conn.query)).toEqual([])
       })
-      expect(await jobRows(schema.admin.query)).toHaveLength(1)
+      expect(await jobRows(schema.conn.query)).toHaveLength(1)
     })
 
     test("a job enqueued in a transaction that rolls back never appears", async () => {
@@ -203,7 +203,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.admin.query)).toEqual([])
+      expect(await jobRows(schema.conn.query)).toEqual([])
     })
 
     test("merges an enqueue into the pending job of its key", async () => {
@@ -211,7 +211,7 @@ for (const [name, createClient] of clients) {
       const first = await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       const second = await jobs.enqueue(indexProduct, { productId: "42", version: 2 })
       expect(second).toEqual({ id: first.id, created: false })
-      expect(only(await jobRows(schema.admin.query)).payload).toEqual({
+      expect(only(await jobRows(schema.conn.query)).payload).toEqual({
         productId: "42",
         version: 1,
       })
@@ -226,9 +226,9 @@ for (const [name, createClient] of clients) {
           { productId: "43", version: 1 },
           { productId: "42", version: 2 },
         ])
-        expect(await jobRows(schema.admin.query)).toHaveLength(1)
+        expect(await jobRows(schema.conn.query)).toHaveLength(1)
       })
-      const rows = await jobRows(schema.admin.query)
+      const rows = await jobRows(schema.conn.query)
       expect(rows.map(row => row.key)).toEqual(["product:42", "product:43"])
       expect(results).toEqual([
         { id: rows[1]!.id, created: true },
@@ -245,7 +245,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.admin.query)).toEqual([])
+      expect(await jobRows(schema.conn.query)).toEqual([])
     })
 
     test("retries a failed job, reports a pending job of its key that keeps it from returning, and deletes a failed or pending job", async () => {
@@ -253,13 +253,13 @@ for (const [name, createClient] of clients) {
       const { id } = await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(id)
       expect(await jobs.retry(id)).toEqual({ retried: true })
-      expect(only(await jobRows(schema.admin.query)).state).toBe("pending")
+      expect(only(await jobRows(schema.conn.query)).state).toBe("pending")
       await markFailed(id)
       const { id: pending } = await jobs.enqueue(indexProduct, { productId: "42", version: 2 })
       expect(await jobs.retry(id)).toEqual({ retried: false, pendingId: pending })
       expect([await jobs.delete(id), await jobs.delete(pending)]).toEqual([true, true])
       expect([await jobs.retry(id), await jobs.delete(id)]).toEqual([null, false])
-      expect(await jobRows(schema.admin.query)).toEqual([])
+      expect(await jobRows(schema.conn.query)).toEqual([])
     })
 
     test("a retry and deletes in a transaction that rolls back change nothing", async () => {
@@ -270,7 +270,7 @@ for (const [name, createClient] of clients) {
       await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(retried)
       await markFailed(old, 60)
-      const before = await jobRows(schema.admin.query)
+      const before = await jobRows(schema.conn.query)
       const error = new Error("rollback")
       await expect(
         client.transaction(async () => {
@@ -281,7 +281,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.admin.query)).toEqual(before)
+      expect(await jobRows(schema.conn.query)).toEqual(before)
     })
   })
 }
@@ -576,7 +576,7 @@ describe("scope", () => {
   const indexProduct = defineTask("search.indexProduct", { scoped: true })
 
   /** Returns the scopes of the jobs of the test schema in the order of their ids. */
-  const scopes = async () => (await jobRows(schema.admin.query)).map(row => row.scope)
+  const scopes = async () => (await jobRows(schema.conn.query)).map(row => row.scope)
 
   test("writes the scope of createJobs, a string or what its function returns at the enqueue, to each job of a scoped task", async () => {
     // 128 bytes in UTF-8, the longest scope.
@@ -867,7 +867,7 @@ describe("options", () => {
     const jobs = createJobs(pool, { schemaName: schema.name })
     await jobs.enqueue(task, { id: "1" })
     await jobs.enqueue(task, { id: "2" }, { key: null, delay: 0 })
-    const [first, second] = await jobRows(schema.admin.query)
+    const [first, second] = await jobRows(schema.conn.query)
     expect(first).toMatchObject({ key: "k:1", queue: "q", maxAttempts: 3 })
     expect(first!.runAt.getTime() - first!.createdAt.getTime()).toBe(5000)
     expect(second).toMatchObject({ key: null, queue: "q", maxAttempts: 4 })
@@ -883,7 +883,7 @@ describe("options", () => {
     await jobs.enqueue(other)
     await createJobs(pool, { schemaName: schema.name, scope: "b" }).enqueue(task, 3)
     await jobs.enqueue(task, 4, { key: "k" })
-    const rows = await jobRows(schema.admin.query)
+    const rows = await jobRows(schema.conn.query)
     expect(rows.map(({ task, scope, key, payload }) => ({ task, scope, key, payload }))).toEqual([
       { task: "t", scope: "a", key: "", payload: 2 },
       { task: "other", scope: "a", key: "", payload: undefined },
@@ -891,14 +891,14 @@ describe("options", () => {
       { task: "t", scope: "a", key: "k", payload: 4 },
     ])
     expect(await jobs.deletePending({ task, key: true })).toBe(1)
-    expect((await jobRows(schema.admin.query)).map(row => row.payload)).toEqual([undefined, 3, 4])
+    expect((await jobRows(schema.conn.query)).map(row => row.payload)).toEqual([undefined, 3, 4])
   })
 
   test("debounces by the delay and maxWait of the task", async () => {
     const task = defineTask("t", { key: "k", keyMode: "debounce", delay: 2, maxWait: 10 })
     const jobs = createJobs(pool, { schemaName: schema.name })
     await jobs.enqueue(task)
-    const row = only(await jobRows(schema.admin.query))
+    const row = only(await jobRows(schema.conn.query))
     expect(row.keyMode).toBe("debounce")
     expect(row.runAt.getTime() - row.createdAt.getTime()).toBe(2000)
   })
@@ -970,7 +970,7 @@ describe("enqueueMany", () => {
     const jobs = createJobs(pool, { schemaName: schema.name })
     await jobs.enqueueMany(task, [{ id: "a" }, { id: "b" }, { id: "c" }], { queue: "q" })
     expect(
-      (await jobRows(schema.admin.query)).map(({ key, queue, maxAttempts, payload }) => [
+      (await jobRows(schema.conn.query)).map(({ key, queue, maxAttempts, payload }) => [
         key,
         queue,
         maxAttempts,
@@ -987,7 +987,7 @@ describe("enqueueMany", () => {
     const jobs = createJobs(pool, { schemaName: schema.name })
     const results = await jobs.enqueueMany(defineTask("t"), new Array<void>(2))
     expect(results.map(r => r.created)).toEqual([true, true])
-    expect((await jobRows(schema.admin.query)).map(row => row.payload)).toEqual([
+    expect((await jobRows(schema.conn.query)).map(row => row.payload)).toEqual([
       undefined,
       undefined,
     ])
@@ -1017,7 +1017,7 @@ describe("enqueueMany", () => {
     )
     await expect(jobs.enqueueMany(task, ["a", 1n])).rejects.toThrow("BigInt")
     expect(counts.client).toBe(0)
-    expect(await jobRows(schema.admin.query)).toEqual([])
+    expect(await jobRows(schema.conn.query)).toEqual([])
   })
 
   test("resolves to no results for no payloads, after the checks of the name of the task, the overrides, and the scope, without calling withOptions or the client", async () => {
@@ -1053,7 +1053,7 @@ describe("enqueueMany", () => {
       scope: () => `tenant ${++calls}`,
     })
     await jobs.enqueueMany(defineTask("t", { scoped: true }).withPayload<number>(), [1, 2])
-    expect((await jobRows(schema.admin.query)).map(row => row.scope)).toEqual([
+    expect((await jobRows(schema.conn.query)).map(row => row.scope)).toEqual([
       "tenant 1",
       "tenant 1",
     ])

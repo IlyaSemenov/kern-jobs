@@ -44,9 +44,9 @@ async function proxied(): Promise<{ proxy: Proxy; driver: Driver }> {
 }
 
 async function claimJob(): Promise<Claim> {
-  await enqueue(schema.admin, schema.table, { task: "t" })
+  await enqueue(schema.conn, schema.table, { task: "t" })
   return only(
-    await claimPlain(schema.admin.query, {
+    await claimPlain(schema.conn.query, {
       worker: "w",
       tasks: ["t"],
       limit: 1,
@@ -97,7 +97,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "completed" : "unknown",
       errors: 1,
     })
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
   })
 }
 
@@ -110,7 +110,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "retry" : "unknown",
       errors: 1,
     })
-    const row = only(await jobs(schema.admin.query))
+    const row = only(await jobs(schema.conn.query))
     expect([row.state, row.attempts, row.lastError]).toEqual(["pending", 1, "boom"])
   })
 }
@@ -118,9 +118,9 @@ for (const mode of ["before", "after"] as const) {
 for (const mode of ["before", "after"] as const) {
   test(`terminal fail of a claim stamped with a failure job cut ${mode} its COMMIT reaches the server: one failure job either way`, async () => {
     const { proxy, driver } = await proxied()
-    await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
+    await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
     const claim = only(
-      await claimPlain(schema.admin.query, {
+      await claimPlain(schema.conn.query, {
         worker: "w",
         tasks: ["t"],
         limit: 1,
@@ -133,7 +133,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "failed" : "unknown",
       errors: 1,
     })
-    expect((await jobs(schema.admin.query)).map(r => [r.task, r.state])).toEqual([
+    expect((await jobs(schema.conn.query)).map(r => [r.task, r.state])).toEqual([
       ["t", "failed"],
       ["t:failure", "pending"],
     ])
@@ -148,7 +148,7 @@ test("a claim that a heartbeat found lost is not settled", async () => {
     outcome: "lost",
     errors: 0,
   })
-  expect(only(await jobs(schema.admin.query)).state).toBe("active")
+  expect(only(await jobs(schema.conn.query)).state).toBe("active")
 })
 
 for (const unsent of [true, false]) {
@@ -173,7 +173,7 @@ for (const unsent of [true, false]) {
       unsent ? "stopped" : "unknown",
       ["settle-error"],
     ])
-    expect((await jobs(schema.admin.query)).map(row => row.state)).toEqual(unsent ? ["active"] : [])
+    expect((await jobs(schema.conn.query)).map(row => row.state)).toEqual(unsent ? ["active"] : [])
   })
 }
 
@@ -188,7 +188,7 @@ test("a statement that PostgreSQL keeps rejecting is given up after three retrie
     },
   }
   expect(await run({ driver: rejecting, claim })).toEqual({ outcome: "error", errors: 4 })
-  expect(only(await jobs(schema.admin.query)).state).toBe("active")
+  expect(only(await jobs(schema.conn.query)).state).toBe("active")
 })
 
 test("rejections after a statement of unknown outcome give up the settlement with the outcome unknown", async () => {
@@ -220,5 +220,5 @@ test("connection errors past the confirmed lease give up the settlement: abandon
   expect(result.outcome).toBe("abandoned")
   expect(result.errors).toBeGreaterThan(1)
   expect(monotonicNow() - started).toBeGreaterThanOrEqual(200)
-  expect(only(await jobs(schema.admin.query)).state).toBe("active")
+  expect(only(await jobs(schema.conn.query)).state).toBe("active")
 })

@@ -164,7 +164,7 @@ export interface TestSchema {
   createDb(source: Driver | TestDriverOptions): WorkerDb
   connect(options?: TestDriverOptions): Promise<Conn>
   /** Connection for setup, checks, and observation. */
-  admin: Conn
+  conn: Conn
   /**
    * Names the job table of another PostgreSQL schema, `<name>_<label>`, that does not exist yet, for a test that creates it, such as by `migrateJobs`; `dispose` drops that schema.
    */
@@ -192,8 +192,8 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
     return c
   }
   await migrate(database, jobMigrations, { schemaName })
-  const admin = await connect()
-  await admin.executeScript(createHookSql(schemaName))
+  const conn = await connect()
+  await conn.executeScript(createHookSql(schemaName))
   return {
     name: schemaName,
     table: createJobTable(schemaName),
@@ -206,7 +206,7 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
       return bindWorkerDb(createDatabase({ driver }), schemaName)
     },
     connect,
-    admin,
+    conn,
     unmigratedTable(label) {
       const table = createJobTable(`${schemaName}_${label}`)
       schemaNames.push(table.schemaName)
@@ -292,7 +292,7 @@ export const unsafeInteger = 2n ** 53n + 1n
 /** Row of the job table with all its columns. */
 export type JobRow = Selectable<typeof job>
 
-/** Returns the job rows that match the condition `where` of the alias `j`, in the order of their ids, by a statement of `query`, a template of a `Db` of the worker ORM schema, such as `schema.admin.query`. */
+/** Returns the job rows that match the condition `where` of the alias `j`, in the order of their ids, by a statement of `query`, a template of a `Db` of the worker ORM schema, such as `schema.conn.query`. */
 export async function jobs(
   query: DbSqlQueryTemplate,
   where: SqlFragment = sql`true`,

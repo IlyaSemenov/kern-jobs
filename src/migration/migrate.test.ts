@@ -37,7 +37,7 @@ async function schemaExists(name: string): Promise<boolean> {
 describe("migrateJobs", () => {
   test("creates the schema with the job table over a driver", async () => {
     await migrateJobs(schema.driver, { schemaName: table.schemaName })
-    const { id } = await enqueue(schema.admin, table, { task: "t" })
+    const { id } = await enqueue(schema.conn, table, { task: "t" })
     expect(
       (await jobs(bindWorkerDb(schema.database, table.schemaName).$query)).map(job => job.id),
     ).toEqual([id])

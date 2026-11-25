@@ -56,12 +56,12 @@ describe("a running worker", () => {
     const purged = Promise.withResolvers<unknown>()
     const reported = Promise.withResolvers<void>()
     const reports: [unknown, WorkerErrorInfo][] = []
-    const failed = await enqueue(schema.admin, schema.table, {
+    const failed = await enqueue(schema.conn, schema.table, {
       task: "search.indexProduct",
       payload: { productId: "42" },
       key: "product:42",
     })
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const worker = start({
       id: "indexer",
       manifest: defineManifest({
@@ -104,15 +104,15 @@ describe("a running worker", () => {
         },
       ],
     ])
-    const rows = await jobs(schema.admin.query)
+    const rows = await jobs(schema.conn.query)
     expect(rows.map(row => [row.id, row.state, row.attempts, row.lastError])).toEqual([
       [failed.id, "pending", 1, "the index is down"],
     ])
   })
 
   test("settles a job by the decision that it reports, also when onError changes the class of the error", async () => {
-    const terminal = await enqueue(schema.admin, schema.table, { task: "search.indexProduct" })
-    const retried = await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    const terminal = await enqueue(schema.conn, schema.table, { task: "search.indexProduct" })
+    const retried = await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const decisions = new Map<string, string>()
     const reported = Promise.withResolvers<void>()
     const worker = start({
@@ -145,7 +145,7 @@ describe("a running worker", () => {
         [retried.id, "retry"],
       ]),
     )
-    expect((await jobs(schema.admin.query)).map(row => [row.id, row.state])).toEqual([
+    expect((await jobs(schema.conn.query)).map(row => [row.id, row.state])).toEqual([
       [terminal.id, "failed"],
       [retried.id, "pending"],
     ])
@@ -155,8 +155,8 @@ describe("a running worker", () => {
     const tenant = new AsyncLocalStorage<string>()
     const indexed = Promise.withResolvers<string | undefined>()
     const indexTenantProduct = defineTask("search.indexProduct", { scoped: true })
-    await enqueue(schema.admin, schema.table, { task: "search.indexProduct", scope: "deleted" })
-    await enqueue(schema.admin, schema.table, { task: "search.indexProduct", scope: "acme" })
+    await enqueue(schema.conn, schema.table, { task: "search.indexProduct", scope: "deleted" })
+    await enqueue(schema.conn, schema.table, { task: "search.indexProduct", scope: "acme" })
     const worker = start({
       manifest: defineManifest({
         tasks: [indexTenantProduct.implement(() => indexed.resolve(tenant.getStore()))],
@@ -168,13 +168,13 @@ describe("a running worker", () => {
     })
     expect(await indexed.promise).toBe("tenant acme")
     await worker.stop()
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
   })
 
   test("without onError, writes an error to the console", async () => {
     const failure = new Error("the index is down")
     const thrown = Promise.withResolvers<void>()
-    const job = await enqueue(schema.admin, schema.table, {
+    const job = await enqueue(schema.conn, schema.table, {
       task: "search.indexProduct",
       payload: { productId: "42" },
     })
@@ -203,8 +203,8 @@ describe("a running worker", () => {
 
   test("by default, takes a name of its host and process, and its reaper returns a job of an expired lease, which it runs", async () => {
     const hourAgo = new Date(Date.now() - 3600_000)
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired", now: hourAgo })
-    await claimPlain(schema.admin.query, {
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired", now: hourAgo })
+    await claimPlain(schema.conn.query, {
       worker: "dead",
       tasks: ["sessions.purgeExpired"],
       defaultLease: 10,
@@ -220,7 +220,7 @@ describe("a running worker", () => {
     expect(worker.id).toStartWith(`${hostname()}:${process.pid}:`)
     expect((await ran.promise).attempt).toBe(2)
     await worker.stop()
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
   })
 
   test("without onError, writes a schedule error to the console with the schedule ID", async () => {
@@ -248,7 +248,7 @@ describe("a running worker", () => {
 
   test("runs a recovered occurrence once across three workers, also after all three stop and one restarts", async () => {
     // Pick a minute an hour ago so the next daily occurrence cannot arrive during the test.
-    const seconds = await schema.admin.query`select extract(epoch from now())::float8`.get(
+    const seconds = await schema.conn.query`select extract(epoch from now())::float8`.get(
       t.doublePrecision,
     )
     const at = new Date((Math.floor(seconds / 60) - 60) * 60000)
@@ -275,11 +275,11 @@ describe("a running worker", () => {
     const replicas = [launch(), launch(), launch()]
     await Promise.all([handled.promise, ...replicas.map(w => w.ready)])
     await Promise.all(replicas.map(w => w.stop()))
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
     const restarted = launch()
     await restarted.ready
     await restarted.stop()
-    expect(await jobs(schema.admin.query)).toEqual([])
+    expect(await jobs(schema.conn.query)).toEqual([])
     expect(products).toEqual(["scheduled"])
   })
 
@@ -309,7 +309,7 @@ describe("a running worker", () => {
       enqueue: { key: "shared" },
     })
     // Register before either replica starts, so the second finds an existing schedule row.
-    await schema.admin.query`
+    await schema.conn.query`
       insert into ${identifier(schema.name, "schedule")} (id, evaluated_through) values (${blocked.id}, 'epoch')`
     const independent = defineSchedule(purgeExpiredSessions, { cron: { minute: "*" } })
     const reported = Promise.withResolvers<WorkerErrorInfo>()
@@ -337,7 +337,7 @@ describe("a running worker", () => {
       launch()
       // The fragment includes the table of the test schema, so a blocked enqueue of another schema does not end the wait.
       await waitForLockedStatement(
-        schema.admin,
+        schema.conn,
         labelSql("enqueue:one", `insert into ${schema.table.name}`),
       )
       launch()
@@ -382,7 +382,7 @@ describe("a running worker", () => {
       await migrateJobs(schema.driver, { schemaName: table.schemaName })
       await worker.ready
       expect(worker.state).toBe("ready")
-      await enqueue(schema.admin, table, { task: "sessions.purgeExpired" })
+      await enqueue(schema.conn, table, { task: "sessions.purgeExpired" })
       await ran.promise
     } finally {
       await Promise.all(workers.splice(0).map(worker => worker.stop()))
@@ -390,7 +390,7 @@ describe("a running worker", () => {
   })
 
   test("on a pool of one connection, which its heartbeat keeps, never becomes ready and takes no jobs, and stops only at its timeout", async () => {
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const reports: unknown[] = []
     let ran = false
     const worker = startWorker(schema.createDriver({ max: 1 }), {
@@ -411,11 +411,11 @@ describe("a running worker", () => {
     )
     expect(worker.state).toBe("stopped")
     await expect(worker.ready).rejects.toThrow("The worker stopped before it was ready")
-    expect((await jobs(schema.admin.query)).map(job => job.state)).toEqual(["pending"])
+    expect((await jobs(schema.conn.query)).map(job => job.state)).toEqual(["pending"])
   })
 
   test("stop with force gives up at once and keeps its promise before the abort, so a stop called from the abort of a handler returns it", async () => {
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     let fromAbort: Promise<void> | undefined
@@ -448,7 +448,7 @@ describe("a running worker", () => {
   })
 
   test("a later stop without force changes nothing, and one with force gives up the stop in progress, which rejects before its handler ends", async () => {
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     const started = Promise.withResolvers<AbortSignal>()
     const release = Promise.withResolvers<void>()
     const worker = startWorker(schema.driver, {
@@ -481,7 +481,7 @@ describe("a running worker", () => {
     const claims: unknown[] = []
     const reportedTwice = Promise.withResolvers<void>()
     const ran = Promise.withResolvers<void>()
-    await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired" })
+    await enqueue(schema.conn, schema.table, { task: "sessions.purgeExpired" })
     start({
       manifest: defineManifest({ tasks: [purgeExpiredSessions.implement(() => ran.resolve())] }),
       reaper: false,
@@ -491,7 +491,7 @@ describe("a running worker", () => {
     })
     // The worker has checked its schema once it runs a job.
     await ran.promise
-    await schema.admin.executeScript(`drop table ${schema.table.name} cascade`)
+    await schema.conn.executeScript(`drop table ${schema.table.name} cascade`)
     await reportedTwice.promise
     expect(claims.map(error => error instanceof QueryError)).toEqual([true, true])
   })

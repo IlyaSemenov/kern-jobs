@@ -19,9 +19,9 @@ test("the statements of the core run in a schema whose name needs quoting", asyn
   try {
     await migrate(schema.database, jobMigrations, { schemaName: table.schemaName })
     const db = bindWorkerDb(schema.database, table.schemaName)
-    const { id } = await enqueue(schema.admin, table, { task: "t" })
+    const { id } = await enqueue(schema.conn, table, { task: "t" })
     const claim = only(
-      await claimPlain(db.$queryOn(schema.admin), { worker: "w", tasks: ["t"], limit: 1 }),
+      await claimPlain(db.$queryOn(schema.conn), { worker: "w", tasks: ["t"], limit: 1 }),
     )
     expect(claim.id).toBe(id)
     expect(await complete(db, claim)).toBe(true)

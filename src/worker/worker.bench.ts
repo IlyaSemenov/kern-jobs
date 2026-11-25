@@ -15,7 +15,7 @@ import { startRuntime } from "./runtime"
 const JOBS = 3000
 
 async function fill(schema: TestSchema, n: number) {
-  await schema.admin.query`
+  await schema.conn.query`
     insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now(), now(), now(), 25 from generate_series(1, ${n}::int)`
 }
@@ -74,7 +74,7 @@ async function bareThroughput(concurrency: number): Promise<number> {
 async function heartbeatCost(claimsCount: number) {
   const schema = await createTestSchema()
   await fill(schema, claimsCount)
-  const claims = await claimPlain(schema.admin.query, {
+  const claims = await claimPlain(schema.conn.query, {
     worker: "w",
     tasks: ["t"],
     limit: claimsCount,
@@ -88,9 +88,9 @@ async function heartbeatCost(claimsCount: number) {
     for (let i = 0; i < rounds; i++) await fn()
     return (performance.now() - t) / rounds
   }
-  const skipping = await time(() => heartbeat(schema.admin.query, { claims: refs }))
+  const skipping = await time(() => heartbeat(schema.conn.query, { claims: refs }))
   const plain = await time(() =>
-    schema.admin.query`
+    schema.conn.query`
         update ${workerSchema.job} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
         from unnest(${param(
           t.array(t.bigintText),

@@ -68,7 +68,7 @@ async function callEnqueue(
 
 /** Returns the rows of a scope in the order of their ids, with every column that an enqueue sets other than the id and the scope, and its JSON and times as text to compare them exactly. */
 async function rowsOf(scope: string) {
-  return schema.admin.query`
+  return schema.conn.query`
     select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
            window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state
     from ${workerSchema.job} where scope = ${scope} order by id`.select({
@@ -89,7 +89,7 @@ async function rowsOf(scope: string) {
 
 /** Returns the ids of the rows of a scope in their order. */
 async function idsOf(scope: string): Promise<string[]> {
-  return await schema.admin.query`
+  return await schema.conn.query`
     select j.id from ${workerSchema.job} j where scope = ${scope} order by j.id`.pluck(t.bigintText)
 }
 
@@ -131,14 +131,14 @@ describe("the same jobs as the enqueue of the core", () => {
   function atTime(now: string): ValuesTarget {
     return {
       execute: statement =>
-        schema.admin.execute({ ...statement, parameters: [now, ...statement.parameters.slice(1)] }),
+        schema.conn.execute({ ...statement, parameters: [now, ...statement.parameters.slice(1)] }),
     }
   }
 
   /** Runs a step in both scopes and checks that they give the same result and the same rows. */
   async function runStep(step: Step): Promise<void> {
     if ("enqueue" in step) {
-      const called = await callEnqueue(schema.admin, toSqlArgs(step.enqueue))
+      const called = await callEnqueue(schema.conn, toSqlArgs(step.enqueue))
       const core = await enqueue(atTime(called.now), schema.table, {
         task: "t",
         scope: "core",
@@ -149,27 +149,27 @@ describe("the same jobs as the enqueue of the core", () => {
       expect((await idsOf("sql")).indexOf(called.id)).toBe((await idsOf("core")).indexOf(core.id))
     } else if ("wait" in step) {
       const wait = param(t.doublePrecision, step.wait)
-      await schema.admin.query`
+      await schema.conn.query`
         update ${workerSchema.job} set run_at = run_at - make_interval(secs => ${wait}),
           not_before = not_before - make_interval(secs => ${wait}),
           window_started_at = window_started_at - make_interval(secs => ${wait}),
           created_at = created_at - make_interval(secs => ${wait})`
     } else if ("claim" in step) {
-      await schema.admin.query`
+      await schema.conn.query`
         update ${workerSchema.job} j set state = 'active', attempts = attempts + 1, claim_id = ${workerSchema.claimSeq.nextval()},
           lease_until = statement_timestamp() + interval '1 hour', locked_by = 'w', locked_at = statement_timestamp()
         where key = ${step.claim} and state = 'pending'
           and not exists (select from ${workerSchema.job} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`
     } else if ("fail" in step) {
       const backoff = param(t.doublePrecision, step.seconds)
-      await schema.admin.query`
+      await schema.conn.query`
         update ${workerSchema.job} j set state = 'pending', claim_id = null, lease_until = null,
           not_before = statement_timestamp() + make_interval(secs => ${backoff}),
           run_at = statement_timestamp() + make_interval(secs => ${backoff}), window_started_at = statement_timestamp()
         where j.id = (select min(a.id) from ${workerSchema.job} a where a.scope = j.scope and a.key = ${step.fail} and a.state = 'active')
           and not exists (select from ${workerSchema.job} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`
     } else {
-      await schema.admin
+      await schema.conn
         .query`delete from ${workerSchema.job} where key = ${step.complete} and state = 'active'`
     }
     expect(await rowsOf("sql")).toEqual(await rowsOf("core"))
@@ -297,8 +297,8 @@ describe("the same jobs as the enqueue of the core", () => {
 
 describe("arguments", () => {
   test("an argument that is NULL takes its default, as an omitted one: no payload, key, or queue, replace, the time of the statement, and 25 attempts", async () => {
-    const omitted = await callEnqueue(schema.admin, { task: "t" })
-    const nulls = await callEnqueue(schema.admin, {
+    const omitted = await callEnqueue(schema.conn, { task: "t" })
+    const nulls = await callEnqueue(schema.conn, {
       task: "t",
       payload: null,
       key: null,
@@ -311,7 +311,7 @@ describe("arguments", () => {
       reset_attempts: null,
     })
     expect([omitted.created, nulls.created]).toEqual([true, true])
-    const rows = await schema.admin.query`
+    const rows = await schema.conn.query`
       select j.id, scope, payload is null as no_payload, key, queue, key_mode, max_attempts,
              (run_at = window_started_at and run_at = created_at) as at_now
       from ${workerSchema.job} j order by j.id`.select({
@@ -341,18 +341,18 @@ describe("arguments", () => {
 
   test("takes the bounds of the options of the jobs API: delay and max_wait of 1e12 seconds, run_at in the years 1 and 9999, and max_attempts of 2^31 − 1", async () => {
     const base = { task: "t" }
-    await callEnqueue(schema.admin, {
+    await callEnqueue(schema.conn, {
       ...base,
       run_at: "0001-01-01T00:00:00Z",
       max_attempts: 2 ** 31 - 1,
     })
-    await callEnqueue(schema.admin, { ...base, run_at: "9999-12-31T23:59:59.999999Z" })
-    await callEnqueue(schema.admin, { ...base, delay: 1e12 })
-    await callEnqueue(schema.admin, { ...base, key_mode: "debounce", delay: 1e12, max_wait: 1e12 })
+    await callEnqueue(schema.conn, { ...base, run_at: "9999-12-31T23:59:59.999999Z" })
+    await callEnqueue(schema.conn, { ...base, delay: 1e12 })
+    await callEnqueue(schema.conn, { ...base, key_mode: "debounce", delay: 1e12, max_wait: 1e12 })
     // Outside debounce, max_wait is ignored.
-    await callEnqueue(schema.admin, { ...base, key_mode: "replace", max_wait: -1 })
+    await callEnqueue(schema.conn, { ...base, key_mode: "replace", max_wait: -1 })
     expect(
-      await schema.admin.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
+      await schema.conn.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
     ).toBe(5)
   })
 
@@ -431,19 +431,19 @@ describe("arguments", () => {
       ],
     ]
     for (const [args, code, message] of cases) {
-      const outcome = callEnqueue(schema.admin, args)
+      const outcome = callEnqueue(schema.conn, args)
       await expect(outcome).rejects.toMatchObject({ code })
       await expect(outcome).rejects.toThrow(message)
     }
     expect(
-      await schema.admin.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
+      await schema.conn.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
     ).toBe(0)
   })
 })
 
 describe("many rows of one statement", () => {
   test("enqueues a job for each row, merging the rows of one key one after another, as separate enqueues", async () => {
-    const results = await schema.admin.query`
+    const results = await schema.conn.query`
       select e.id, e.created
       from (values (1, 'a'), (2, 'a'), (3, null), (4, 'b'), (5, 'a')) v(n, k)
       cross join lateral ${identifier(schema.name, "enqueue")}(task => 't', key => v.k, payload => to_jsonb(v.n)) e
@@ -451,7 +451,7 @@ describe("many rows of one statement", () => {
     const [a, b] = [results[0]!.id, results[3]!.id]
     expect(results.map(r => r.created)).toEqual([true, false, true, true, false])
     expect(results.map(r => r.id)).toEqual([a, a, results[2]!.id, b, a])
-    const rows = await schema.admin.query`
+    const rows = await schema.conn.query`
       select key, payload from ${workerSchema.job} order by id`.select({
       key: t.text.nullable(),
       payload: t.jsonb,
@@ -478,7 +478,7 @@ describe("many rows of one statement", () => {
     await producer.query`commit`
     expect(call.n).toBe(3)
     expect(call.now).not.toBe(call.began)
-    const rows = await schema.admin.query`
+    const rows = await schema.conn.query`
       select key, created_at::text as created_at, (run_at - created_at)::text as wait
       from ${workerSchema.job} order by id`.select({
       key: t.text,
@@ -499,13 +499,13 @@ describe("transactions", () => {
     const producer = await schema.connect()
     await producer.query`begin`
     await callEnqueue(producer, { task: "t", key: "rolled-back" })
-    expect(await claimPlain(schema.admin.query, W)).toEqual([])
+    expect(await claimPlain(schema.conn.query, W)).toEqual([])
     await producer.query`rollback`
     await producer.query`begin`
     const { id } = await callEnqueue(producer, { task: "t", key: "committed" })
-    expect(await claimPlain(schema.admin.query, W)).toEqual([])
+    expect(await claimPlain(schema.conn.query, W)).toEqual([])
     await producer.query`commit`
-    expect((await claimPlain(schema.admin.query, W)).map(claim => claim.id)).toEqual([id])
+    expect((await claimPlain(schema.conn.query, W)).map(claim => claim.id)).toEqual([id])
   })
 
   for (const outcome of ["commit", "rollback"] as const) {
@@ -514,29 +514,29 @@ describe("transactions", () => {
       await first.query`begin`
       const a = await callEnqueue(first, { task: "t", key: "k", payload: "1" })
       const event = callEnqueue(second, { task: "t", key: "k", payload: "2" })
-      await waitForLock(schema.admin, second.pid)
+      await waitForLock(schema.conn, second.pid)
       expect(await isPending(event)).toBe(true)
       await (outcome === "commit" ? first.query`commit` : first.query`rollback`)
       const b = await event
       expect(b.created).toBe(outcome === "rollback")
       expect(b.id === a.id).toBe(outcome === "commit")
       expect(
-        await schema.admin.query`select payload from ${workerSchema.job}`.pluck(t.jsonb),
+        await schema.conn.query`select payload from ${workerSchema.job}`.pluck(t.jsonb),
       ).toEqual([2])
     })
   }
 
   test("keep holds the pending job until the transaction of the caller ends, so a claim skips it", async () => {
-    const { id } = await callEnqueue(schema.admin, { task: "t", key: "k" })
+    const { id } = await callEnqueue(schema.conn, { task: "t", key: "k" })
     const producer = await schema.connect()
     await producer.query`begin`
     expect(await callEnqueue(producer, { task: "t", key: "k", key_mode: "keep" })).toMatchObject({
       id,
       created: false,
     })
-    expect(await claimPlain(schema.admin.query, W)).toEqual([])
+    expect(await claimPlain(schema.conn.query, W)).toEqual([])
     await producer.query`commit`
-    expect((await claimPlain(schema.admin.query, W)).map(claim => claim.id)).toEqual([id])
+    expect((await claimPlain(schema.conn.query, W)).map(claim => claim.id)).toEqual([id])
   })
 })
 
@@ -554,7 +554,7 @@ describe("schema", () => {
     await caller.query`set search_path = pg_temp, ${identifier(schema.name)}`
     await caller.query`create temporary table job (id bigint, task text)`
     const { id } = await callEnqueue(caller, { task: "t", scope: "tenant" }, table)
-    const rows = await schema.admin.query`
+    const rows = await schema.conn.query`
       select 'quoted' as source, id, scope from ${identifier(table.schemaName, "job")}
       union all select 'test', id, scope from ${workerSchema.job}`.select({
       source: t.text,
@@ -566,10 +566,10 @@ describe("schema", () => {
 
   test("checks its arguments by the operators of PostgreSQL, whatever operators the search path of the caller gives", async () => {
     const ops = identifier(schema.unmigratedTable("ops").schemaName)
-    await schema.admin.query`create schema ${ops}`
-    await schema.admin.query`
+    await schema.conn.query`create schema ${ops}`
+    await schema.conn.query`
       create function ${ops}.accept(float8, int) returns boolean language sql immutable return true`
-    await schema.admin.query`
+    await schema.conn.query`
       create operator ${ops}.>= (leftarg = float8, rightarg = int, function = ${ops}.accept)`
     const caller = await schema.connect()
     await caller.query`set search_path = ${ops}, pg_catalog`
@@ -580,11 +580,11 @@ describe("schema", () => {
   test("keeps enqueueing into its table after the schema is renamed", async () => {
     const table = await migrateQuoted()
     const renamed = schema.unmigratedTable("renamed")
-    await schema.admin.query`
+    await schema.conn.query`
       alter schema ${identifier(table.schemaName)} rename to ${identifier(renamed.schemaName)}`
-    const { id } = await callEnqueue(schema.admin, { task: "t" }, renamed)
+    const { id } = await callEnqueue(schema.conn, { task: "t" }, renamed)
     expect(
-      await schema.admin.query`select id from ${identifier(renamed.schemaName, "job")}`.pluck(
+      await schema.conn.query`select id from ${identifier(renamed.schemaName, "job")}`.pluck(
         t.bigintText,
       ),
     ).toEqual([id])

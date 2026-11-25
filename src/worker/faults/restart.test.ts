@@ -148,13 +148,13 @@ describe("PostgreSQL restart under load", () => {
   for (const mode of ["fast", "immediate"] as const) {
     test(`pg_ctl restart -m ${mode}: every job completes, workers recover`, async () => {
       const schema: TestSchema = await createTestSchema(URL)
-      await schema.admin.query`
+      await schema.conn.query`
         insert into ${workerSchema.job} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
                to_jsonb(i), now(), now(), now(), 25
         from generate_series(1, 300) i`
       const ids = new Set(
-        await schema.admin.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
+        await schema.conn.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
       )
       const observer = schema.createDriver({ max: 2 })
 
