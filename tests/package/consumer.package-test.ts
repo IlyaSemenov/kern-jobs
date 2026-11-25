@@ -1,4 +1,5 @@
 // Checks the packed package as a consumer project installs it; the `test:package` script builds it first.
+
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"

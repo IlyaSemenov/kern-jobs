@@ -1,5 +1,6 @@
 // Worker manifests collect task implementations and recurring schedules.
 // An application can check handler coverage across all its manifests.
+
 import { type Schedule, toWorkerSchedules } from "../schedule/schedule"
 
 import { isTask, resolveFailure, type Task, type TaskImplementation } from "./task"

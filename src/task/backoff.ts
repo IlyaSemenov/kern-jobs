@@ -1,4 +1,5 @@
 // Backoff of a task: the delay of the retry after a failed attempt, the factories of common policies, and the default.
+
 import { delayRange, isDelay } from "./delay"
 
 /** Returns the delay in seconds of the retry after the given attempt, counted from 1, failed. */

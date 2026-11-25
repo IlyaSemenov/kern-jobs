@@ -1,4 +1,5 @@
 // Stop of a worker at a termination signal of the process: `waitForSignalAndStop` returns the outcome of the stop to the application, and `stopOnSignals` then calls the `close` of the application and exits the process within a timeout.
+
 import { isTimerDelay, monotonicNow, timerDelayRange } from "./loop"
 import type { StopOptions, Worker } from "./runtime"
 

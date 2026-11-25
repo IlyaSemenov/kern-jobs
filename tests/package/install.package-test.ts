@@ -1,4 +1,5 @@
 // Installs the packed package with npm into a new project, as the quickstart of docs/getting-started.md does, with its dependencies from the registry, and runs the quickstart; the `test:package` script builds the package first.
+
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { cp, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"

@@ -1,4 +1,5 @@
 // Failure task names, terminal failure reasons, and the payload passed to `onFailure`.
+
 /** Suffix of the name of a failure task after the name of its task. */
 export const FAILURE_TASK_SUFFIX = ":failure"
 

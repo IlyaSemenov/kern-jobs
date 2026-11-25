@@ -1,4 +1,5 @@
 // Check constraints of the job table, which reject a row that breaks an invariant of the data model whatever statement writes it.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { isQueryError } from "kern-orm/db"

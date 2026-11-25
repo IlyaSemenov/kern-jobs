@@ -1,4 +1,5 @@
 // Job table of the worker ORM schema.
+
 import type { KeyMode } from "../../../sql/job"
 import { defineTable } from "../base"
 import * as t from "../types"

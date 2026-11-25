@@ -1,4 +1,5 @@
 // Process for the tests of the helpers of signals: a fake worker whose stop resolves, rejects, throws, hangs, or waits until it is forced, and the close or cleanup of the application, as `SHUTDOWN_CONFIG` says; it prints each phase on its own line, so that the test sends the next signal after it.
+
 import { existsSync } from "node:fs"
 
 import type { StopOptions, Worker } from "../runtime"

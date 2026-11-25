@@ -1,4 +1,5 @@
 // Claiming: the tasks of the worker, the queue mutex by (scope, queue), start order, skipping a busy head, a stale snapshot under a breakpoint, a stress test that checks the actual overlap of handlers, fairness of the claim cycle under a continuous inflow, claims committed before a later statement of their cycle fails, and the advisory locks of claimQueued under different plans.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { ConnectionError, sql, type StatementExecutor } from "kern-orm/db"

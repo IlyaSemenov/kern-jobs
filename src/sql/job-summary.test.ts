@@ -1,4 +1,5 @@
 // The view `job_summary`: its columns, and the summary of the jobs of each task in each scope.
+
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { identifier, joinSql, param, sql, type SqlFragment } from "kern-orm/db"

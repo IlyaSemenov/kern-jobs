@@ -1,4 +1,5 @@
 // Process for the test of a late signal: the stop settles at once, the clock of the helper passes the window, and a real SIGINT comes before the timer of the window has run; the process prints what the helper did, as JSON, and exits by itself.
+
 import type { Worker } from "../runtime"
 import { listenForStopSignals } from "../shutdown"
 

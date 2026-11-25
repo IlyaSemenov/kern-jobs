@@ -1,4 +1,5 @@
 // Events of a worker, which it reports synchronously to its `onEvent` for observation and tests.
+
 import type { Claim, ClaimRef } from "./db/claim"
 import type { Reaped } from "./db/lease"
 import type { FailOutcome, RequeueOutcome } from "./db/settlement"

@@ -1,4 +1,5 @@
 // Jobs of the consumer through node-postgres and postgres.js, and a wrapper of enqueue, exported with inferred types that its declarations name through the exports of kern-jobs; the type tests of `declaration-consumer/` check the emitted types.
+
 import { createJobs, type Jobs } from "kern-jobs"
 import type pg from "pg"
 import type postgres from "postgres"

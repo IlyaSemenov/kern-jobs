@@ -1,4 +1,5 @@
 // Names of the PostgreSQL schema of the job table: their check, and the statements of the core in a schema whose name needs quoting.
+
 import { expect, test } from "bun:test"
 
 import { migrate } from "kern-migrations"

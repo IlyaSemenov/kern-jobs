@@ -1,4 +1,5 @@
 // Enqueues a job of a project that only enqueues, through an executor that answers without a database, and prints the result as JSON; the project has neither the dependencies of kern-jobs nor a client library, so importing either fails.
+
 import { createJobs, defineTask } from "kern-jobs"
 
 const purgeExpiredSessionsTask = defineTask("sessions.purgeExpired")

@@ -1,5 +1,6 @@
 // Third migration of kern-jobs: the view `job_summary`, a public summary of the jobs of each task in each scope for metrics.
 // Its columns are a public contract: a later migration changes the view by `replaceView`, which keeps its grants, and only appends columns.
+
 import { createView, defineMigration } from "kern-migrations"
 
 export default defineMigration(

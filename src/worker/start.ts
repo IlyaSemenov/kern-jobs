@@ -1,4 +1,5 @@
 // Worker of an application: checks its options, fills their defaults, and starts the runtime on a driver of kern-db with the tasks of a manifest, which checks its schema before it takes jobs, reporting the errors of the runtime to `onError`.
+
 import { hostname } from "node:os"
 
 import type { Driver } from "kern-orm/db"

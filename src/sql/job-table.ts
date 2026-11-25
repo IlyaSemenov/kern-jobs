@@ -1,6 +1,7 @@
+// Job table of the SQL core, named in a PostgreSQL schema of its own.
+
 import { isStorableText, storableTextRule, utf8Length } from "../limits"
 
-// Job table of the SQL core, named in a PostgreSQL schema of its own.
 import { quoteIdentifier } from "./postgres"
 
 /**

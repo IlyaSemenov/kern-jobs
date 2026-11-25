@@ -1,4 +1,5 @@
 // Job table of the worker ORM schema: the times of its rows.
+
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { createTestSchema, type TestSchema } from "../../../test-harness/database"

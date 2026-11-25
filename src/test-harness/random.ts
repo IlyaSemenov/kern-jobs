@@ -1,4 +1,5 @@
 // Seeded random inputs of tests, which repeat their sequence for the same seed.
+
 import { uniformFloat64 } from "pure-rand/distribution/uniformFloat64"
 import { uniformInt } from "pure-rand/distribution/uniformInt"
 import { xoroshiro128plus } from "pure-rand/generator/xoroshiro128plus"

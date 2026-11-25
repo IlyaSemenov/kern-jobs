@@ -1,4 +1,5 @@
 // Migrations of the schema of kern-jobs, which `migrateJobs` applies and a worker checks at its start.
+
 import { defineMigrations } from "kern-migrations"
 
 /** Name of the table of the applied migrations of kern-jobs, in the schema of the jobs. */

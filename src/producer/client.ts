@@ -1,4 +1,5 @@
 // Adapts the database client of an application to the statements of its jobs API.
+
 import type { ValuesTarget } from "../sql/statement"
 
 /**

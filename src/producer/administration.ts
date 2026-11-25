@@ -1,4 +1,5 @@
 // Administration of jobs by the application: retry of a failed job, and delete of pending or failed jobs by id or by a filter, each in one statement on the client of the application.
+
 import type { JobTable } from "../sql/job-table"
 import { hook, NOW } from "../sql/postgres"
 import {

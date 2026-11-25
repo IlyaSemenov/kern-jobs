@@ -1,4 +1,5 @@
 // Shared harness of the tests of the packed package: commands of a consumer project and the tarball of the package.
+
 import { join } from "node:path"
 
 const root = join(import.meta.dir, "..")

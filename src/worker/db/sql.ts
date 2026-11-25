@@ -1,4 +1,5 @@
 // SQL fragment of the time of a statement, shared by the hand-written statements of the worker.
+
 import { param, sql, type SqlFragment } from "kern-orm/db"
 
 import * as t from "./types"

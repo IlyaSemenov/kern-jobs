@@ -1,4 +1,5 @@
 // First migration of kern-jobs: the job table, its claim sequence, and its indexes.
+
 import { createIndex, createSequence, createTable, defineMigration } from "kern-migrations"
 
 export default defineMigration([

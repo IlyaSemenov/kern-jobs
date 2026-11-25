@@ -1,4 +1,5 @@
 // SQL for inserting a failure job, with the `JobFailure` of a terminal failure as its payload and the attempt budget of the failure job that the claim of the source job recorded.
+
 import { sql, type UntypedExpression } from "kern-orm"
 import { param, type SqlFragment } from "kern-orm/db"
 

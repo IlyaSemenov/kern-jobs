@@ -1,4 +1,5 @@
 // TCP proxy in front of PostgreSQL for fault injection: cut all connections, refuse new ones, or cut a connection around the next statement of a pattern (before it reaches the server, or after it, dropping the reply).
+
 import net from "node:net"
 
 /** Where a cut falls: before the statement reaches the server, or after the server ran it, dropping its replies. */

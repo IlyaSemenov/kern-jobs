@@ -1,4 +1,5 @@
 // Tasks of a worker from the task implementations of its manifest: each implementation runs a claimed job with its payload and metadata, under the lease and backoff of its task, through the `runHandler` of the worker, and an implementation with a failure task gives the attempt budget of failure jobs that its claims stamp and the task that runs its failure jobs.
+
 import { TerminalError } from "../task/errors"
 import { type ManifestTask, toManifestTasks } from "../task/manifest"
 import {

@@ -1,4 +1,5 @@
 // Test helpers of the consumer, exported with inferred types that its declarations name through the exports of kern-jobs and kern-jobs/testing; the type tests of `declaration-consumer/` check the emitted types.
+
 import { createTestJobs, runJob } from "kern-jobs/testing"
 
 import { indexProductTask } from "./tasks.ts"

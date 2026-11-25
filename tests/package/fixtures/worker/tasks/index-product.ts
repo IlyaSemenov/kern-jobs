@@ -1,4 +1,5 @@
 // Implementation of a task of the consumer as the default export of its module, as the documentation lays it out, with an inferred type that its declaration names through the exports of kern-jobs.
+
 import { RetryError, TerminalError } from "kern-jobs/worker"
 
 import { indexProductTask } from "../../tasks.ts"

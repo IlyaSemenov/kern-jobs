@@ -1,4 +1,5 @@
 // Outcome of a handler that ended, which a worker decides once, before it reports or settles it.
+
 import { RetryError, TerminalError } from "../task/errors"
 
 import type { AbortReason, HandlerOutcome } from "./events"

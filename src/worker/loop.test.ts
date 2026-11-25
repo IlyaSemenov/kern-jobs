@@ -1,4 +1,5 @@
 // Loop: the range of an interval, rounds never overlap, a wake starts the next round, and stop waits for the running round.
+
 import { expect, test } from "bun:test"
 
 import { isInterval, maxInterval, startLoop } from "./loop"

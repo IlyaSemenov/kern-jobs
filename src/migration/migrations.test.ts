@@ -1,4 +1,5 @@
 // Migrations of kern-jobs: every migration applies, rolls back to the structure it found, and applies again.
+
 import { test } from "bun:test"
 
 import { verifyMigrations } from "kern-migrations/testing"

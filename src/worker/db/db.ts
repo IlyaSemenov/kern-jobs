@@ -1,4 +1,5 @@
 // Worker ORM schema, which each worker binds to its database.
+
 import { bindSchema, type DbOf, defineSchema, defineSequence } from "kern-orm"
 import type { Database } from "kern-orm/db"
 

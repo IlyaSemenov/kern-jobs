@@ -1,4 +1,5 @@
 // The SQL function `enqueue` of the schema: the same jobs and results as the enqueue of the core, its arguments, many rows of one statement, transactions and concurrent producers, and its independence of the search path and the name of the schema.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { identifier, joinSql, param, sql } from "kern-orm/db"

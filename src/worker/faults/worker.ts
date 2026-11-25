@@ -1,5 +1,6 @@
 // Worker process for fault-injection tests: runs the worker runtime with handlers that the configuration describes and logs its events synchronously as JSON lines, so the log survives SIGKILL.
 // Configured by the FAULT_CONFIG environment variable.
+
 import { appendFileSync, existsSync } from "node:fs"
 
 import { type Driver, TransactionConnectionError } from "kern-orm/db"

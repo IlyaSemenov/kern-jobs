@@ -1,4 +1,5 @@
 // Process-level fault injection on worker processes of the runtime: SIGKILL at chosen points, connection cuts around COMMIT, heartbeat loss, zombie handlers, slots taken until settlement, stuck heartbeats, a long producer transaction, and the stop on SIGTERM and SIGINT, forced by a later signal.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

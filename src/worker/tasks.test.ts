@@ -1,4 +1,5 @@
 // Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, through `runHandler`, the lease and backoff of its task, and the check of the list; and a worker that runs them.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { sql } from "kern-orm/db"

@@ -1,4 +1,5 @@
 // Stop of a worker at a termination signal: the check of the options of the helpers, the window of a repeated signal and the life of the listeners on a fake worker, also in a process that gets a late real signal, and processes whose stop and cleanup resolve, reject, hang, or wait until forced; the scenarios of a real worker are in `faults/`.
+
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

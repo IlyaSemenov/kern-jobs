@@ -1,4 +1,5 @@
 // UTC minute calendars shared by text and structured schedule definitions.
+
 const weekdays = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const
 
 /** English weekday name, starting with Sunday. */

@@ -58,6 +58,7 @@ Do not catalog files or restate information evident from their names and locatio
 - Do not narrate self-evident syntax or restate what a name already communicates.
 - Describe a default only when readers need it to make a decision or avoid surprising behavior.
 - Use One Sentence Per Line for connected prose, including JSDoc and code comments: do not wrap a sentence across lines.
+- Start a source file with its header comment, separated from the code by a blank line, so that it stays first when imports are added or sorted.
 - Keep semantically connected explanations as prose paragraphs, and use lists for separate assertions.
 - Link a file of another repository by a tag or a commit, such as of the version you checked, never by a branch such as `main`, whose file changes.
 

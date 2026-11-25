@@ -1,4 +1,5 @@
 // Errors that a handler throws to decide what happens to its job: a failure for good, or a retry after a given delay.
+
 import { delayRange, isDelay } from "./delay"
 
 /** Error of a handler that fails its job for good, without retries, such as for a payload that cannot be processed. */

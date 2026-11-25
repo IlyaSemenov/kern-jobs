@@ -1,5 +1,6 @@
-import { checkCount, checkStorableText, isStorableText, storableTextRule } from "../limits"
 // Options of an enqueue: what a task definition and an enqueue give, their merge, and the parameters of the core.
+
+import { checkCount, checkStorableText, isStorableText, storableTextRule } from "../limits"
 import type { EnqueueParams } from "../sql/enqueue"
 
 import { delayRange, isDelay } from "./delay"

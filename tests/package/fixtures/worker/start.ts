@@ -1,4 +1,5 @@
 // Start of the worker of the consumer, its stop at a signal, and helpers of its handlers, exported with inferred types that their declarations name through the exports of kern-jobs; the type tests of `declaration-consumer/` check the emitted types.
+
 import type { HandlerContext } from "kern-jobs"
 import {
   type Driver,

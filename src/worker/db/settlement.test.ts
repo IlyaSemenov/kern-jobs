@@ -1,4 +1,5 @@
 // Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { type Driver, literal, queryOn, sql, TransactionConnectionError } from "kern-orm/db"

@@ -1,4 +1,5 @@
 // Reaper loop of a worker: returns expired jobs in batches and survives connection errors.
+
 import type { DbSqlQueryTemplate } from "kern-orm"
 
 import { reap } from "./db/lease"

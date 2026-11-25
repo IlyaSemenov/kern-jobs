@@ -1,4 +1,5 @@
 // Worker runtime: the drivers it runs on, a failed release of a connection, the check of its schema before it claims and reaps, its state and readiness, slots taken until settlement, a long settlement beside the heartbeat of other jobs, zombies of reclaimed jobs, lease origins of claims, heartbeats one at a time, claiming only with a working heartbeat, aborts of lost and unconfirmed leases, the jobs of a previous worker of an id and a worker whose id a running one holds, retries, terminal and unprintable errors, and stopping.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
 

@@ -1,5 +1,6 @@
 // migrateJobs: creating the schema over a driver, in a transaction of a database, or with a Db, and its arguments; and the check of a schema by a worker.
 // How kern-migrations applies a history, such as its lock, is tested there.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { defineMigrations, getMigrationStatus, migrate } from "kern-migrations"

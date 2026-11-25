@@ -1,6 +1,7 @@
 // Fifth migration of kern-jobs: the SQL function `enqueue`, which enqueues a job from SQL, such as from a migration of the application, by the upsert of `sql/enqueue.ts`.
 // The body of `enqueue` is a SQL-standard body, which PostgreSQL parses at its creation and binds to the table of the search path of the migration, so a call depends neither on the search path of its session nor on the name of the schema.
 // A SQL-standard body has no RAISE statement, so `check_enqueue`, in PL/pgSQL, checks the arguments; it names no object of the schema, and its own search path, `pg_catalog, pg_temp`, gives the operators of its comparisons whatever the search path of the caller.
+
 import { createFunction, defineMigration } from "kern-migrations"
 
 export default defineMigration([

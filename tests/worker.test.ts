@@ -1,4 +1,5 @@
 // Workers through the public API on the drivers that the documentation connects: jobs that `createJobs` enqueued run with their payloads and metadata, the errors of handlers decide their retries and reach `onError`, a job that failed for good runs again after `jobs.retry`, a job taken too late to keep its lease fails without running, and `stop` aborts the signal of a running handler, whose job returns without spending its attempt.
+
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { createJobs, defineTask, fixedBackoff, type JobInfo } from "kern-jobs"

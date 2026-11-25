@@ -1,4 +1,5 @@
 // Heartbeat of a worker on a fake connection: one heartbeat at a time, health, reopening its session, the lock of its session, stopping, lost and busy claims, and local deadlines.
+
 import { afterEach, expect, jest, test } from "bun:test"
 
 import {

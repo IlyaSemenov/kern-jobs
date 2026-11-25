@@ -1,4 +1,5 @@
 // Leases of the claims of a worker: heartbeats in a session of their own, which holds the lock of the worker id, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
+
 import { type OpenedSession, QueryError, type StatementExecutor } from "kern-orm/db"
 
 import { toStatementLabel } from "../sql/statement"

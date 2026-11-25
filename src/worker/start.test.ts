@@ -1,4 +1,5 @@
 // Worker of an application: runs the jobs of its manifest in its schema, through its `runHandler`, reports the errors of handlers and of the database to `onError`, or to the console without one, runs a reaper by default, becomes ready only once its schema is migrated and never on a pool of one connection, checks its options before it starts anything, checks the options of each call of its stop before it stops anything, and gives up a stop with force.
+
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { hostname } from "node:os"

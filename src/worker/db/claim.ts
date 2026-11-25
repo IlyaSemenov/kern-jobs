@@ -1,6 +1,7 @@
 // Worker claims identify the active jobs a worker can heartbeat and settle.
 // The claim cycle combines batches of jobs without a queue with the heads of free queues.
 // Every claim statement must run in its own autocommit transaction: claimQueued takes a transaction-level advisory lock of its queue, which an explicit transaction would hold until its commit.
+
 import {
   columnsOf,
   type DbSqlQueryTemplate,

@@ -1,5 +1,6 @@
 // Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, breakpoints inside statements, and virtual time.
 // Test connections do not add the test schema to `search_path`, so statements must qualify their names.
+
 import { migrate } from "kern-migrations"
 import { columnsOf, type DbSqlQueryTemplate, type Selectable } from "kern-orm"
 import {
