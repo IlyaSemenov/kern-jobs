@@ -8,7 +8,7 @@ import type { KeyMode } from "../../sql/job"
 import { createTestSchema, type TestSchema } from "../../test-harness/database"
 
 import { claimCycle, claimPlain, claimQueued } from "./claim"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { reap } from "./lease"
 import { complete, fail } from "./settlement"
 import * as t from "./types"
@@ -25,7 +25,7 @@ async function time<T>(fn: () => Promise<T>): Promise<[number, T]> {
 }
 
 async function sizes(testSchema: TestSchema) {
-  await testSchema.conn.query`analyze ${workerSchema.job}`
+  await testSchema.conn.query`analyze ${schema.job}`
   const table = param(t.text, testSchema.table.name)
   const r = await testSchema.conn.query`
     select pg_relation_size(${table}::regclass) as heap, pg_indexes_size(${table}::regclass) as idx,
@@ -60,7 +60,7 @@ async function hotKey(mode: KeyMode) {
     `hot key ${mode}: ${total} upserts from 8 connections in ${ms.toFixed(0)} ms (${((total / ms) * 1000).toFixed(0)}/s)`,
   )
   console.log(`  before vacuum: ${await sizes(testSchema)}`)
-  await testSchema.conn.query`vacuum ${workerSchema.job}`
+  await testSchema.conn.query`vacuum ${schema.job}`
   console.log(`  after vacuum:  ${await sizes(testSchema)}`)
   await testSchema.dispose()
 }
@@ -68,12 +68,12 @@ async function hotKey(mode: KeyMode) {
 async function claimBacklog() {
   const testSchema = await createTestSchema()
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now() + interval '1 day', now(), now(), 25 from generate_series(1, 100000)`
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 10000)`
-  await testSchema.conn.query`analyze ${workerSchema.job}`
+  await testSchema.conn.query`analyze ${schema.job}`
   const lat: number[] = []
   for (let i = 0; i < 200; i++) {
     const [ms, claims] = await time(() =>
@@ -89,9 +89,9 @@ async function claimBacklog() {
 async function queueBacklog(queues: number) {
   const testSchema = await createTestSchema()
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', 'q' || (i % ${queues}::int), '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 100000) i`
-  await testSchema.conn.query`analyze ${workerSchema.job}`
+  await testSchema.conn.query`analyze ${schema.job}`
   const measure = async (label: string) => {
     const lat: number[] = []
     for (let i = 0; i < 100; i++) {
@@ -150,7 +150,7 @@ async function idleCycle() {
 async function reapAndFail() {
   const testSchema = await createTestSchema()
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', 'k' || i, '{}', now(), now(), now(), 25 from generate_series(1, 1000) i`
   await claimPlain(testSchema.conn.query, {
     worker: "dead",
@@ -187,10 +187,10 @@ async function failureJobs() {
   const testSchema = await createTestSchema()
   const failureMaxAttempts = { t: 25 }
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', case when i % 2 = 0 then 'q' || ((i / 2) % 100) end, '{"id": 1}', now() - interval '1 second', now(), now(), 1
     from generate_series(1, 20000) i`
-  await testSchema.conn.query`analyze ${workerSchema.job}`
+  await testSchema.conn.query`analyze ${schema.job}`
   const plain = { without: [] as number[], with: [] as number[] }
   const queued = { without: [] as number[], with: [] as number[] }
   for (let i = 0; i < 400; i++) {

@@ -7,7 +7,7 @@ import type { Driver } from "kern-orm/db"
 import { checkCount, isStorableText, storableTextRule } from "../limits"
 import { checkJobSchema } from "../migration/migrate"
 import { toWorkerSchedules } from "../schedule/schedule"
-import { createJobTable, DEFAULT_SCHEMA } from "../sql/job-table"
+import { createJobTable, DEFAULT_SCHEMA_NAME } from "../sql/job-table"
 import type { Manifest } from "../task/manifest"
 import { isLease, type JobInfo, leaseRange } from "../task/task"
 
@@ -187,7 +187,7 @@ export function startWorker(driver: Driver, options: WorkerOptions): Worker {
     reaper = {},
     onError = logError,
     runHandler,
-    schemaName = DEFAULT_SCHEMA,
+    schemaName = DEFAULT_SCHEMA_NAME,
   } = options
   checkDriver(driver)
   const { manifest } = options

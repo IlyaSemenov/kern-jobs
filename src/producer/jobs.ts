@@ -7,7 +7,7 @@ import {
   type EnqueueResult,
   prepareEnqueueMany,
 } from "../sql/enqueue"
-import { createJobTable, DEFAULT_SCHEMA } from "../sql/job-table"
+import { createJobTable, DEFAULT_SCHEMA_NAME } from "../sql/job-table"
 import { delayRange, isDelay } from "../task/delay"
 import {
   checkEnqueueOverrides,
@@ -142,7 +142,7 @@ export interface Jobs {
  */
 export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs {
   const target = toJobsTarget(client)
-  const { schemaName = DEFAULT_SCHEMA, scope } = options
+  const { schemaName = DEFAULT_SCHEMA_NAME, scope } = options
   const table = createJobTable(schemaName)
   return createJobsApi(
     {

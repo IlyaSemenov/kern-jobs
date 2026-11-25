@@ -27,7 +27,7 @@ import {
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 
-import { workerSchema } from "./db/db"
+import { schema } from "./db/db"
 import * as t from "./db/types"
 import type { WorkerEvent } from "./events"
 import { type Proxy, proxyTo } from "./faults/proxy"
@@ -356,7 +356,7 @@ test(`fuzz seed ${SEED}`, async () => {
 
   const idle = async () =>
     (await testSchema.conn.query`
-      select count(*)::int from ${workerSchema.job} where state in ('pending', 'active')`.get(
+      select count(*)::int from ${schema.job} where state in ('pending', 'active')`.get(
       t.integer,
     )) === 0
 
@@ -365,7 +365,7 @@ test(`fuzz seed ${SEED}`, async () => {
     const jobs = await testSchema.conn.query`
       select id, state, task, queue, key, attempts, claim_id, locked_by,
         (run_at - now())::text as run_in, (not_before - now())::text as not_before_in, (lease_until - now())::text as lease_left
-      from ${workerSchema.job} where state in ('pending', 'active') order by id`.select({
+      from ${schema.job} where state in ('pending', 'active') order by id`.select({
       id: t.bigintText,
       state: t.text,
       task: t.text,
@@ -435,7 +435,7 @@ test(`fuzz seed ${SEED}`, async () => {
     select
       (select count(*) from ${terminalLedger})::int as terminal,
       (select count(*) from ${failureLedger})::int as failure,
-      (select count(*) from ${workerSchema.job} where task = ${FAILURE_TASK} and state = 'failed')::int as exhausted`
+      (select count(*) from ${schema.job} where task = ${FAILURE_TASK} and state = 'failed')::int as exhausted`
     .select({ terminal: t.integer, failure: t.integer, exhausted: t.integer })
     .take()
   console.log(`fuzz seed ${SEED}:`, JSON.stringify({ ...stats, ledger }))
@@ -446,7 +446,7 @@ test(`fuzz seed ${SEED}`, async () => {
   // Only doomed jobs and failure jobs that spent their budgets stay, as failed.
   expect(
     await testSchema.conn.query`
-      select task, state from ${workerSchema.job}
+      select task, state from ${schema.job}
       where not (state = 'failed' and task in ('d', ${FAILURE_TASK})) order by id`.select({
       task: t.text,
       state: t.text,
@@ -490,6 +490,6 @@ test(`fuzz seed ${SEED}`, async () => {
   // A failure job that is gone completed, which follows a handler of it that returned; any other failed for good by its own budget.
   const gone = await testSchema.conn.query`
     select f.job_id from ${failureLedger} f
-    where not exists (select from ${workerSchema.job} j where j.id = f.job_id)`.pluck(t.bigintText)
+    where not exists (select from ${schema.job} j where j.id = f.job_id)`.pluck(t.bigintText)
   expect(gone.filter(id => !failureReturned.has(id))).toEqual([])
 }, 180_000)

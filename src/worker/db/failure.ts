@@ -5,7 +5,7 @@ import { param, type SqlFragment } from "kern-orm/db"
 
 import { FAILURE_TASK_SUFFIX, type FailureReason } from "../../task/failure"
 
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import * as t from "./types"
 
 /**
@@ -34,7 +34,7 @@ export function insertFailureJobsSql(
   source: SqlFragment,
   reason: FailureReason,
 ): UntypedExpression {
-  return sql`insert into ${workerSchema.job} (task, scope, payload, run_at, window_started_at, created_at, max_attempts)
+  return sql`insert into ${schema.job} (task, scope, payload, run_at, window_started_at, created_at, max_attempts)
      select s.task || ${param(t.text, FAILURE_TASK_SUFFIX)}, s.scope, ${jobFailureSql(reason)}, s.failed_at, s.failed_at, s.failed_at, s.failure_max_attempts
      from ${source} s
      where s.state = 'failed' and s.failure_max_attempts is not null`

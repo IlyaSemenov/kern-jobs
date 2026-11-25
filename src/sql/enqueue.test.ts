@@ -17,7 +17,7 @@ import {
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { type Claim, claimPlain } from "../worker/db/claim"
-import { workerSchema } from "../worker/db/db"
+import { schema } from "../worker/db/db"
 import { complete, fail } from "../worker/db/settlement"
 import * as t from "../worker/db/types"
 
@@ -94,7 +94,7 @@ test("stores an absent payload as SQL NULL, read as undefined, and keeps a null 
   await enqueue(testSchema.conn, testSchema.table, { task: "absent" })
   await enqueue(testSchema.conn, testSchema.table, { task: "null", payload: null })
   const absent = await testSchema.conn.query`
-    select payload is null from ${workerSchema.job} order by id`.pluck(t.boolean)
+    select payload is null from ${schema.job} order by id`.pluck(t.boolean)
   expect(absent).toEqual([true, false])
   expect((await jobs(testSchema.conn.query)).map(row => row.payload)).toEqual([undefined, null])
 })
@@ -129,7 +129,7 @@ describe("key modes with an existing pending job", () => {
 
   test("replace changes payload, run_at, and max_attempts and keeps attempts", async () => {
     await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", payload: 1, now: T(0) })
-    await testSchema.conn.query`update ${workerSchema.job} set attempts = 3`
+    await testSchema.conn.query`update ${schema.job} set attempts = 3`
     await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
@@ -147,7 +147,7 @@ describe("key modes with an existing pending job", () => {
 
   test("replace with resetAttempts resets attempts", async () => {
     await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", now: T(0) })
-    await testSchema.conn.query`update ${workerSchema.job} set attempts = 3`
+    await testSchema.conn.query`update ${schema.job} set attempts = 3`
     await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
@@ -233,7 +233,7 @@ describe("enqueueMany", () => {
     await enqueueAt("backoff", {})
     const backoffEnd = param(t.timestamptz, T(30))
     await testSchema.conn.query`
-      update ${workerSchema.job} set attempts = 3,
+      update ${schema.job} set attempts = 3,
         not_before = case when key in ('held', 'backoff') then ${backoffEnd} end,
         run_at = case when key in ('held', 'backoff') then ${backoffEnd} else run_at end`
     const results = await enqueueMany(testSchema.conn, testSchema.table, {
@@ -287,7 +287,7 @@ describe("enqueueMany", () => {
       ],
     })
     const stored = await testSchema.conn.query`
-      select id, payload::text from ${workerSchema.job} order by id`.select({
+      select id, payload::text from ${schema.job} order by id`.select({
       id: t.bigintText,
       payload: t.text.nullable(),
     })

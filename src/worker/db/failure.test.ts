@@ -20,7 +20,7 @@ import {
 } from "../../test-harness/database"
 
 import { type Claim, claimCycle, type ClaimOptions, claimPlain } from "./claim"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { reap } from "./lease"
 import { fail, requeue } from "./settlement"
 
@@ -193,7 +193,7 @@ describe("terminal fail", () => {
       { maxAttempts: 1, reason: "handler-error" },
     ] as const
     for (const { maxAttempts, reason } of cases) {
-      await testSchema.conn.query`delete from ${workerSchema.job}`
+      await testSchema.conn.query`delete from ${schema.job}`
       const claim = await claimed({ maxAttempts })
       expect(await failAt(claim, { reason })).toBe("failed")
       expect((await jobFailure()).reason).toBe(reason)
@@ -210,7 +210,7 @@ describe("terminal fail", () => {
 
   test("the JobFailure omits the payload of a job enqueued without one, and keeps a JSON null", async () => {
     for (const payload of [undefined, null, "text"]) {
-      await testSchema.conn.query`delete from ${workerSchema.job}`
+      await testSchema.conn.query`delete from ${schema.job}`
       await failAt(await claimed({ payload, maxAttempts: 1 }))
       const e = await jobFailure()
       if (payload === undefined) expect("payload" in e).toBe(false)
@@ -221,8 +221,8 @@ describe("terminal fail", () => {
   test("ids of the JobFailure are text, also above the safe integers of JavaScript", async () => {
     const id = unsafeInteger
     await testSchema.conn.query`
-      alter table ${workerSchema.job} alter column id restart with ${literal(id)}`
-    await testSchema.conn.query`select ${workerSchema.claimSeq.setval(id)}`
+      alter table ${schema.job} alter column id restart with ${literal(id)}`
+    await testSchema.conn.query`select ${schema.claimSeq.setval(id)}`
     const claim = await claimed({ maxAttempts: 1 })
     await failAt(claim)
     const e = (await jobFailure()) as { id: string; job: { id: string } }
@@ -331,7 +331,7 @@ describe("atomicity and uniqueness", () => {
 
   test("a rejected insert of the failure job rejects the fail and leaves the job active", async () => {
     await testSchema.conn.query`
-      alter table ${workerSchema.job} add constraint test_reject check (task <> 't:failure')`
+      alter table ${schema.job} add constraint test_reject check (task <> 't:failure')`
     const claim = await claimed({ maxAttempts: 1 })
     const error = await failAt(claim).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(QueryError)
@@ -430,7 +430,7 @@ describe("reaper", () => {
 
   test("a rejected insert of a failure job rejects the reap, which leaves the rows of its batch active", async () => {
     await testSchema.conn.query`
-      alter table ${workerSchema.job} add constraint test_reject check (task <> 't:failure')`
+      alter table ${schema.job} add constraint test_reject check (task <> 't:failure')`
     const rejected = await claimed({ maxAttempts: 1 })
     // A job that returns to pending inserts nothing, and stays active with the batch too.
     const other = await claimed({ maxAttempts: 5 })

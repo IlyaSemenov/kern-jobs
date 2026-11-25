@@ -7,7 +7,7 @@ import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { insertFailureJobsSql } from "./failure"
 import { nowSql, pauseSql } from "./sql"
 import * as t from "./types"
@@ -52,13 +52,13 @@ export async function heartbeat(
     with x as (
       select * from unnest(${ids}, ${claimIds}, ${leases}) as x(id, claim_id, lease)
     ), owned as (
-      select j.claim_id from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
+      select j.claim_id from ${schema.job} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
     ), locked as (
-      select j.id, x.lease from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id
+      select j.id, x.lease from ${schema.job} j join x on j.id = x.id and j.claim_id = x.claim_id
       where j.state = 'active' and ${pauseSql("heartbeat")}
       for update of j skip locked
     ), extended as (
-      update ${workerSchema.job} j set lease_until = greatest(j.lease_until, ${nowSql(o.now)} + make_interval(secs => l.lease))
+      update ${schema.job} j set lease_until = greatest(j.lease_until, ${nowSql(o.now)} + make_interval(secs => l.lease))
       from locked l where j.id = l.id
       returning j.claim_id
     )
@@ -152,7 +152,7 @@ function reapStatement(
     with timeout as materialized (
       select set_config('lock_timeout', ${String(o.lockTimeoutMs)}, true)
     ), candidates as (
-      select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${workerSchema.job} j, timeout
+      select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${schema.job} j, timeout
       where j.state = 'active' and ${target.condition} and (${onlyId} is null or j.id = ${onlyId})
       order by j.id
       limit ${o.limit}
@@ -161,11 +161,11 @@ function reapStatement(
       select e.*,
         ${pauseSql("reap")} as paused,
         row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
-        exists (select 1 from ${workerSchema.job} p
+        exists (select 1 from ${schema.job} p
                 where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
       from candidates e
     ), returned as (
-      update ${workerSchema.job} j set
+      update ${schema.job} j set
         state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
         key = case when r.attempts < r.max_attempts and r.key is not null and (${param(t.boolean, o.forceDetach)} or r.has_pending or r.rn > 1)
                    then null else j.key end,
@@ -217,7 +217,7 @@ export async function reap(
     else throw e
   }
   const candidates = await query`
-    select j.id from ${workerSchema.job} j
+    select j.id from ${schema.job} j
     where j.state = 'active' and ${target.condition}
     order by j.id
     limit ${limit}`

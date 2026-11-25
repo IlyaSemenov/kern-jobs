@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 
 import { createTestSchema, type TestSchema } from "../../../test-harness/database"
-import { workerSchema } from "../db"
+import { schema } from "../db"
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -15,7 +15,7 @@ test("reads the fractional seconds of the times of a job on a pool whose DateSty
   // In Asia/Kathmandu, these instants of January 2 fall on January 3, which SQL, DMY writes day first.
   const db = testSchema.createDb({ dateStyle: "SQL, DMY", timeZone: "Asia/Kathmandu" })
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, run_at, window_started_at, created_at, locked_at, max_attempts)
+    insert into ${schema.job} (task, run_at, window_started_at, created_at, locked_at, max_attempts)
      values ('t', '2030-01-02 19:58:00.1236+00', '2030-01-02 19:57:00.1234+00', '2030-01-02 19:56:00+00', null, 1)`
   expect(await db.job.select("runAt", "windowStartedAt", "createdAt", "lockedAt").take()).toEqual({
     runAt: new Date("2030-01-02T19:58:00.124Z"),

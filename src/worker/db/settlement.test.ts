@@ -19,7 +19,7 @@ import {
 } from "../../test-harness/database"
 
 import { type Claim, claimCycle, claimPlain } from "./claim"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { reap } from "./lease"
 import { complete, fail, requeue } from "./settlement"
 import * as t from "./types"
@@ -39,8 +39,8 @@ test("complete matches both bigint ids beyond the safe integer range", async () 
   // The next integer that a number cannot hold either.
   const claimId = id + 2n
   await testSchema.conn.query`
-    alter table ${workerSchema.job} alter column id restart with ${literal(id)}`
-  await testSchema.conn.query`select ${workerSchema.claimSeq.setval(claimId, false)}`
+    alter table ${schema.job} alter column id restart with ${literal(id)}`
+  await testSchema.conn.query`select ${schema.claimSeq.setval(claimId, false)}`
   await enqueue(testSchema.conn, testSchema.table, { task: "t" })
   const claim = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1 }))
   expect([claim.id, claim.claimId]).toEqual([String(id), String(claimId)])

@@ -7,7 +7,7 @@ import { isQueryError } from "kern-orm/db"
 import { createTestSchema, jobs, only, T, type TestSchema } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimQueued } from "../worker/db/claim"
-import { workerSchema } from "../worker/db/db"
+import { schema } from "../worker/db/db"
 import { fail } from "../worker/db/settlement"
 import * as t from "../worker/db/types"
 
@@ -59,7 +59,7 @@ async function insertRow(fields: RowFields): Promise<string | null> {
   }
   return rejectedBy(
     testSchema.conn.query`
-      insert into ${workerSchema.job}
+      insert into ${schema.job}
         (task, state, claim_id, lease_until, attempts, max_attempts, run_at, not_before, failed_at, window_started_at, created_at)
       values ('t', ${row.state}, ${row.claim_id}, ${row.lease_until}, ${row.attempts}, ${row.max_attempts},
               ${row.run_at}, ${row.not_before}, ${row.failed_at}, now(), now())`,
@@ -165,7 +165,7 @@ describe("names", () => {
     expect(await enqueueNames({ ...names, now: T(0) })).toBeNull()
     const compression = await testSchema.conn.query`
       select pg_column_compression(queue) as queue, pg_column_compression(key) as key
-      from ${workerSchema.job}`
+      from ${schema.job}`
       .select({ queue: t.text.nullable(), key: t.text.nullable() })
       .take()
     expect(compression).toEqual({ queue: null, key: null })

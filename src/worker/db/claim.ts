@@ -13,7 +13,7 @@ import { param, type SqlFragment } from "kern-orm/db"
 
 import { toStatementLabel } from "../../sql/statement"
 
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { nowSql, pauseSql } from "./sql"
 import { job } from "./tables/job"
 import * as t from "./types"
@@ -69,7 +69,7 @@ export interface ClaimOptions {
  * Every claim stamps the attempt budget of the failure job of its task, or clears it for a task without one, so the claim that a terminal failure ends decides whether it inserts a failure job, and a stamp of an earlier claim never counts.
  */
 function claimSetSql(o: ClaimOptions, now: SqlFragment): UntypedExpression {
-  return sql`state = 'active', claim_id = ${workerSchema.claimSeq.nextval()}, locked_by = ${o.worker}, locked_at = ${now},
+  return sql`state = 'active', claim_id = ${schema.claimSeq.nextval()}, locked_by = ${o.worker}, locked_at = ${now},
     attempts = j.attempts + 1,
     lease_until = ${now} + make_interval(secs => coalesce((${param(t.jsonb, o.leases ?? {})} ->> j.task)::float8, ${param(t.doublePrecision, o.defaultLease ?? 60)})),
     failure_max_attempts = (${param(t.jsonb, o.failureMaxAttempts ?? {})} ->> j.task)::int`
@@ -83,14 +83,14 @@ export async function claimPlain(
   const now = nowSql(o.now)
   const rows = await query`
     with c as (
-      select id from ${workerSchema.job}
+      select id from ${schema.job}
       where state = 'pending' and queue is null and run_at <= ${now} and task = any(${param(t.array(t.text), o.tasks)})
         and ${pauseSql("claim_plain")}
       order by run_at
       limit ${o.limit}
       for update skip locked
     )
-    update ${workerSchema.job} j set ${claimSetSql(o, now)}
+    update ${schema.job} j set ${claimSetSql(o, now)}
     from c where j.id = c.id
     returning ${claimedJobColumns}, ${lagSql(now)} as lag_seconds`
     .comment(toStatementLabel("claim:plain"))
@@ -129,13 +129,13 @@ export async function claimQueued(
     with recursive qs as (
       -- Loose index scan over distinct (scope, queue) of pending rows: O(queues · log n), independent of backlog size.
       -- Starts after the worker's cursor (round-robin over queues); the caller wraps around on "none".
-      (select scope, queue from ${workerSchema.job}
+      (select scope, queue from ${schema.job}
        where state = 'pending' and queue is not null
          and (${afterScope} is null or (scope, queue) > (${afterScope}, ${afterQueue}))
        order by scope, queue limit 1)
       union all
       select n.scope, n.queue from qs, lateral (
-        select scope, queue from ${workerSchema.job}
+        select scope, queue from ${schema.job}
         where state = 'pending' and queue is not null and (scope, queue) > (qs.scope, qs.queue)
         order by scope, queue limit 1) n
     ), q as (
@@ -145,7 +145,7 @@ export async function claimQueued(
         select c.scope, c.queue
         from qs c
         where ${pauseSql("claim_queue")}
-          and exists (select 1 from ${workerSchema.job} h where h.state = 'pending' and h.scope = c.scope and h.queue = c.queue
+          and exists (select 1 from ${schema.job} h where h.state = 'pending' and h.scope = c.scope and h.queue = c.queue
                       and h.run_at <= ${now} and h.task = any(${tasks}))
           and not exists (select 1 from unnest(${param(
             t.array(t.text),
@@ -155,7 +155,7 @@ export async function claimQueued(
             skip.map(r => r.queue),
           )}) as s(scope, queue)
                           where s.scope = c.scope and s.queue = c.queue)
-          and not exists (select 1 from ${workerSchema.job} a where a.state = 'active' and a.scope = c.scope and a.queue = c.queue)
+          and not exists (select 1 from ${schema.job} a where a.state = 'active' and a.scope = c.scope and a.queue = c.queue)
         offset 0
       ) f
       -- Queues whose keys collide share a lock, which only makes one of them busy for a moment.
@@ -164,17 +164,17 @@ export async function claimQueued(
     ), head as (
       -- LATERAL keeps the head an index scan; a plain join let the planner sort the whole queue.
       select h.id from q, lateral (
-        select j.id from ${workerSchema.job} j
+        select j.id from ${schema.job} j
         where j.state = 'pending' and j.scope = q.scope and j.queue = q.queue and j.run_at <= ${now} and j.task = any(${tasks})
         order by j.run_at, j.id
         limit 1) h
     ), locked as (
       -- Only the head is locked, without waiting; the recheck of run_at and of the queue stops a head that a producer moved into the future or into another queue after the snapshot.
-      select j.id from ${workerSchema.job} j join head on j.id = head.id cross join q
+      select j.id from ${schema.job} j join head on j.id = head.id cross join q
       where j.state = 'pending' and j.run_at <= ${now} and j.scope = q.scope and j.queue = q.queue
       for update of j skip locked
     ), claimed as (
-      update ${workerSchema.job} j set ${claimSetSql(o, now)}
+      update ${schema.job} j set ${claimSetSql(o, now)}
       from locked l where j.id = l.id
       returning ${claimedJobColumns}, ${lagSql(now)} as lag_seconds
     )

@@ -30,7 +30,7 @@ import {
   createClaimState,
 } from "./claim"
 import type { WorkerDb } from "./db"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { complete } from "./settlement"
 import * as t from "./types"
 import { isUniqueViolation } from "./violation"
@@ -98,9 +98,7 @@ describe("queue mutex", () => {
     await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
     await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
     const err = await testSchema.conn.query`
-      update ${workerSchema.job} set state = 'active', claim_id = id, lease_until = now()`.catch(
-      e => e,
-    )
+      update ${schema.job} set state = 'active', claim_id = id, lease_until = now()`.catch(e => e)
     expect(isUniqueViolation(err, "job_active_queue_idx")).toBe(true)
   })
 
@@ -388,10 +386,10 @@ describe("stress", () => {
     const queued = 1000
     const plain = 500
     await testSchema.conn.query`
-      insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+      insert into ${schema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
       select 't', 'q' || (i % 10), to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${queued}::int) i`
     await testSchema.conn.query`
-      insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
+      insert into ${schema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
       select 't', to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${plain}::int) i`
     const order = new Map<string, number[]>()
     const running = new Map<string, number>()
@@ -648,7 +646,7 @@ describe("advisory locks of claimQueued", () => {
             now: T(0),
           })
         await testSchema.conn.query`
-          update ${workerSchema.job} set state = 'active', claim_id = id, lease_until = ${T(3600)}
+          update ${schema.job} set state = 'active', claim_id = id, lease_until = ${T(3600)}
           where queue < ${queueName(busy)}`
         for (let i = 0; i < busy; i++)
           await enqueue(testSchema.conn, testSchema.table, {
@@ -656,7 +654,7 @@ describe("advisory locks of claimQueued", () => {
             queue: queueName(i),
             now: T(0),
           })
-        await testSchema.conn.query`analyze ${workerSchema.job}`
+        await testSchema.conn.query`analyze ${schema.job}`
         const c = await testSchema.connect()
         for (const setting of plan) await c.query`select set_config(${setting}, 'off', false)`
         // An explicit transaction keeps xact locks until commit, which makes extra locks observable.

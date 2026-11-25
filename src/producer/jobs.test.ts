@@ -18,7 +18,7 @@ import {
   only,
   type TestSchema,
 } from "../test-harness/database"
-import { workerSchema } from "../worker/db/db"
+import { schema } from "../worker/db/db"
 import * as t from "../worker/db/types"
 
 import type { JobsClient } from "./client"
@@ -152,7 +152,7 @@ afterEach(async () => {
 /** Marks a pending job of the test schema failed `age` seconds ago, as a worker does after the last attempt of the job. */
 const markFailed = (id: string, age = 0) =>
   testSchema.conn.query`
-    update ${workerSchema.job} set state = 'failed', attempts = 1, last_error = 'boom',
+    update ${schema.job} set state = 'failed', attempts = 1, last_error = 'boom',
       failed_at = now() - make_interval(secs => ${param(t.doublePrecision, age)})
     where id = ${id}`
 

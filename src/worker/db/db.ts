@@ -8,9 +8,9 @@ import { schedule } from "./tables/schedule"
 
 /**
  * Worker ORM schema: the job and schedule tables and the claim sequence.
- * SQL of the worker names them through it, such as `${workerSchema.job}`, so that a statement of any `Db` of the schema names them in the PostgreSQL schema of that `Db`.
+ * SQL of the worker names them through it, such as `${schema.job}`, so that a statement of any `Db` of the schema names them in the PostgreSQL schema of that `Db`.
  */
-export const workerSchema = defineSchema({
+export const schema = defineSchema({
   job,
   schedule,
   /** Sequence of the claim ids. */
@@ -18,9 +18,9 @@ export const workerSchema = defineSchema({
 })
 
 /** Worker database with its ORM schema bound. */
-export type WorkerDb = DbOf<typeof workerSchema>
+export type WorkerDb = DbOf<typeof schema>
 
 /** Binds the worker ORM schema to `database` using `schemaName` for PostgreSQL names. */
 export function bindWorkerDb(database: Database, schemaName: string): WorkerDb {
-  return bindSchema(workerSchema, database, { schemaName })
+  return bindSchema(schema, database, { schemaName })
 }

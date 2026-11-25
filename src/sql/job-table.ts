@@ -16,7 +16,7 @@ export interface JobTable {
 }
 
 /** Name of the PostgreSQL schema of the job table when the application gives none. */
-export const DEFAULT_SCHEMA = "kern_jobs"
+export const DEFAULT_SCHEMA_NAME = "kern_jobs"
 
 /** Longest name of a PostgreSQL schema in bytes of UTF-8, `max_identifier_length` of a standard build of PostgreSQL. */
 const maxSchemaNameBytes = 63

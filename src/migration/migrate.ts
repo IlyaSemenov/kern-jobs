@@ -3,7 +3,7 @@
 import { getMigrationStatus, migrate, type MigrationTarget } from "kern-migrations"
 import type { Database } from "kern-orm/db"
 
-import { checkSchemaName, DEFAULT_SCHEMA } from "../sql/job-table"
+import { checkSchemaName, DEFAULT_SCHEMA_NAME } from "../sql/job-table"
 
 import { jobMigrations } from "./migrations"
 
@@ -24,7 +24,7 @@ export async function migrateJobs(
   target: MigrationTarget,
   options: MigrateJobsOptions = {},
 ): Promise<void> {
-  const { schemaName = DEFAULT_SCHEMA } = options
+  const { schemaName = DEFAULT_SCHEMA_NAME } = options
   checkSchemaName(schemaName)
   await migrate(target, jobMigrations, { schemaName })
 }

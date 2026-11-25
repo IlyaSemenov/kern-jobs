@@ -6,7 +6,7 @@ import { param } from "kern-orm/db"
 import { createTestSchema, type TestSchema } from "../test-harness/database"
 
 import { claimCycle, claimPlain, createClaimState } from "./db/claim"
-import { workerSchema } from "./db/db"
+import { schema } from "./db/db"
 import { heartbeat } from "./db/lease"
 import { complete } from "./db/settlement"
 import * as t from "./db/types"
@@ -16,7 +16,7 @@ const JOBS = 3000
 
 async function fill(testSchema: TestSchema, n: number) {
   await testSchema.conn.query`
-    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${schema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now(), now(), now(), 25 from generate_series(1, ${n}::int)`
 }
 
@@ -91,7 +91,7 @@ async function heartbeatCost(claimsCount: number) {
   const skipping = await time(() => heartbeat(testSchema.conn.query, { claims: refs }))
   const plain = await time(() =>
     testSchema.conn.query`
-        update ${workerSchema.job} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
+        update ${schema.job} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
         from unnest(${param(
           t.array(t.bigintText),
           refs.map(r => r.id),

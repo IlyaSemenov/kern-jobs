@@ -9,7 +9,7 @@ import type { Driver } from "kern-orm/db"
 
 import { createTestSchema, sleep, type TestSchema } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
-import { type WorkerDb, workerSchema } from "../db/db"
+import { schema, type WorkerDb } from "../db/db"
 import { reap } from "../db/lease"
 import * as t from "../db/types"
 
@@ -49,7 +49,7 @@ interface Event {
 async function countJobs(db: WorkerDb, driver: Driver): Promise<number> {
   for (;;) {
     try {
-      return await db.$queryOn(driver)`select count(*)::int from ${workerSchema.job}`.get(t.integer)
+      return await db.$queryOn(driver)`select count(*)::int from ${schema.job}`.get(t.integer)
     } catch {
       await sleep(100)
     }
@@ -112,7 +112,7 @@ describe("reaper after a restart", () => {
       await retrying(
         () =>
           testSchema.db.$queryOn(testSchema.driver)`
-            insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
+            insert into ${schema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
             select 't', '{}', now(), now(), now(), 25 from generate_series(1, 5)`,
       )
       const claims = await claimPlain(testSchema.db.$queryOn(testSchema.driver), {
@@ -126,7 +126,7 @@ describe("reaper after a restart", () => {
       let pending = 0
       while (Date.now() < until) {
         pending = await testSchema.db.$queryOn(testSchema.driver)`
-          select count(*)::int from ${workerSchema.job} where state = 'pending'`.get(t.integer)
+          select count(*)::int from ${schema.job} where state = 'pending'`.get(t.integer)
         if (pending === 5) break
         await sleep(100)
       }
@@ -149,12 +149,12 @@ describe("PostgreSQL restart under load", () => {
     test(`pg_ctl restart -m ${mode}: every job completes, workers recover`, async () => {
       const testSchema: TestSchema = await createTestSchema(URL)
       await testSchema.conn.query`
-        insert into ${workerSchema.job} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
+        insert into ${schema.job} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
                to_jsonb(i), now(), now(), now(), 25
         from generate_series(1, 300) i`
       const ids = new Set(
-        await testSchema.conn.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
+        await testSchema.conn.query`select id from ${schema.job}`.pluck(t.bigintText),
       )
       const observer = testSchema.createDriver({ max: 2 })
 

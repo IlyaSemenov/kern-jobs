@@ -6,7 +6,7 @@ import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
-import { type WorkerDb, workerSchema } from "./db"
+import { schema, type WorkerDb } from "./db"
 import { insertFailureJobsSql } from "./failure"
 import { nowSql } from "./sql"
 import * as t from "./types"
@@ -138,7 +138,7 @@ async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<
   if (o.reason === "terminal-error" || (!o.refund && a.attempts >= a.maxAttempts)) {
     await db.$query`
       with s as (
-        update ${workerSchema.job} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = ${o.error},
+        update ${schema.job} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = ${o.error},
           failed_at = ${now}
         where id = ${c.id}
         returning *, ${c.claimId}::bigint as failed_claim_id
@@ -152,7 +152,7 @@ async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<
   const backoff = param(t.doublePrecision, o.backoff)
   const toPending = () =>
     db.$query`
-      update ${workerSchema.job} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
+      update ${schema.job} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
         run_at = n.t + make_interval(secs => ${backoff}), not_before = n.t + make_interval(secs => ${backoff}),
         window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null,
         last_error = coalesce(${param(t.text.nullable(), o.error)}, last_error)

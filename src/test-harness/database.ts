@@ -24,7 +24,7 @@ import postgres from "postgres"
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier, replacePauseConditions } from "../sql/postgres"
-import { bindWorkerDb, type WorkerDb, workerSchema } from "../worker/db/db"
+import { bindWorkerDb, schema, type WorkerDb } from "../worker/db/db"
 import { job } from "../worker/db/tables/job"
 
 /** Returns the URL of the test database. */
@@ -121,7 +121,7 @@ export function withPauses(driver: Driver, schemaName: string, pauses: string[])
 /** Connection of a test, held until `close`, with the pid of its backend. */
 export interface Conn extends Pick<Connection, "execute" | "executeScript"> {
   pid: number
-  /** Template of a statement on the connection, which names the tables of the worker ORM schema in the test schema, such as ``conn.query`select count(*) from ${workerSchema.job}` ``. */
+  /** Template of a statement on the connection, which names the tables of the worker ORM schema in the test schema, such as ``conn.query`select count(*) from ${schema.job}` ``. */
   query: DbSqlQueryTemplate
   close(): Promise<void>
 }
@@ -288,7 +288,7 @@ export async function jobs(
 ): Promise<JobRow[]> {
   const columns = columnsOf(job, "*", { alias: "j" })
   const rows = await query`
-    select ${columns} from ${workerSchema.job} j where ${where} order by j.id`.select({
+    select ${columns} from ${schema.job} j where ${where} order by j.id`.select({
     job: columns,
   })
   return rows.map(row => row.job)

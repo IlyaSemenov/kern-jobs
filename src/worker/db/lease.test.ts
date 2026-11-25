@@ -20,7 +20,7 @@ import {
 } from "../../test-harness/database"
 
 import { claimCycle, claimPlain } from "./claim"
-import { workerSchema } from "./db"
+import { schema } from "./db"
 import { heartbeat, reap } from "./lease"
 import { complete, fail } from "./settlement"
 import * as t from "./types"
@@ -258,11 +258,11 @@ describe("reaper with an existing pending job", () => {
     await claimPlain(testSchema.conn.query, { ...W(), limit: 1, now: T(1) })
     const now = param(t.timestamptz, T(20))
     const reapUnranked = () => testSchema.conn.query`
-      update ${workerSchema.job} j set
+      update ${schema.job} j set
         state = case when j.attempts >= j.max_attempts then 'failed' else 'pending' end,
         key = case
           when j.attempts >= j.max_attempts then j.key
-          when exists (select 1 from ${workerSchema.job} p where p.state = 'pending' and p.scope = j.scope and p.task = j.task and p.key = j.key) then null
+          when exists (select 1 from ${schema.job} p where p.state = 'pending' and p.scope = j.scope and p.task = j.task and p.key = j.key) then null
           else j.key end,
         run_at = ${now}, not_before = ${now}, window_started_at = ${now}, claim_id = null, locked_by = null, lease_until = null
       where j.state = 'active' and j.lease_until < ${now}`
@@ -589,7 +589,7 @@ describe("ownership after lease expiry and before reclaim", () => {
     )
     // Complete takes no virtual time, so the lease expires in server time.
     await testSchema.conn.query`
-      update ${workerSchema.job} set lease_until = now() - interval '1 second'`
+      update ${schema.job} set lease_until = now() - interval '1 second'`
     expect(await complete(testSchema.db, a)).toBe(true)
   })
 

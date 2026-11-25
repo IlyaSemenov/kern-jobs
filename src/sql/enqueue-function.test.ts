@@ -15,7 +15,7 @@ import {
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimPlain } from "../worker/db/claim"
-import { bindWorkerDb, workerSchema } from "../worker/db/db"
+import { bindWorkerDb, schema } from "../worker/db/db"
 import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
@@ -77,7 +77,7 @@ async function rowsOf(scope: string) {
   return testSchema.conn.query`
     select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
            window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state
-    from ${workerSchema.job} where scope = ${scope} order by id`.select({
+    from ${schema.job} where scope = ${scope} order by id`.select({
     task: t.text,
     queue: t.text.nullable(),
     key: t.text.nullable(),
@@ -96,7 +96,7 @@ async function rowsOf(scope: string) {
 /** Returns the ids of the rows of a scope in their order. */
 async function idsOf(scope: string): Promise<string[]> {
   return await testSchema.conn.query`
-    select j.id from ${workerSchema.job} j where scope = ${scope} order by j.id`.pluck(t.bigintText)
+    select j.id from ${schema.job} j where scope = ${scope} order by j.id`.pluck(t.bigintText)
 }
 
 describe("the same jobs as the enqueue of the core", () => {
@@ -159,27 +159,27 @@ describe("the same jobs as the enqueue of the core", () => {
     } else if ("wait" in step) {
       const wait = param(t.doublePrecision, step.wait)
       await testSchema.conn.query`
-        update ${workerSchema.job} set run_at = run_at - make_interval(secs => ${wait}),
+        update ${schema.job} set run_at = run_at - make_interval(secs => ${wait}),
           not_before = not_before - make_interval(secs => ${wait}),
           window_started_at = window_started_at - make_interval(secs => ${wait}),
           created_at = created_at - make_interval(secs => ${wait})`
     } else if ("claim" in step) {
       await testSchema.conn.query`
-        update ${workerSchema.job} j set state = 'active', attempts = attempts + 1, claim_id = ${workerSchema.claimSeq.nextval()},
+        update ${schema.job} j set state = 'active', attempts = attempts + 1, claim_id = ${schema.claimSeq.nextval()},
           lease_until = statement_timestamp() + interval '1 hour', locked_by = 'w', locked_at = statement_timestamp()
         where key = ${step.claim} and state = 'pending'
-          and not exists (select from ${workerSchema.job} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`
+          and not exists (select from ${schema.job} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`
     } else if ("fail" in step) {
       const backoff = param(t.doublePrecision, step.seconds)
       await testSchema.conn.query`
-        update ${workerSchema.job} j set state = 'pending', claim_id = null, lease_until = null,
+        update ${schema.job} j set state = 'pending', claim_id = null, lease_until = null,
           not_before = statement_timestamp() + make_interval(secs => ${backoff}),
           run_at = statement_timestamp() + make_interval(secs => ${backoff}), window_started_at = statement_timestamp()
-        where j.id = (select min(a.id) from ${workerSchema.job} a where a.scope = j.scope and a.key = ${step.fail} and a.state = 'active')
-          and not exists (select from ${workerSchema.job} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`
+        where j.id = (select min(a.id) from ${schema.job} a where a.scope = j.scope and a.key = ${step.fail} and a.state = 'active')
+          and not exists (select from ${schema.job} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`
     } else {
       await testSchema.conn
-        .query`delete from ${workerSchema.job} where key = ${step.complete} and state = 'active'`
+        .query`delete from ${schema.job} where key = ${step.complete} and state = 'active'`
     }
     expect(await rowsOf("sql")).toEqual(await rowsOf("core"))
   }
@@ -323,7 +323,7 @@ describe("arguments", () => {
     const rows = await testSchema.conn.query`
       select j.id, scope, payload is null as no_payload, key, queue, key_mode, max_attempts,
              (run_at = window_started_at and run_at = created_at) as at_now
-      from ${workerSchema.job} j order by j.id`.select({
+      from ${schema.job} j order by j.id`.select({
       id: t.bigintText,
       scope: t.text,
       no_payload: t.boolean,
@@ -366,7 +366,7 @@ describe("arguments", () => {
     // Outside debounce, max_wait is ignored.
     await callEnqueue(testSchema.conn, { ...base, key_mode: "replace", max_wait: -1 })
     expect(
-      await testSchema.conn.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
+      await testSchema.conn.query`select count(*)::int from ${schema.job}`.get(t.integer),
     ).toBe(5)
   })
 
@@ -450,7 +450,7 @@ describe("arguments", () => {
       await expect(outcome).rejects.toThrow(message)
     }
     expect(
-      await testSchema.conn.query`select count(*)::int from ${workerSchema.job}`.get(t.integer),
+      await testSchema.conn.query`select count(*)::int from ${schema.job}`.get(t.integer),
     ).toBe(0)
   })
 })
@@ -466,7 +466,7 @@ describe("many rows of one statement", () => {
     expect(results.map(r => r.created)).toEqual([true, false, true, true, false])
     expect(results.map(r => r.id)).toEqual([a, a, results[2]!.id, b, a])
     const rows = await testSchema.conn.query`
-      select key, payload from ${workerSchema.job} order by id`.select({
+      select key, payload from ${schema.job} order by id`.select({
       key: t.text.nullable(),
       payload: t.jsonb,
     })
@@ -494,7 +494,7 @@ describe("many rows of one statement", () => {
     expect(call.now).not.toBe(call.began)
     const rows = await testSchema.conn.query`
       select key, created_at::text as created_at, (run_at - created_at)::text as wait
-      from ${workerSchema.job} order by id`.select({
+      from ${schema.job} order by id`.select({
       key: t.text,
       created_at: t.text,
       wait: t.text,
@@ -534,9 +534,9 @@ describe("transactions", () => {
       const b = await event
       expect(b.created).toBe(outcome === "rollback")
       expect(b.id === a.id).toBe(outcome === "commit")
-      expect(
-        await testSchema.conn.query`select payload from ${workerSchema.job}`.pluck(t.jsonb),
-      ).toEqual([2])
+      expect(await testSchema.conn.query`select payload from ${schema.job}`.pluck(t.jsonb)).toEqual(
+        [2],
+      )
     })
   }
 
