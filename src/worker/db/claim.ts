@@ -1,13 +1,19 @@
 // Worker claims identify the active jobs a worker can heartbeat and settle.
 // The claim cycle combines batches of jobs without a queue with the heads of free queues.
 // Every claim statement must run in its own autocommit transaction: claimQueued takes a transaction-level advisory lock of its queue, which an explicit transaction would hold until its commit.
-import { columnsOf, type RecordOf } from "kern-orm"
-import { param, queryOn, sql, type SqlFragment, type StatementExecutor } from "kern-orm/db"
+import {
+  columnsOf,
+  type DbSqlQueryTemplate,
+  type RecordOf,
+  sql,
+  type UntypedExpression,
+} from "kern-orm"
+import { param, type SqlFragment } from "kern-orm/db"
 
-import type { JobTable } from "../../sql/job-table"
 import { toStatementLabel } from "../../sql/statement"
 
-import { jobTableSql, nowSql } from "./sql"
+import { workerSchema } from "./db"
+import { nowSql } from "./sql"
 import { job } from "./tables/job"
 import * as t from "./types"
 import { isUniqueViolation } from "./violation"
@@ -61,31 +67,29 @@ export interface ClaimOptions {
  * Returns SQL of the assignments that claim the row `j` for the worker at `now`: a new claim id, the next attempt, and the lease end, now plus the lease of its task or the default lease.
  * Every claim stamps the attempt budget of the failure job of its task, or clears it for a task without one, so the claim that a terminal failure ends decides whether it inserts a failure job, and a stamp of an earlier claim never counts.
  */
-function claimSetSql(table: JobTable, o: ClaimOptions, now: SqlFragment): SqlFragment {
-  return sql`state = 'active', claim_id = nextval(${table.sequence}::regclass), locked_by = ${o.worker}, locked_at = ${now},
+function claimSetSql(o: ClaimOptions, now: SqlFragment): UntypedExpression {
+  return sql`state = 'active', claim_id = ${workerSchema.claimSeq.nextval()}, locked_by = ${o.worker}, locked_at = ${now},
     attempts = j.attempts + 1,
     lease_until = ${now} + make_interval(secs => coalesce((${param(t.jsonb, o.leases ?? {})} ->> j.task)::float8, ${param(t.doublePrecision, o.defaultLease ?? 60)})),
     failure_max_attempts = (${param(t.jsonb, o.failureMaxAttempts ?? {})} ->> j.task)::int`
 }
 
-/** Claims up to `limit` ready jobs without a queue in one statement. */
+/** Claims up to `limit` ready jobs without a queue in one statement of `query`, a template of a `Db` of the worker ORM schema. */
 export async function claimPlain(
-  db: StatementExecutor,
-  table: JobTable,
+  query: DbSqlQueryTemplate,
   o: ClaimOptions & { limit: number },
 ): Promise<Claim[]> {
   const now = nowSql(o.now)
-  const jobs = jobTableSql(table)
-  const rows = await queryOn(db)`
+  const rows = await query`
     with c as (
-      select id from ${jobs}
+      select id from ${workerSchema.job}
       where state = 'pending' and queue is null and run_at <= ${now} and task = any(${param(t.array(t.text), o.tasks)})
         and /*hook:claim_plain*/true
       order by run_at
       limit ${o.limit}
       for update skip locked
     )
-    update ${jobs} j set ${claimSetSql(table, o, now)}
+    update ${workerSchema.job} j set ${claimSetSql(o, now)}
     from c where j.id = c.id
     returning ${claimedJobColumns}, ${lagSql(now)} as lag_seconds`
     .comment(toStatementLabel("claim:plain"))
@@ -108,31 +112,29 @@ export type QueueClaim =
   | { kind: "job"; queue: QueueRef; claim: Claim }
 
 /**
- * Claims the head of one free queue.
+ * Claims the head of one free queue in one statement of `query`.
  * A loose index scan finds the queue, `pg_try_advisory_xact_lock` serializes claims of it, and the head by `(run_at, id)` is locked with `SKIP LOCKED`: when another transaction holds the head, or moved it after the snapshot, the result is `busy`, and the caller skips the queue until the end of its cycle.
  */
 export async function claimQueued(
-  db: StatementExecutor,
-  table: JobTable,
+  query: DbSqlQueryTemplate,
   o: ClaimOptions & { skip?: QueueRef[]; after?: QueueRef | null },
 ): Promise<QueueClaim> {
   const skip = o.skip ?? []
   const now = nowSql(o.now)
-  const jobs = jobTableSql(table)
   const tasks = param(t.array(t.text), o.tasks)
   const afterScope = param(t.text.nullable(), o.after?.scope ?? null)
   const afterQueue = param(t.text.nullable(), o.after?.queue ?? null)
-  const row = await queryOn(db)`
+  const row = await query`
     with recursive qs as (
       -- Loose index scan over distinct (scope, queue) of pending rows: O(queues · log n), independent of backlog size.
       -- Starts after the worker's cursor (round-robin over queues); the caller wraps around on "none".
-      (select scope, queue from ${jobs}
+      (select scope, queue from ${workerSchema.job}
        where state = 'pending' and queue is not null
          and (${afterScope} is null or (scope, queue) > (${afterScope}, ${afterQueue}))
        order by scope, queue limit 1)
       union all
       select n.scope, n.queue from qs, lateral (
-        select scope, queue from ${jobs}
+        select scope, queue from ${workerSchema.job}
         where state = 'pending' and queue is not null and (scope, queue) > (qs.scope, qs.queue)
         order by scope, queue limit 1) n
     ), q as (
@@ -142,7 +144,7 @@ export async function claimQueued(
         select c.scope, c.queue
         from qs c
         where /*hook:claim_queue*/true
-          and exists (select 1 from ${jobs} h where h.state = 'pending' and h.scope = c.scope and h.queue = c.queue
+          and exists (select 1 from ${workerSchema.job} h where h.state = 'pending' and h.scope = c.scope and h.queue = c.queue
                       and h.run_at <= ${now} and h.task = any(${tasks}))
           and not exists (select 1 from unnest(${param(
             t.array(t.text),
@@ -152,7 +154,7 @@ export async function claimQueued(
             skip.map(r => r.queue),
           )}) as s(scope, queue)
                           where s.scope = c.scope and s.queue = c.queue)
-          and not exists (select 1 from ${jobs} a where a.state = 'active' and a.scope = c.scope and a.queue = c.queue)
+          and not exists (select 1 from ${workerSchema.job} a where a.state = 'active' and a.scope = c.scope and a.queue = c.queue)
         offset 0
       ) f
       -- Queues whose keys collide share a lock, which only makes one of them busy for a moment.
@@ -161,17 +163,17 @@ export async function claimQueued(
     ), head as (
       -- LATERAL keeps the head an index scan; a plain join let the planner sort the whole queue.
       select h.id from q, lateral (
-        select j.id from ${jobs} j
+        select j.id from ${workerSchema.job} j
         where j.state = 'pending' and j.scope = q.scope and j.queue = q.queue and j.run_at <= ${now} and j.task = any(${tasks})
         order by j.run_at, j.id
         limit 1) h
     ), locked as (
       -- Only the head is locked, without waiting; the recheck of run_at and of the queue stops a head that a producer moved into the future or into another queue after the snapshot.
-      select j.id from ${jobs} j join head on j.id = head.id cross join q
+      select j.id from ${workerSchema.job} j join head on j.id = head.id cross join q
       where j.state = 'pending' and j.run_at <= ${now} and j.scope = q.scope and j.queue = q.queue
       for update of j skip locked
     ), claimed as (
-      update ${jobs} j set ${claimSetSql(table, o, now)}
+      update ${workerSchema.job} j set ${claimSetSql(o, now)}
       from locked l where j.id = l.id
       returning ${claimedJobColumns}, ${lagSql(now)} as lag_seconds
     )
@@ -226,14 +228,13 @@ export interface ClaimCycleOptions extends ClaimOptions {
 }
 
 /**
- * Runs a claim cycle of a worker.
+ * Runs a claim cycle of a worker by statements of `query`.
  * Slots are split between jobs without a queue and queued jobs, with the larger half alternating between cycles; a class that has no ready jobs leaves its share to the other.
  * Queues are visited round-robin from the cursor of the worker.
  * A `23505` on the active-queue index, from a stale snapshot, is retried at most `maxRetries` times per cycle.
  */
 export async function claimCycle(
-  db: StatementExecutor,
-  table: JobTable,
+  query: DbSqlQueryTemplate,
   o: ClaimCycleOptions,
   stats: ClaimCycleStats = { uniqueViolations: 0, busy: 0 },
   state: ClaimState = createClaimState(),
@@ -249,7 +250,7 @@ export async function claimCycle(
   const proceed = () => statements++ === 0 || (o.proceed?.() ?? true)
   const plainShare = state.plainFirst ? Math.ceil(o.slots / 2) : Math.floor(o.slots / 2)
   state.plainFirst = !state.plainFirst
-  if (plainShare > 0 && proceed()) take(await claimPlain(db, table, { ...o, limit: plainShare }))
+  if (plainShare > 0 && proceed()) take(await claimPlain(query, { ...o, limit: plainShare }))
   const plainExhausted = result.length < plainShare
   const skip: QueueRef[] = []
   let retries = 0
@@ -258,7 +259,7 @@ export async function claimCycle(
     if (!proceed()) return result
     let r: QueueClaim
     try {
-      r = await claimQueued(db, table, { ...o, skip, after: state.cursor })
+      r = await claimQueued(query, { ...o, skip, after: state.cursor })
     } catch (e) {
       if (isUniqueViolation(e, "job_active_queue_idx") && retries++ < (o.maxRetries ?? 3)) {
         stats.uniqueViolations++
@@ -281,7 +282,7 @@ export async function claimCycle(
     take([r.claim])
   }
   if (result.length < o.slots && !plainExhausted && proceed()) {
-    take(await claimPlain(db, table, { ...o, limit: o.slots - result.length }))
+    take(await claimPlain(query, { ...o, limit: o.slots - result.length }))
   }
   return result
 }

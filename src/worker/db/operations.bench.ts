@@ -8,9 +8,9 @@ import type { KeyMode } from "../../sql/job"
 import { createTestSchema, type TestSchema } from "../../test-harness/database"
 
 import { claimCycle, claimPlain, claimQueued } from "./claim"
+import { workerSchema } from "./db"
 import { reap } from "./lease"
 import { complete, fail } from "./settlement"
-import { jobTableSql } from "./sql"
 import * as t from "./types"
 
 const percentile = (xs: number[], p: number) =>
@@ -25,7 +25,7 @@ async function time<T>(fn: () => Promise<T>): Promise<[number, T]> {
 }
 
 async function sizes(schema: TestSchema) {
-  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
+  await schema.admin.query`analyze ${workerSchema.job}`
   const table = param(t.text, schema.table.name)
   const r = await schema.admin.query`
     select pg_relation_size(${table}::regclass) as heap, pg_indexes_size(${table}::regclass) as idx,
@@ -60,7 +60,7 @@ async function hotKey(mode: KeyMode) {
     `hot key ${mode}: ${total} upserts from 8 connections in ${ms.toFixed(0)} ms (${((total / ms) * 1000).toFixed(0)}/s)`,
   )
   console.log(`  before vacuum: ${await sizes(schema)}`)
-  await schema.admin.query`vacuum ${jobTableSql(schema.table)}`
+  await schema.admin.query`vacuum ${workerSchema.job}`
   console.log(`  after vacuum:  ${await sizes(schema)}`)
   await schema.dispose()
 }
@@ -68,16 +68,16 @@ async function hotKey(mode: KeyMode) {
 async function claimBacklog() {
   const schema = await createTestSchema()
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now() + interval '1 day', now(), now(), 25 from generate_series(1, 100000)`
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 10000)`
-  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
+  await schema.admin.query`analyze ${workerSchema.job}`
   const lat: number[] = []
   for (let i = 0; i < 200; i++) {
     const [ms, claims] = await time(() =>
-      claimPlain(schema.admin, schema.table, { worker: "w", tasks: ["t"], limit: 4 }),
+      claimPlain(schema.admin.query, { worker: "w", tasks: ["t"], limit: 4 }),
     )
     lat.push(ms)
     for (const c of claims) await complete(schema.db, c)
@@ -89,14 +89,14 @@ async function claimBacklog() {
 async function queueBacklog(queues: number) {
   const schema = await createTestSchema()
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', 'q' || (i % ${queues}::int), '{}', now() - interval '1 second', now(), now(), 25 from generate_series(1, 100000) i`
-  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
+  await schema.admin.query`analyze ${workerSchema.job}`
   const measure = async (label: string) => {
     const lat: number[] = []
     for (let i = 0; i < 100; i++) {
       const [ms, r] = await time(() =>
-        claimQueued(schema.admin, schema.table, { worker: "w", tasks: ["t"] }),
+        claimQueued(schema.admin.query, { worker: "w", tasks: ["t"] }),
       )
       lat.push(ms)
       if (r.kind === "job") await complete(schema.db, r.claim)
@@ -105,7 +105,7 @@ async function queueBacklog(queues: number) {
   }
   await measure("all queues free")
   // A long job keeps the first queue busy; its backlog stays ready.
-  const busy = await claimQueued(schema.admin, schema.table, { worker: "long", tasks: ["t"] })
+  const busy = await claimQueued(schema.admin.query, { worker: "long", tasks: ["t"] })
   await measure("first queue busy")
   const cycles: number[] = []
   const workers = Array.from({ length: 8 }, () => schema.createDb({ max: 1 }))
@@ -115,7 +115,11 @@ async function queueBacklog(queues: number) {
       workers.map(async (db, wi) => {
         for (let i = 0; i < 25; i++) {
           const [t, claims] = await time(() =>
-            claimCycle(db.$database, schema.table, { worker: `w${wi}`, tasks: ["t"], slots: 4 }),
+            claimCycle(schema.db.$queryOn(db.$database), {
+              worker: `w${wi}`,
+              tasks: ["t"],
+              slots: 4,
+            }),
           )
           cycles.push(t)
           for (const cl of claims) if (await complete(db, cl)) done++
@@ -135,7 +139,7 @@ async function idleCycle() {
   const lat: number[] = []
   for (let i = 0; i < 500; i++) {
     const [ms] = await time(() =>
-      claimCycle(schema.admin, schema.table, { worker: "w", tasks: ["t"], slots: 4 }),
+      claimCycle(schema.admin.query, { worker: "w", tasks: ["t"], slots: 4 }),
     )
     lat.push(ms)
   }
@@ -146,21 +150,21 @@ async function idleCycle() {
 async function reapAndFail() {
   const schema = await createTestSchema()
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, key, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', 'k' || i, '{}', now(), now(), now(), 25 from generate_series(1, 1000) i`
-  await claimPlain(schema.admin, schema.table, {
+  await claimPlain(schema.admin.query, {
     worker: "dead",
     tasks: ["t"],
     limit: 1000,
     defaultLease: 0.001,
   })
   await new Promise(r => setTimeout(r, 10))
-  const [ms, reaped] = await time(() => reap(schema.admin, schema.table, { limit: 1000 }))
+  const [ms, reaped] = await time(() => reap(schema.admin.query, { limit: 1000 }))
   console.log(
     `reap 1000 expired rows in one statement: ${ms.toFixed(1)} ms (${reaped.length} reaped)`,
   )
 
-  const claims = await claimPlain(schema.admin, schema.table, {
+  const claims = await claimPlain(schema.admin.query, {
     worker: "w",
     tasks: ["t"],
     limit: 1000,
@@ -169,7 +173,7 @@ async function reapAndFail() {
     await enqueue(schema.admin, schema.table, { task: "t", key: `k${i + 1}` })
   const lat: number[] = []
   for (const c of claims) {
-    const [t] = await time(() => fail(schema.db, schema.table, c, { error: "e", backoff: 10 }))
+    const [t] = await time(() => fail(schema.db, c, { error: "e", backoff: 10 }))
     lat.push(t)
   }
   console.log(
@@ -183,10 +187,10 @@ async function failureJobs() {
   const schema = await createTestSchema()
   const failureMaxAttempts = { t: 25 }
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', case when i % 2 = 0 then 'q' || ((i / 2) % 100) end, '{"id": 1}', now() - interval '1 second', now(), now(), 1
     from generate_series(1, 20000) i`
-  await schema.admin.query`analyze ${jobTableSql(schema.table)}`
+  await schema.admin.query`analyze ${workerSchema.job}`
   const plain = { without: [] as number[], with: [] as number[] }
   const queued = { without: [] as number[], with: [] as number[] }
   for (let i = 0; i < 400; i++) {
@@ -196,9 +200,9 @@ async function failureJobs() {
       tasks: ["t"],
       failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
     }
-    const [p, claims] = await time(() => claimPlain(schema.admin, schema.table, { ...o, limit: 4 }))
+    const [p, claims] = await time(() => claimPlain(schema.admin.query, { ...o, limit: 4 }))
     plain[variant].push(p)
-    const [q, r] = await time(() => claimQueued(schema.admin, schema.table, o))
+    const [q, r] = await time(() => claimQueued(schema.admin.query, o))
     queued[variant].push(q)
     for (const c of [...claims, ...(r.kind === "job" ? [r.claim] : [])])
       await complete(schema.db, c)
@@ -215,9 +219,9 @@ async function failureJobs() {
       tasks: ["t"],
       failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
     }
-    await claimPlain(schema.admin, schema.table, { ...o, limit: 1000, defaultLease: 0.001 })
+    await claimPlain(schema.admin.query, { ...o, limit: 1000, defaultLease: 0.001 })
     await new Promise(r => setTimeout(r, 10))
-    const [ms, reaped] = await time(() => reap(schema.admin, schema.table, { limit: 1000 }))
+    const [ms, reaped] = await time(() => reap(schema.admin.query, { limit: 1000 }))
     console.log(
       `reap 1000 expired rows on their last attempt ${variant} stamps: ${ms.toFixed(1)} ms (${reaped.length} failed)`,
     )
@@ -230,8 +234,8 @@ async function failureJobs() {
       tasks: ["t"],
       failureMaxAttempts: variant === "with" ? failureMaxAttempts : {},
     }
-    const [c] = await claimPlain(schema.admin, schema.table, { ...o, limit: 1 })
-    const [t] = await time(() => fail(schema.db, schema.table, c!, { error: "e", backoff: 10 }))
+    const [c] = await claimPlain(schema.admin.query, { ...o, limit: 1 })
+    const [t] = await time(() => fail(schema.db, c!, { error: "e", backoff: 10 }))
     fails[variant].push(t)
   }
   console.log(`terminal fail without stamps: ${fmt(fails.without)}; with: ${fmt(fails.with)}`)

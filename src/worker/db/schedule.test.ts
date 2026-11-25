@@ -55,7 +55,7 @@ test("catch-up includes the boundary and enqueues at most once, including in the
       await run(schedule, instant(previous))
     }
     await run(schedule, instant(now))
-    expect((await jobs(schema)).filter(job => job.task === id)).toHaveLength(expected)
+    expect((await jobs(schema.admin.query)).filter(job => job.task === id)).toHaveLength(expected)
   }
 })
 
@@ -80,7 +80,7 @@ test("catch-up resolves task options at enqueue time and applies schedule overri
   queue = "recovery"
   await run(schedule, instant("03:15:00"))
   expect(resolved).toEqual(["recovery"])
-  expect(only(await jobs(schema))).toMatchObject({
+  expect(only(await jobs(schema.admin.query))).toMatchObject({
     key: null,
     queue: "eu-recovery",
     maxAttempts: 1,
@@ -130,7 +130,9 @@ test("a check reads the cursor and the clock exactly on a pool whose DateStyle a
   for (const schedule of [covered, current]) {
     await evaluateSchedule(db, schema.table, toWorkerSchedule(schedule), { now })
   }
-  expect((await jobs(schema)).map(job => [job.task, job.runAt])).toEqual([["current", now]])
+  expect((await jobs(schema.admin.query)).map(job => [job.task, job.runAt])).toEqual([
+    ["current", now],
+  ])
   const cursors = await schema.admin.query`
     select id, (extract(epoch from evaluated_through) * 1000)::float8 as cursor from ${scheduleTableSql()} order by id`.select(
     { id: t.text, cursor: t.doublePrecision },
@@ -149,10 +151,10 @@ test("an option function that throws rolls the check back, so a later check in t
   })
   const schedule = defineSchedule(task, { cron: { minute: 0, hour: 3 } })
   await expect(run(schedule)).rejects.toThrow(failure)
-  expect(await jobs(schema)).toEqual([])
+  expect(await jobs(schema.admin.query)).toEqual([])
   failure = undefined
   await run(schedule, instant("03:00:55"))
-  expect(only(await jobs(schema)).task).toBe(task.name)
+  expect(only(await jobs(schema.admin.query)).task).toBe(task.name)
 })
 
 test("a rolled-back first registration leaves no cursor, so catch-up in the next minute recovers nothing", async () => {
@@ -168,7 +170,7 @@ test("a rolled-back first registration leaves no cursor, so catch-up in the next
   )
   failure = undefined
   await run(schedule, instant("03:01:10"))
-  expect(await jobs(schema)).toEqual([])
+  expect(await jobs(schema.admin.query)).toEqual([])
 })
 
 test("a scheduled enqueue that keeps a pending job consumes the occurrence", async () => {
@@ -185,9 +187,9 @@ test("a scheduled enqueue that keeps a pending job consumes the occurrence", asy
     now: due,
   })
   await run(schedule)
-  expect(only(await jobs(schema))).toMatchObject({ payload: "manual", keyMode: "keep" })
+  expect(only(await jobs(schema.admin.query))).toMatchObject({ payload: "manual", keyMode: "keep" })
   const claim = only(
-    await claimPlain(schema.driver, schema.table, {
+    await claimPlain(schema.db.$queryOn(schema.driver), {
       worker: "quick",
       tasks: [keyed.name],
       limit: 1,
@@ -196,7 +198,7 @@ test("a scheduled enqueue that keeps a pending job consumes the occurrence", asy
   )
   await complete(schema.db, claim)
   await run(schedule)
-  expect(await jobs(schema)).toEqual([])
+  expect(await jobs(schema.admin.query)).toEqual([])
 })
 
 test("three replicas with equivalent calendars enqueue once, including after a fast handler completes and a replica restarts", async () => {
@@ -207,9 +209,9 @@ test("three replicas with equivalent calendars enqueue once, including after a f
       evaluateSchedule(replica(), schema.table, toWorkerSchedule(s), { now: due }),
     ),
   )
-  expect(await jobs(schema)).toHaveLength(1)
+  expect(await jobs(schema.admin.query)).toHaveLength(1)
   const claim = only(
-    await claimPlain(schema.driver, schema.table, {
+    await claimPlain(schema.db.$queryOn(schema.driver), {
       worker: "quick",
       tasks: [task.name],
       limit: 1,
@@ -218,7 +220,7 @@ test("three replicas with equivalent calendars enqueue once, including after a f
   )
   await complete(schema.db, claim)
   await evaluateSchedule(replica(), schema.table, toWorkerSchedule(text), { now: due })
-  expect(await jobs(schema)).toEqual([])
+  expect(await jobs(schema.admin.query)).toEqual([])
 })
 
 test("a check whose registration waits for a concurrent one locks the committed row and sets the run_at of its job to the start time of its transaction", async () => {
@@ -239,7 +241,7 @@ test("a check whose registration waits for a concurrent one locks the committed 
   )
   await registrar.query`commit`
   await check
-  const job = only(await jobs(schema))
+  const job = only(await jobs(schema.admin.query))
   expect(job.runAt.getTime()).toBe(started)
   const cursor = await schema.admin.query`
     select (extract(epoch from evaluated_through) * 1000)::float8 from ${scheduleTableSql()}`.get(
@@ -255,12 +257,12 @@ test("a replica skips a locked schedule and a later evaluation can still enqueue
   try {
     await owner.query`select id from ${scheduleTableSql()} where id = ${nightly.id} for update`
     await run()
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   } finally {
     await owner.query`rollback`
   }
   await run()
-  expect(only(await jobs(schema)).task).toBe(task.name)
+  expect(only(await jobs(schema.admin.query)).task).toBe(task.name)
 })
 
 for (const mode of ["before", "after"] as const) {
@@ -274,9 +276,9 @@ for (const mode of ["before", "after"] as const) {
           now: due,
         }),
       ).rejects.toThrow()
-      expect(await jobs(schema)).toHaveLength(mode === "before" ? 0 : 1)
+      expect(await jobs(schema.admin.query)).toHaveLength(mode === "before" ? 0 : 1)
       await run()
-      expect(await jobs(schema)).toHaveLength(1)
+      expect(await jobs(schema.admin.query)).toHaveLength(1)
     } finally {
       await driver.close()
       await proxy.close()
@@ -291,18 +293,18 @@ test("a changed calendar uses its catch-up window only after the last evaluated 
     catchUp: { within: 86400 },
   })
   await run(changed, due)
-  expect(await jobs(schema)).toHaveLength(1)
+  expect(await jobs(schema.admin.query)).toHaveLength(1)
   await run(changed, instant("04:01:00"))
-  expect(await jobs(schema)).toHaveLength(2)
+  expect(await jobs(schema.admin.query)).toHaveLength(2)
   await run(changed, instant("04:02:00"))
-  expect(await jobs(schema)).toHaveLength(3)
+  expect(await jobs(schema.admin.query)).toHaveLength(3)
 })
 
 test("a changed definition applies to the minutes after the last check, including those before the change", async () => {
   await run(defineSchedule(task, { cron: { minute: 0, hour: 4 } }), instant("02:50:00"))
   const changed = defineSchedule(task, { cron: { minute: 0, hour: 3 }, catchUp: { within: 600 } })
   await run(changed, instant("03:05:00"))
-  expect(only(await jobs(schema)).runAt).toEqual(instant("03:05:00"))
+  expect(only(await jobs(schema.admin.query)).runAt).toEqual(instant("03:05:00"))
 })
 
 test("a paused schedule skips the minutes it checks and recovers downtime after resuming", async () => {
@@ -310,7 +312,7 @@ test("a paused schedule skips the minutes it checks and recovers downtime after 
   await run(defineSchedule(task, options), instant("00:01:00"))
   await run(defineSchedule(task, { ...options, enabled: false }), instant("01:00:00"))
   await run(defineSchedule(task, options), instant("01:01:00"))
-  expect(await jobs(schema)).toEqual([])
+  expect(await jobs(schema.admin.query)).toEqual([])
   await run(defineSchedule(task, options), instant("03:01:00"))
-  expect(await jobs(schema)).toHaveLength(1)
+  expect(await jobs(schema.admin.query)).toHaveLength(1)
 })

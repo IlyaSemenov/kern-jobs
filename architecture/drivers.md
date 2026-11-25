@@ -27,7 +27,7 @@ The schema has layers, each of which imports only the layers before it:
 
 - the building blocks of tables: `defineTable` of `worker/db/base.ts`, whose camelCase keys map to snake_case PostgreSQL columns with `toSnakeCase`, and the column types of `worker/db/types.ts`, those of kern-orm and its own, which modules import as `t` from it rather than from `kern-orm/types`;
 - `worker/db/tables/` defines one table per module;
-- `worker/db/db.ts` assembles the tables into the schema;
+- `worker/db/db.ts` assembles the tables and the claim sequence into the schema;
 - the other modules use the schema and the tables.
 
 The job table declares every column, and its types read `bigint` columns as their text, so that IDs keep their precision; timestamps as seconds since the epoch, decoded to a `Date` of those seconds as a JavaScript number times 1000, rounded to an integer, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`; and SQL NULL of the payload as `undefined`, apart from JSON `null`, which a handler gets as `null`.
@@ -35,12 +35,12 @@ Simple worker statements use typed table queries on the database of the worker, 
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, the return to pending, and an enqueue, use hand-written SQL, which in fail, requeue, and the check of a schedule runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
 
-Hand-written statements that only the worker runs are templates of `queryOn` of kern-db on the executor of the operation, such as the pool, the session of the heartbeat, or the database of a transaction, and decode the result columns that `select` names by their types.
+Hand-written statements that only the worker runs are templates of `$queryOn` of the worker `Db` on the executor of the operation, such as the pool or the session of the heartbeat, or of `$query` in a transaction of the `Db`, and decode the result columns that `select` names by their types.
 A statement that also runs on the executor of an application, such as an enqueue, is SQL text that runs through `queryValues` of `sql/statement.ts`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
 - A worker template interpolates its values as parameters, and gives `param` with its type to a value whose place in the statement does not tell its type, such as JSON, an array, or an operand of `IS NULL`; it interpolates the time of the statement as `nowSql` of `worker/db/sql.ts`, once per statement, which binds one parameter wherever the statement reads it.
 - SQL text casts each parameter from text, as `$n::text::int`, since statements that run on connections of the application, such as an enqueue, meet clients that serialize a parameter by the type that PostgreSQL describes: postgres.js turns the string `"true"` of a `boolean` parameter into false and encodes a JSON string for `jsonb` again.
-- Hand-written SQL names the job table and its claim sequence by `JobTable` of `sql/job-table.ts`, qualified by their PostgreSQL schema ([Data model](data-model.md)); a worker template names the table by `jobTableSql` of `worker/db/sql.ts`.
+- Hand-written SQL names the job table and its claim sequence qualified by their PostgreSQL schema ([Data model](data-model.md)): SQL text by `JobTable` of `sql/job-table.ts`, and a worker template by `workerSchema` of `worker/db/db.ts`, such as `${workerSchema.job}` and `${workerSchema.claimSeq.nextval()}`, which the `Db` of the template names in its PostgreSQL schema.
 - A hand-written statement returns the columns of job rows through `columnsOf` of the job table with the alias of the table in the statement and the keys of the columns that its callers read, such as `claimedJobColumns` of a claim: the template interpolates them, and `select` takes them as a field, which decodes their record.
 - Each statement that kern-jobs writes starts with its label in a comment, `/* kern-jobs:<area>:<statement> */`: SQL text through `labelSql`, and a worker template and a typed query through `comment` with `toStatementLabel`, both of `sql/statement.ts`, whose `StatementOperation` lists the names, none of which is a prefix of another.
   Statements of kern-db and kern-migrations, such as `BEGIN`, the settings of a transaction, advisory locks, and migrations, carry none.

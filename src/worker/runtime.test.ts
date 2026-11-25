@@ -154,7 +154,7 @@ describe("drivers", () => {
         [completed, retried].map(j => log.waitFor("settled", e => e.claim.id === j.id)),
       )
       expect(outcomes.map(e => e.outcome)).toEqual(["completed", "retry"])
-      const rows = await jobs(schema)
+      const rows = await jobs(schema.admin.query)
       expect(rows.map(row => [row.id, row.state, row.attempts, row.lastError])).toEqual([
         [retried.id, "pending", 1, "boom"],
       ])
@@ -221,7 +221,7 @@ describe("schema check", () => {
     // A job of a dead worker whose lease expired: the reaper returns it, and the worker then claims it.
     const hourAgo = new Date(Date.now() - 3600_000)
     const job = await enqueue(schema.admin, schema.table, { task: "t", now: hourAgo })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "dead",
       tasks: ["t"],
       defaultLease: 10,
@@ -260,7 +260,7 @@ describe("schema check", () => {
     // A job of a dead worker whose lease expired, which a reaper would return, and a pending job to claim.
     const hourAgo = new Date(Date.now() - 3600_000)
     await enqueue(schema.admin, schema.table, { task: "t", now: hourAgo })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "dead",
       tasks: ["t"],
       defaultLease: 10,
@@ -299,7 +299,7 @@ describe("schema check", () => {
     checked.resolve()
     await stop
     expect([statements, log.all("reap"), log.all("start")]).toEqual([0, [], []])
-    expect((await jobs(schema)).map(job => job.state)).toEqual(["active", "pending"])
+    expect((await jobs(schema.admin.query)).map(job => job.state)).toEqual(["active", "pending"])
     // The pool of one connection gives it once the heartbeat has released it.
     expect(await queryOn(heartbeatSource)`select 1`.get(t.integer)).toBe(1)
   })
@@ -463,9 +463,9 @@ describe("slots", () => {
     expect(log.all("heartbeat").length).toBeGreaterThan(beats + 10)
     expect(log.all("abort")).toEqual([])
     expect(new Set(log.all("start").map(e => e.claim.id))).toEqual(new Set([a.id, c.id]))
-    expect(only(await jobs(schema, sql`id = ${c.id}`)).leaseUntil!.getTime()).toBeGreaterThan(
-      Date.now(),
-    )
+    expect(
+      only(await jobs(schema.admin.query, sql`id = ${c.id}`)).leaseUntil!.getTime(),
+    ).toBeGreaterThan(Date.now())
     await producer.query`commit`
     expect((await log.waitFor("settled", e => e.claim.id === a.id)).outcome).toBe("superseded")
     const startD = await log.waitFor("start", e => e.claim.id === d.id)
@@ -473,7 +473,7 @@ describe("slots", () => {
     gates.open(startD.claim.claimId)
     for (const id of [c.id, d.id])
       expect((await log.waitFor("settled", e => e.claim.id === id)).outcome).toBe("completed")
-    expect(only(await jobs(schema)).state).toBe("pending")
+    expect(only(await jobs(schema.admin.query)).state).toBe("pending")
   }, 20_000)
 
   test("a zombie of a reclaimed job keeps its slot, and the worker does not settle its lost claim", async () => {
@@ -496,7 +496,7 @@ describe("slots", () => {
     expect((await log.waitFor("settled", e => e.claim === second.claim)).outcome).toBe("completed")
     gates.open(startOther.claim.claimId)
     await log.waitFor("settled", e => e.claim.id === other.id)
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   }, 20_000)
 })
 
@@ -626,7 +626,9 @@ describe("heartbeat", () => {
     expect((await log.waitFor("settled", e => e.claim === first.claim)).outcome).toBe("lost")
     // The worker claims the returned job again; no fail recorded the abort.
     const second = await log.waitFor("start", e => e.claim.job.attempts === 2)
-    expect(only(await jobs(schema, sql`id = ${second.claim.id}`)).lastError).toBe("lease expired")
+    expect(only(await jobs(schema.admin.query, sql`id = ${second.claim.id}`)).lastError).toBe(
+      "lease expired",
+    )
   })
 
   test("a claim that returns after the deadline of its lease does not start its handler, and its job retries with the attempt spent", async () => {
@@ -650,7 +652,7 @@ describe("heartbeat", () => {
       [],
       [job.id],
     ])
-    const row = only(await jobs(schema))
+    const row = only(await jobs(schema.admin.query))
     expect([row.state, row.attempts, row.lastError]).toEqual([
       "pending",
       1,
@@ -672,7 +674,7 @@ describe("heartbeat", () => {
     await sleep((lease - testTimings.abortMargin) * 1000 + 100)
     await release()
     expect((await log.waitFor("settled")).outcome).toBe("failed")
-    const failed = only(await jobs(schema, sql`task = 't:failure'`))
+    const failed = only(await jobs(schema.admin.query, sql`task = 't:failure'`))
     expect(failed.payload).toMatchObject({
       reason: "late-claim",
       error: { message: "lease confirmation deadline passed before the handler started" },
@@ -706,7 +708,7 @@ describe("heartbeat", () => {
     await log.waitFor("start", e => e.claim.id === other.id)
     expect(claimed).toBe(0)
     expect(abortedAfter).toBeLessThan(lease * 1000)
-    const row = only(await jobs(schema, sql`id = ${job.id}`))
+    const row = only(await jobs(schema.admin.query, sql`id = ${job.id}`))
     expect([row.state, row.lastError]).toEqual(["pending", "handler aborted: deadline"])
   })
 
@@ -734,7 +736,7 @@ describe("heartbeat", () => {
 describe("worker id", () => {
   test("a worker returns the jobs that an ended worker of its id claimed without waiting for their leases, and runs them with the attempt spent", async () => {
     const job = await enqueue(schema.admin, schema.table, { task: "t" })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "same",
       tasks: ["t"],
       limit: 1,
@@ -751,7 +753,7 @@ describe("worker id", () => {
       { id: job.id, state: "pending", detached: false },
     ])
     const start = await log.waitFor("start")
-    expect([start.claim.job.attempts, only(await jobs(schema)).lastError]).toEqual([
+    expect([start.claim.job.attempts, only(await jobs(schema.admin.query)).lastError]).toEqual([
       2,
       "worker restarted",
     ])
@@ -785,7 +787,7 @@ describe("worker id", () => {
       `Worker id same is in use in schema ${schema.name}; this worker takes no jobs until the id is free`,
     )
     expect(starting.state).toBe("starting")
-    expect((await jobs(schema)).map(r => [r.id, r.state])).toEqual([
+    expect((await jobs(schema.admin.query)).map(r => [r.id, r.state])).toEqual([
       [first.id, "active"],
       [second.id, "pending"],
     ])
@@ -799,7 +801,7 @@ describe("worker id", () => {
 
   test("a worker stopped while it returns the jobs of its id holds the lock until its statement ends, claims no jobs, and reports no claim error", async () => {
     const job = await enqueue(schema.admin, schema.table, { task: "t" })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "same",
       tasks: ["t"],
       limit: 1,
@@ -844,7 +846,7 @@ describe("worker id", () => {
     "a worker stopped while a batch of the return waits for a producer sends no further statement of the return, with force %p",
     async force => {
       await enqueue(schema.admin, schema.table, { task: "t", key: "k" })
-      await claimPlain(schema.admin, schema.table, {
+      await claimPlain(schema.admin.query, {
         worker: "same",
         tasks: ["t"],
         limit: 1,
@@ -875,7 +877,7 @@ describe("worker id", () => {
 
   test("a worker whose heartbeat fails during the return claims nothing until a heartbeat succeeds", async () => {
     const job = await enqueue(schema.admin, schema.table, { task: "t" })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "same",
       tasks: ["t"],
       limit: 1,
@@ -920,7 +922,7 @@ describe("worker id", () => {
       const ids: string[] = []
       for (let i = 0; i <= 100; i++)
         ids.push((await enqueue(schema.admin, schema.table, { task: "t", key: `k${i}` })).id)
-      await claimPlain(schema.admin, schema.table, {
+      await claimPlain(schema.admin.query, {
         worker: "same",
         tasks: ["t"],
         limit: ids.length,
@@ -932,7 +934,9 @@ describe("worker id", () => {
       const log = recordEvents()
       startTestWorker(schema, { id: "same", tasks: {}, onEvent: log.onEvent })
       await log.waitFor("recover", e => e.jobs.some(j => j.id === ids.at(-1)), 15_000)
-      const active = (await jobs(schema)).filter(r => r.state === "active").map(r => r.id)
+      const active = (await jobs(schema.admin.query))
+        .filter(r => r.state === "active")
+        .map(r => r.id)
       await producer.query`rollback`
       expect(active).toEqual(ids.slice(0, 1))
     },
@@ -980,7 +984,7 @@ describe("failures", () => {
     )
     // The attempt of a RetryError counts, so the last one fails for good.
     expect(outcomes.map(e => e.outcome)).toEqual(["retry", "retry", "failed", "failed"])
-    const [r, d, l, t] = await jobs(schema)
+    const [r, d, l, t] = await jobs(schema.admin.query)
     expect([r, d, l, t].map(row => [row!.state, row!.lastError])).toEqual([
       ["pending", "boom"],
       ["pending", "rate limited"],
@@ -1017,7 +1021,7 @@ describe("failures", () => {
       [terminal, delayed].map(j => log.waitFor("settled", e => e.claim.id === j.id)),
     )
     expect(outcomes.map(e => e.outcome)).toEqual(["failed", "retry"])
-    const [t, d] = await jobs(schema)
+    const [t, d] = await jobs(schema.admin.query)
     expect([t!.lastError, d!.lastError]).toEqual(["bad\\u0000payload", "rate\\u0000limited"])
     expect(d!.notBefore!.getTime() - Date.now()).toBeGreaterThan(190_000)
   })
@@ -1049,7 +1053,7 @@ describe("failures", () => {
     for (const { id } of ids) {
       expect((await log.waitFor("settled", e => e.claim.id === id)).outcome).toBe("retry")
       expect(log.all("backoff-error", e => e.claim.id === id)).toHaveLength(1)
-      const row = only(await jobs(schema, sql`id = ${id}`))
+      const row = only(await jobs(schema.admin.query, sql`id = ${id}`))
       // The default backoff of the first attempt is 2 seconds.
       expect(row.notBefore!.getTime() - Date.now()).toBeGreaterThan(1000)
     }
@@ -1070,7 +1074,7 @@ describe("failures", () => {
     })
     expect((await log.waitFor("settled")).outcome).toBe("failed")
     expect(log.all("end").map(e => e.outcome)).toEqual(["terminal"])
-    const row = only(await jobs(schema, sql`id = ${job.id}`))
+    const row = only(await jobs(schema.admin.query, sql`id = ${job.id}`))
     expect([row.state, row.lastError]).toEqual(["failed", "undefined"])
   })
 
@@ -1114,7 +1118,9 @@ describe("failures", () => {
     })
     for (const job of [plain, hostile, proxy]) {
       expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
-      expect(only(await jobs(schema, sql`id = ${job.id}`)).lastError).toBe("unprintable error")
+      expect(only(await jobs(schema.admin.query, sql`id = ${job.id}`)).lastError).toBe(
+        "unprintable error",
+      )
     }
     // Telling the error classes of the proxy fails, so its job retries with the default backoff.
     expect(log.all("backoff-error").map(e => e.claim.id)).toEqual([proxy.id])
@@ -1133,7 +1139,7 @@ describe("stop", () => {
     gates.open(start.claim.claimId)
     await stopped
     expect([log.all("abort"), log.all("settled").map(e => e.outcome)]).toEqual([[], ["completed"]])
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   })
 
   test("after abortAfter, a handler that throws, also an error that wraps the abort, returns its job at once with the attempt given back, also on its last attempt", async () => {
@@ -1171,7 +1177,7 @@ describe("stop", () => {
     ])
     expect(log.all("end")[0]!.outcome).toBe("requeue")
     expect(log.all("settled")[0]!.outcome).toBe("requeued")
-    const row = only(await jobs(schema, sql`id = ${job.id}`))
+    const row = only(await jobs(schema.admin.query, sql`id = ${job.id}`))
     expect([row.state, row.attempts, row.lastError, row.claimId]).toEqual([
       "pending",
       0,
@@ -1219,7 +1225,7 @@ describe("stop", () => {
     expect(outcomes).toEqual({ terminal: "failed", retry: "retry", returns: "completed" })
     const decided = Object.fromEntries(log.all("end").map(e => [e.claim.job.task, e.outcome]))
     expect(decided).toEqual({ terminal: "terminal", retry: "retry", returns: "complete" })
-    const rows = await jobs(schema)
+    const rows = await jobs(schema.admin.query)
     expect(rows.map(r => [r.id, r.state, r.attempts, r.lastError])).toEqual([
       [ids.terminal, "failed", 1, "gone"],
       [ids.retry, "pending", 1, "later"],
@@ -1251,7 +1257,7 @@ describe("stop", () => {
     expect(log.all("end").map(e => [e.aborted, e.outcome])).toEqual([["stop", "terminal"]])
     expect(log.all("backoff-error").map(e => e.error)).toEqual([trap])
     expect(log.all("settled").map(e => e.outcome)).toEqual(["failed"])
-    const row = only(await jobs(schema, sql`id = ${job.id}`))
+    const row = only(await jobs(schema.admin.query, sql`id = ${job.id}`))
     expect([row.state, row.attempts, row.lastError]).toEqual(["failed", 1, "later"])
   })
 
@@ -1264,7 +1270,7 @@ describe("stop", () => {
     const next = await enqueue(schema.admin, schema.table, { task: "t", key: "k", runAt: far() })
     await worker.stop({ abortAfter: 0 })
     expect(log.all("settled").map(e => [e.claim.id, e.outcome])).toEqual([[job.id, "superseded"]])
-    expect((await jobs(schema)).map(r => [r.id, r.state, r.attempts])).toEqual([
+    expect((await jobs(schema.admin.query)).map(r => [r.id, r.state, r.attempts])).toEqual([
       [next.id, "pending", 0],
     ])
   })
@@ -1289,7 +1295,7 @@ describe("stop", () => {
       [],
       ["requeued"],
     ])
-    const row = only(await jobs(schema, sql`id = ${job.id}`))
+    const row = only(await jobs(schema.admin.query, sql`id = ${job.id}`))
     expect([row.state, row.attempts]).toEqual(["pending", 0])
   })
 
@@ -1313,7 +1319,7 @@ describe("stop", () => {
       [],
       ["requeued"],
     ])
-    expect(only(await jobs(schema)).attempts).toBe(0)
+    expect(only(await jobs(schema.admin.query)).attempts).toBe(0)
   })
 
   test("at its timeout, stop rejects and leaves a handler that ignores the abort: nothing extends its lease or settles its claim, also after its job runs again", async () => {
@@ -1332,10 +1338,10 @@ describe("stop", () => {
     // A heartbeat in flight at the timeout may still extend the lease once.
     await sleep(3 * interval * 1000)
     const beats = log.all("heartbeat").length
-    const leaseUntil = only(await jobs(schema)).leaseUntil
+    const leaseUntil = only(await jobs(schema.admin.query)).leaseUntil
     await sleep(3 * interval * 1000)
     expect(log.all("heartbeat").length).toBe(beats)
-    expect(only(await jobs(schema)).leaseUntil).toEqual(leaseUntil)
+    expect(only(await jobs(schema.admin.query)).leaseUntil).toEqual(leaseUntil)
     // Another worker runs the job again, and the orphan then ends.
     await reapNow(schema, job.id)
     const other = recordEvents()
@@ -1344,7 +1350,7 @@ describe("stop", () => {
     const again = await other.waitFor("start")
     gates.open(orphan.claim.claimId)
     expect((await log.waitFor("settled")).outcome).toBe("stopped")
-    const row = only(await jobs(schema))
+    const row = only(await jobs(schema.admin.query))
     expect([row.state, row.claimId, row.attempts]).toEqual(["active", again.claim.claimId, 2])
     gatesOther.open(again.claim.claimId)
     expect((await other.waitFor("settled")).outcome).toBe("completed")
@@ -1359,7 +1365,7 @@ describe("stop", () => {
     const error = await worker.stop({ abortAfter: 60, timeout: 0.2 }).catch((e: unknown) => e)
     expect((error as Error).message).toStartWith("The worker did not stop within 0.2 s")
     expect((await log.waitFor("settled")).outcome).toBe("stopped")
-    const row = only(await jobs(schema))
+    const row = only(await jobs(schema.admin.query))
     expect([row.state, row.attempts]).toEqual(["active", 1])
   })
 
@@ -1376,10 +1382,10 @@ describe("stop", () => {
     expect((error as Error).message).toStartWith("The worker stop was forced")
     expect(log.all("abort").map(e => e.reason)).toEqual(["stop"])
     expect((await log.waitFor("settled")).outcome).toBe("stopped")
-    const row = only(await jobs(schema))
+    const row = only(await jobs(schema.admin.query))
     expect([row.state, row.attempts]).toEqual(["active", 1])
     await reapNow(schema, job.id)
-    expect(only(await jobs(schema)).state).toBe("failed")
+    expect(only(await jobs(schema.admin.query)).state).toBe("failed")
   })
 
   test("a thrown value whose inspection forces the stop does not abort the signal of its handler, which has ended, and its error is reported as a failure", async () => {
@@ -1479,7 +1485,7 @@ describe("stop", () => {
     const sent = statements
     await expect(worker.stop({ timeout: 0.2 })).rejects.toThrow("did not stop within 0.2 s")
     await release()
-    while (only(await jobs(schema)).state !== "active") await sleep(10)
+    while (only(await jobs(schema.admin.query)).state !== "active") await sleep(10)
     await sleep(200)
     expect([statements - sent, log.all("settled"), log.all("start")]).toEqual([0, [], []])
   })
@@ -1531,7 +1537,7 @@ describe("stop", () => {
       gate.resolve()
       await released.promise
       expect(resolvedOptions).toBe(0)
-      expect(await jobs(schema)).toEqual([])
+      expect(await jobs(schema.admin.query)).toEqual([])
       expect(
         await schema.admin.query`select id from ${identifier(schema.name, "schedule")}`.pluck(
           t.text,

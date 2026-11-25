@@ -4,13 +4,12 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { type Driver, queryOn } from "kern-orm/db"
+import type { Driver } from "kern-orm/db"
 
-import type { JobTable } from "../../sql/job-table"
 import { createTestSchema, sleep, type TestSchema } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
+import { type WorkerDb, workerSchema } from "../db/db"
 import { reap } from "../db/lease"
-import { jobTableSql } from "../db/sql"
 import * as t from "../db/types"
 
 import type { WorkerConfig } from "./worker"
@@ -46,10 +45,10 @@ interface Event {
 }
 
 /** Counts the jobs left, retrying while the server is unavailable; the pool reconnects after the restart. */
-async function countJobs(driver: Driver, table: JobTable): Promise<number> {
+async function countJobs(db: WorkerDb, driver: Driver): Promise<number> {
   for (;;) {
     try {
-      return await queryOn(driver)`select count(*)::int from ${jobTableSql(table)}`.get(t.integer)
+      return await db.$queryOn(driver)`select count(*)::int from ${workerSchema.job}`.get(t.integer)
     } catch {
       await sleep(100)
     }
@@ -111,11 +110,11 @@ describe("reaper after a restart", () => {
       // Jobs of a dead worker whose leases expire after the restart.
       await retrying(
         () =>
-          queryOn(schema.driver)`
-            insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+          schema.db.$queryOn(schema.driver)`
+            insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
             select 't', '{}', now(), now(), now(), 25 from generate_series(1, 5)`,
       )
-      const claims = await claimPlain(schema.driver, schema.table, {
+      const claims = await claimPlain(schema.db.$queryOn(schema.driver), {
         worker: "dead",
         tasks: ["t"],
         limit: 5,
@@ -125,10 +124,8 @@ describe("reaper after a restart", () => {
       const until = Date.now() + 10_000
       let pending = 0
       while (Date.now() < until) {
-        pending = await queryOn(schema.driver)`
-          select count(*)::int from ${jobTableSql(schema.table)} where state = 'pending'`.get(
-          t.integer,
-        )
+        pending = await schema.db.$queryOn(schema.driver)`
+          select count(*)::int from ${workerSchema.job} where state = 'pending'`.get(t.integer)
         if (pending === 5) break
         await sleep(100)
       }
@@ -151,12 +148,12 @@ describe("PostgreSQL restart under load", () => {
     test(`pg_ctl restart -m ${mode}: every job completes, workers recover`, async () => {
       const schema: TestSchema = await createTestSchema(URL)
       await schema.admin.query`
-        insert into ${jobTableSql(schema.table)} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
+        insert into ${workerSchema.job} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
                to_jsonb(i), now(), now(), now(), 25
         from generate_series(1, 300) i`
       const ids = new Set(
-        await schema.admin.query`select id from ${jobTableSql(schema.table)}`.pluck(t.bigintText),
+        await schema.admin.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
       )
       const observer = schema.createDriver({ max: 2 })
 
@@ -188,7 +185,7 @@ describe("PostgreSQL restart under load", () => {
       const reaper = (async () => {
         while (reaping) {
           try {
-            await reap(observer, schema.table)
+            await reap(schema.db.$queryOn(observer))
           } catch {}
           await sleep(200)
         }
@@ -200,9 +197,8 @@ describe("PostgreSQL restart under load", () => {
       const downMs = Date.now() - restartedAt
 
       const deadline = Date.now() + 60_000
-      while ((await countJobs(observer, schema.table)) > 0 && Date.now() < deadline)
-        await sleep(200)
-      const left = await countJobs(observer, schema.table)
+      while ((await countJobs(schema.db, observer)) > 0 && Date.now() < deadline) await sleep(200)
+      const left = await countJobs(schema.db, observer)
       reaping = false
       await reaper
       const alive = procs.every(p => p.exitCode == null)

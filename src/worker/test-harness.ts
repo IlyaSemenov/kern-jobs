@@ -3,8 +3,8 @@ import { type Connection, type Driver, queryOn, type StatementExecutor } from "k
 
 import type { TestSchema } from "../test-harness/database"
 
+import { workerSchema } from "./db/db"
 import { reap } from "./db/lease"
-import { jobTableSql } from "./db/sql"
 import type { WorkerEvent } from "./events"
 import { type RuntimeOptions, startRuntime, type Worker } from "./runtime"
 
@@ -127,8 +127,8 @@ export async function reapNow(schema: TestSchema, id: string): Promise<void> {
   const conn = await schema.connect()
   await conn.query`begin`
   await conn.query`
-    update ${jobTableSql(schema.table)} set lease_until = now() - interval '1 second' where id = ${id}`
-  await reap(conn, schema.table)
+    update ${workerSchema.job} set lease_until = now() - interval '1 second' where id = ${id}`
+  await reap(conn.query)
   await conn.query`commit`
   await conn.close()
 }

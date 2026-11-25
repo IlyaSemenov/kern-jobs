@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { identifier, joinSql, param, sql, type SqlFragment } from "kern-orm/db"
 
 import { createTestSchema, type TestSchema } from "../test-harness/database"
-import { jobTableSql } from "../worker/db/sql"
+import { workerSchema } from "../worker/db/db"
 import * as t from "../worker/db/types"
 
 let schema: TestSchema
@@ -82,13 +82,13 @@ test("summarizes the jobs of each task in each scope by the time of the statemen
     pending("tenant", "a", 0, 3600),
   ]
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)}
+    insert into ${workerSchema.job}
       (scope, task, state, attempts, max_attempts, run_at, not_before, window_started_at, created_at, claim_id, locked_at, lease_until, failed_at)
     values ${joinSql(values)}`
   // The select runs in a transaction that began earlier, whose start is not the time of the statement, and the job of task "turning" becomes due between them.
   await schema.admin.query`begin`
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (scope, task, state, attempts, max_attempts, run_at, not_before, window_started_at, created_at, claim_id, locked_at, lease_until, failed_at)
+    insert into ${workerSchema.job} (scope, task, state, attempts, max_attempts, run_at, not_before, window_started_at, created_at, claim_id, locked_at, lease_until, failed_at)
     values ('', 'turning', 'pending', 1, 10,
       transaction_timestamp() + interval '50 milliseconds', transaction_timestamp() + interval '50 milliseconds',
       transaction_timestamp(), transaction_timestamp(), null, null, null, null)`

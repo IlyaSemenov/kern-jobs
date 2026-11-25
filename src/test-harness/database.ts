@@ -1,7 +1,7 @@
 // Test helpers of the SQL core: an isolated PostgreSQL schema per test, which the migrations of kern-jobs create, independent connections over postgres.js, breakpoints inside statements, and virtual time.
 // Test connections do not add the test schema to `search_path`, so statements must qualify their names.
 import { migrate } from "kern-migrations"
-import { columnsOf, type Selectable } from "kern-orm"
+import { columnsOf, type DbSqlQueryTemplate, type Selectable } from "kern-orm"
 import {
   type Connection,
   createDatabase,
@@ -13,7 +13,6 @@ import {
   queryOn,
   sql,
   type SqlFragment,
-  type SqlQueryTemplate,
   type SqlStatement,
   type StatementExecutor,
 } from "kern-orm/db"
@@ -24,8 +23,7 @@ import postgres from "postgres"
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier } from "../sql/postgres"
-import { bindWorkerDb, type WorkerDb } from "../worker/db/db"
-import { jobTableSql } from "../worker/db/sql"
+import { bindWorkerDb, type WorkerDb, workerSchema } from "../worker/db/db"
 import { job } from "../worker/db/tables/job"
 
 /** Returns the URL of the test database. */
@@ -122,22 +120,22 @@ export function withHooks(driver: Driver, schemaName: string, hooks: string[]): 
 /** Connection of a test, held until `close`, with the pid of its backend. */
 export interface Conn extends Pick<Connection, "execute" | "executeScript"> {
   pid: number
-  /** Template of a statement on the connection, such as ``conn.query`begin` ``. */
-  query: SqlQueryTemplate
+  /** Template of a statement on the connection, which names the tables of the worker ORM schema in the test schema, such as ``conn.query`select count(*) from ${workerSchema.job}` ``. */
+  query: DbSqlQueryTemplate
   close(): Promise<void>
 }
 
-/** Opens a connection of a test schema on a client of its own. */
+/** Opens a connection of the test schema of `db` on a client of its own. */
 export async function connectTo(
   url: string,
-  schemaName: string,
+  db: WorkerDb,
   options: TestDriverOptions = {},
 ): Promise<Conn> {
-  const driver = createTestDriver(url, schemaName, { ...options, max: 1 })
+  const driver = createTestDriver(url, db.$schemaName!, { ...options, max: 1 })
   const connection = await driver.acquire()
   return {
     pid: await getBackendPid(connection),
-    query: queryOn(connection),
+    query: db.$queryOn(connection),
     execute: statement => connection.execute(statement),
     executeScript: text => connection.executeScript(text),
     async close() {
@@ -178,12 +176,6 @@ export interface TestSchema {
 export async function createTestSchema(url = databaseUrl()): Promise<TestSchema> {
   const schemaName = `t_${Math.random().toString(36).slice(2, 10)}`
   const schemaNames = [schemaName]
-  const conns: Conn[] = []
-  const connect = async (options: TestDriverOptions = {}) => {
-    const c = await connectTo(url, schemaName, options)
-    conns.push(c)
-    return c
-  }
   const drivers = [createTestDriver(url, schemaName)]
   function createDriver(options?: TestDriverOptions): Driver {
     const driver = createTestDriver(url, schemaName, options)
@@ -191,6 +183,13 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
     return driver
   }
   const database = createDatabase({ driver: drivers[0]! })
+  const db = bindWorkerDb(database, schemaName)
+  const conns: Conn[] = []
+  const connect = async (options: TestDriverOptions = {}) => {
+    const c = await connectTo(url, db, options)
+    conns.push(c)
+    return c
+  }
   await migrate(database, jobMigrations, { schemaName })
   const admin = await connect()
   await admin.executeScript(createHookSql(schemaName))
@@ -199,7 +198,7 @@ export async function createTestSchema(url = databaseUrl()): Promise<TestSchema>
     table: createJobTable(schemaName),
     driver: drivers[0]!,
     database,
-    db: bindWorkerDb(database, schemaName),
+    db,
     createDriver,
     createDb(source) {
       const driver = isDriver(source) ? source : createDriver(source)
@@ -292,14 +291,14 @@ export const unsafeInteger = 2n ** 53n + 1n
 /** Row of the job table with all its columns. */
 export type JobRow = Selectable<typeof job>
 
-/** Returns the job rows of a test schema that match the condition `where` of the alias `j`, in the order of their ids. */
+/** Returns the job rows that match the condition `where` of the alias `j`, in the order of their ids, by a statement of `query`, a template of a `Db` of the worker ORM schema, such as `schema.admin.query`. */
 export async function jobs(
-  schema: Pick<TestSchema, "admin" | "table">,
+  query: DbSqlQueryTemplate,
   where: SqlFragment = sql`true`,
 ): Promise<JobRow[]> {
   const columns = columnsOf(job, "*", { alias: "j" })
-  const rows = await schema.admin.query`
-    select ${columns} from ${jobTableSql(schema.table)} j where ${where} order by j.id`.select({
+  const rows = await query`
+    select ${columns} from ${workerSchema.job} j where ${where} order by j.id`.select({
     job: columns,
   })
   return rows.map(row => row.job)

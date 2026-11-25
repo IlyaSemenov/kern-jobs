@@ -6,7 +6,7 @@
       "name": "kern-jobs",
       "dependencies": {
         "kern-migrations": "^0.8.7",
-        "kern-orm": "^0.30.0",
+        "kern-orm": "^0.32.0",
       },
       "devDependencies": {
         "@arethetypeswrong/core": "^0.18.5",
@@ -695,7 +695,7 @@
 
     "kern-migrations": ["kern-migrations@0.8.7", "", { "peerDependencies": { "kern-db": "^0.16.0" } }, "sha512-U4a39glnzDiHhci2Aa5ly4YaPmSYqpHgiP7t6WzvlxIM0AZX9ghuaz5dBokTbTyOLHDg9ffHvgCPyUvoRP64ng=="],
 
-    "kern-orm": ["kern-orm@0.30.0", "", { "dependencies": { "kern-db": "^0.16.0" } }, "sha512-csyZahidtmVxITSfu+iBWEfHBXJsLfmBUo4SNHzFtJ4yV0jDRS55myEh+jsM6N1vmqQS45bWETqA/yf0R/iCEQ=="],
+    "kern-orm": ["kern-orm@0.32.0", "", { "dependencies": { "kern-db": "^0.16.0" } }, "sha512-JymP+sZPFNu0IgsOLedIDWST5XFAY1Lwi6psgxRJ7yLuBLhwJmFAh1QehbTAno8UciTtJQG8g3sufZjsLuoEUw=="],
 
     "keyv": ["keyv@5.6.0", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw=="],
 

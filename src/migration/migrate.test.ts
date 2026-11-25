@@ -9,6 +9,7 @@ import type { Driver } from "kern-orm/db"
 import { enqueue } from "../sql/enqueue"
 import type { JobTable } from "../sql/job-table"
 import { createTestSchema, jobs, type TestSchema } from "../test-harness/database"
+import { bindWorkerDb } from "../worker/db/db"
 
 import { checkJobSchema, migrateJobs, type MigrateJobsOptions } from "./migrate"
 import { jobMigrations, MIGRATION_TABLE } from "./migrations"
@@ -36,7 +37,9 @@ describe("migrateJobs", () => {
   test("creates the schema with the job table over a driver", async () => {
     await migrateJobs(schema.driver, { schemaName: table.schemaName })
     const { id } = await enqueue(schema.admin, table, { task: "t" })
-    expect((await jobs({ admin: schema.admin, table })).map(job => job.id)).toEqual([id])
+    expect(
+      (await jobs(bindWorkerDb(schema.database, table.schemaName).$query)).map(job => job.id),
+    ).toEqual([id])
     expect(await appliedKeys(table.schemaName)).toEqual([
       "0001_create_job",
       "0002_schedule",

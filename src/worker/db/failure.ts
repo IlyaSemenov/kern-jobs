@@ -1,17 +1,17 @@
 // SQL for inserting a failure job, with the `JobFailure` of a terminal failure as its payload and the attempt budget of the failure job that the claim of the source job recorded.
-import { param, sql, type SqlFragment } from "kern-orm/db"
+import { sql, type UntypedExpression } from "kern-orm"
+import { param, type SqlFragment } from "kern-orm/db"
 
-import type { JobTable } from "../../sql/job-table"
 import { FAILURE_TASK_SUFFIX, type FailureReason } from "../../task/failure"
 
-import { jobTableSql } from "./sql"
+import { workerSchema } from "./db"
 import * as t from "./types"
 
 /**
  * SQL of the `JobFailure` of the failed row `s`, built from the stored row so that it records what the table committed: the payload as stored rather than as a handler may have changed it, ids as text, and the time in UTC whatever `TimeZone` and `DateStyle`.
  * The top-level `payload` is omitted for a row whose payload is SQL NULL, while a JSON `null` stays; stripping nulls in general would also drop the nulls inside the payload.
  */
-function jobFailureSql(reason: FailureReason): SqlFragment {
+function jobFailureSql(reason: FailureReason): UntypedExpression {
   return sql`jsonb_build_object(
       'id', s.failed_claim_id::text,
       'reason', ${param(t.text, reason)},
@@ -30,11 +30,10 @@ function jobFailureSql(reason: FailureReason): SqlFragment {
  * The stamp of an inactive row is ignored, so only the stamp that the failed claim wrote counts: the fail reads it from the row that it changes from active.
  */
 export function insertFailureJobsSql(
-  table: JobTable,
   source: SqlFragment,
   reason: FailureReason,
-): SqlFragment {
-  return sql`insert into ${jobTableSql(table)} (task, scope, payload, run_at, window_started_at, created_at, max_attempts)
+): UntypedExpression {
+  return sql`insert into ${workerSchema.job} (task, scope, payload, run_at, window_started_at, created_at, max_attempts)
      select s.task || ${param(t.text, FAILURE_TASK_SUFFIX)}, s.scope, ${jobFailureSql(reason)}, s.failed_at, s.failed_at, s.failed_at, s.failure_max_attempts
      from ${source} s
      where s.state = 'failed' and s.failure_max_attempts is not null`

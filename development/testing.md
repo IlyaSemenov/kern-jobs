@@ -27,7 +27,7 @@ How to place and write the tests of kern-jobs.
 ## Database
 
 - Create a schema per test with `createTestSchema` of `src/test-harness/database.ts`, which creates it by the migrations and drops it afterwards; for a test that creates another schema, such as by `migrateJobs`, name it with `unmigratedTable`, which `dispose` drops too.
-- Test connections do not add the test schema to `search_path`: qualify the names in the SQL of a test, such as the job table with `jobTableSql(schema.table)`.
+- Test connections do not add the test schema to `search_path`: qualify the names in the SQL of a test, such as the job table with `${workerSchema.job}` in `conn.query`.
 - The tests of the core and the worker run on the driver of `kern-db/postgres-js`, and a test of the worker runs it on the driver of `kern-db/node-postgres`.
 - Pass virtual time, `T(seconds)`, as `now` to the statements of the SQL core instead of waiting for real time.
 

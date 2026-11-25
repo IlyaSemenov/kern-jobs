@@ -1,10 +1,10 @@
 // Leases of the claims of a worker: heartbeats in a session of their own, which holds the lock of the worker id, one at a time, and the local deadlines that abort a handler whose lease the worker cannot confirm.
-import { type Database, type OpenedSession, QueryError, type StatementExecutor } from "kern-orm/db"
+import { type OpenedSession, QueryError, type StatementExecutor } from "kern-orm/db"
 
-import type { JobTable } from "../sql/job-table"
 import { toStatementLabel } from "../sql/statement"
 
 import type { ClaimRef } from "./db/claim"
+import type { WorkerDb } from "./db/db"
 import { heartbeat } from "./db/lease"
 import type { AbortReason, WorkerEvent } from "./events"
 import { type Loop, maxTimerDelay, monotonicNow, startLoop } from "./loop"
@@ -42,11 +42,10 @@ export interface KeptLease {
 
 /** Options of the heartbeat of a worker. */
 export interface HeartbeatOptions {
-  /** Database of the worker in which the heartbeat opens its session; its `onReleaseError` receives the failures to release the connection of the session. */
-  database: Database
+  /** Worker ORM schema bound to the database in which the heartbeat opens its session; the `onReleaseError` of the database receives the failures to release the connection of the session. */
+  db: WorkerDb
   /** Advisory lock that the session holds while the worker runs, and the message of the error of a round that cannot take it. */
   lock: { key: string; busyMessage: string }
-  table: JobTable
   /** Seconds between heartbeats. */
   interval: number
   /** Seconds before the end of an unconfirmed lease at which its handler is aborted. */
@@ -96,7 +95,8 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
   let failed = false
   let inFlightSince: number | null = null
   let stopping: Promise<void> | undefined
-  const { database } = o
+  const { db } = o
+  const database = db.$database
   /** Takes the lock in the session of the caller, and throws when another session holds it. */
   async function takeLock() {
     if (!(await database.tryLock(o.lock.key))) throw new Error(o.lock.busyMessage)
@@ -120,7 +120,7 @@ export function startHeartbeat(o: HeartbeatOptions): Heartbeat {
       else {
         o.onEvent({ type: "heartbeat", claims: kept.map(e => e.claim.claimId) })
         const claims = kept.map(e => ({ id: e.claim.id, claimId: e.claim.claimId, lease: e.lease }))
-        const result = await session.run(() => heartbeat(database, o.table, { claims }))
+        const result = await session.run(() => heartbeat(db.$query, { claims }))
         const confirmed = new Set(result.confirmed)
         const busy = new Set(result.busy)
         for (const e of kept) {

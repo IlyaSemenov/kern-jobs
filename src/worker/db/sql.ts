@@ -1,7 +1,5 @@
-// SQL fragments shared by the hand-written statements of the worker: the time of a statement and the name of the job table.
-import { identifier, param, sql, type SqlFragment } from "kern-orm/db"
-
-import type { JobTable } from "../../sql/job-table"
+// SQL fragment of the time of a statement, shared by the hand-written statements of the worker.
+import { param, sql, type SqlFragment } from "kern-orm/db"
 
 import * as t from "./types"
 
@@ -11,9 +9,4 @@ import * as t from "./types"
  */
 export function nowSql(now: Date | null | undefined): SqlFragment {
   return sql`(select coalesce(${param(t.timestamptz.nullable(), now ?? null)}, statement_timestamp()))`
-}
-
-/** Returns SQL of the name of the job table, qualified by its PostgreSQL schema. */
-export function jobTableSql(table: JobTable): SqlFragment {
-  return identifier(table.schemaName, "job")
 }

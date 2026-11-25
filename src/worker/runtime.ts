@@ -238,11 +238,13 @@ export function startRuntime(o: RuntimeOptions): Worker {
   ready.promise.catch(() => {})
 
   const heartbeat = startHeartbeat({
-    database: o.heartbeatSource
-      ? createDatabase({ driver: o.heartbeatSource, onReleaseError })
-      : database,
+    db: o.heartbeatSource
+      ? bindWorkerDb(
+          createDatabase({ driver: o.heartbeatSource, onReleaseError }),
+          o.table.schemaName,
+        )
+      : db,
     lock: toWorkerLock(o.table, id),
-    table: o.table,
     interval,
     margin,
     onEvent: emit,
@@ -323,7 +325,6 @@ export function startRuntime(o: RuntimeOptions): Worker {
       const action = await run()
       const outcome = await settle({
         db,
-        table: o.table,
         claim,
         lease: kept,
         action,
@@ -374,7 +375,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
       )
     }
     if (o.reaper !== false && !stopping) {
-      reaper ??= startReaper(o.driver, o.table, { ...o.reaper, onEvent: emit })
+      reaper ??= startReaper(db.$queryOn(o.driver), { ...o.reaper, onEvent: emit })
     }
   }
   if (schemaChecked) startMaintenance()
@@ -392,11 +393,10 @@ export function startRuntime(o: RuntimeOptions): Worker {
       try {
         jobs = await heartbeat.runLocked(session =>
           reap(
-            {
+            db.$queryOn({
               execute: statement =>
                 stopping ? Promise.reject(recoveryStopped) : session.execute(statement),
-            },
-            o.table,
+            }),
             { worker: id, limit: recoveryLimit },
           ),
         )
@@ -443,8 +443,7 @@ export function startRuntime(o: RuntimeOptions): Worker {
           if (!poolProven) await database.query`select 1`.comment(toStatementLabel("worker:ping"))
         } else {
           await claimCycle(
-            timedDriver,
-            o.table,
+            db.$queryOn(timedDriver),
             {
               worker: id,
               tasks: taskNames,

@@ -6,8 +6,8 @@ import { isQueryError } from "kern-orm/db"
 import { createTestSchema, jobs, only, T, type TestSchema } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
 import { claimQueued } from "../worker/db/claim"
+import { workerSchema } from "../worker/db/db"
 import { fail } from "../worker/db/settlement"
-import { jobTableSql } from "../worker/db/sql"
 import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
@@ -58,7 +58,7 @@ async function insertRow(fields: RowFields): Promise<string | null> {
   }
   return rejectedBy(
     schema.admin.query`
-      insert into ${jobTableSql(schema.table)}
+      insert into ${workerSchema.job}
         (task, state, claim_id, lease_until, attempts, max_attempts, run_at, not_before, failed_at, window_started_at, created_at)
       values ('t', ${row.state}, ${row.claim_id}, ${row.lease_until}, ${row.attempts}, ${row.max_attempts},
               ${row.run_at}, ${row.not_before}, ${row.failed_at}, now(), now())`,
@@ -164,24 +164,24 @@ describe("names", () => {
     expect(await enqueueNames({ ...names, now: T(0) })).toBeNull()
     const compression = await schema.admin.query`
       select pg_column_compression(queue) as queue, pg_column_compression(key) as key
-      from ${jobTableSql(schema.table)}`
+      from ${workerSchema.job}`
       .select({ queue: t.text.nullable(), key: t.text.nullable() })
       .take()
     expect(compression).toEqual({ queue: null, key: null })
     // The claim writes the entry of the active queue, and the retry the entries of a pending row again.
-    const claimed = await claimQueued(schema.admin, schema.table, {
+    const claimed = await claimQueued(schema.admin.query, {
       worker: "w",
       tasks: [names.task],
       now: T(1),
     })
     if (claimed.kind !== "job") throw new Error(`expected a job, got ${claimed.kind}`)
     expect(
-      await fail(schema.db, schema.table, claimed.claim, {
+      await fail(schema.db, claimed.claim, {
         error: "e",
         backoff: 0,
         now: T(2),
       }),
     ).toBe("retry")
-    expect(only(await jobs(schema))).toMatchObject({ ...names, state: "pending" })
+    expect(only(await jobs(schema.admin.query))).toMatchObject({ ...names, state: "pending" })
   })
 })

@@ -103,7 +103,7 @@ describe("a running worker", () => {
         },
       ],
     ])
-    const rows = await jobs(schema)
+    const rows = await jobs(schema.admin.query)
     expect(rows.map(row => [row.id, row.state, row.attempts, row.lastError])).toEqual([
       [failed.id, "pending", 1, "the index is down"],
     ])
@@ -144,7 +144,7 @@ describe("a running worker", () => {
         [retried.id, "retry"],
       ]),
     )
-    expect((await jobs(schema)).map(row => [row.id, row.state])).toEqual([
+    expect((await jobs(schema.admin.query)).map(row => [row.id, row.state])).toEqual([
       [terminal.id, "failed"],
       [retried.id, "pending"],
     ])
@@ -167,7 +167,7 @@ describe("a running worker", () => {
     })
     expect(await indexed.promise).toBe("tenant acme")
     await worker.stop()
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   })
 
   test("without onError, writes an error to the console", async () => {
@@ -203,7 +203,7 @@ describe("a running worker", () => {
   test("by default, takes a name of its host and process, and its reaper returns a job of an expired lease, which it runs", async () => {
     const hourAgo = new Date(Date.now() - 3600_000)
     await enqueue(schema.admin, schema.table, { task: "sessions.purgeExpired", now: hourAgo })
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "dead",
       tasks: ["sessions.purgeExpired"],
       defaultLease: 10,
@@ -219,7 +219,7 @@ describe("a running worker", () => {
     expect(worker.id).toStartWith(`${hostname()}:${process.pid}:`)
     expect((await ran.promise).attempt).toBe(2)
     await worker.stop()
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   })
 
   test("without onError, writes a schedule error to the console with the schedule ID", async () => {
@@ -274,11 +274,11 @@ describe("a running worker", () => {
     const replicas = [launch(), launch(), launch()]
     await Promise.all([handled.promise, ...replicas.map(w => w.ready)])
     await Promise.all(replicas.map(w => w.stop()))
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
     const restarted = launch()
     await restarted.ready
     await restarted.stop()
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
     expect(products).toEqual(["scheduled"])
   })
 
@@ -410,7 +410,7 @@ describe("a running worker", () => {
     )
     expect(worker.state).toBe("stopped")
     await expect(worker.ready).rejects.toThrow("The worker stopped before it was ready")
-    expect((await jobs(schema)).map(job => job.state)).toEqual(["pending"])
+    expect((await jobs(schema.admin.query)).map(job => job.state)).toEqual(["pending"])
   })
 
   test("stop with force gives up at once and keeps its promise before the abort, so a stop called from the abort of a handler returns it", async () => {

@@ -28,7 +28,7 @@ afterEach(async () => {
 /** Claims `n` jobs for a dead worker whose leases expire at once. */
 async function expire(n: number) {
   for (let i = 0; i < n; i++) await enqueue(schema.admin, schema.table, { task: "t" })
-  await claimPlain(schema.admin, schema.table, {
+  await claimPlain(schema.admin.query, {
     worker: "dead",
     tasks: ["t"],
     limit: n,
@@ -43,7 +43,7 @@ test("after connection errors, the reaper returns expired jobs once the server i
   const events: WorkerEvent[] = []
   proxy.refuse = true
   proxy.cut()
-  const reaper = startReaper(driver, schema.table, {
+  const reaper = startReaper(schema.db.$queryOn(driver), {
     interval: 0.02,
     limit: 100,
     onEvent: e => events.push(e),
@@ -53,7 +53,7 @@ test("after connection errors, the reaper returns expired jobs once the server i
   proxy.refuse = false
   while (!events.some(e => e.type === "reap")) await sleep(10)
   await reaper.stop()
-  expect((await jobs(schema)).map(r => r.state)).toEqual(["pending"])
+  expect((await jobs(schema.admin.query)).map(r => r.state)).toEqual(["pending"])
   await driver.close()
   await proxy.close()
 })
@@ -61,7 +61,7 @@ test("after connection errors, the reaper returns expired jobs once the server i
 test("a full batch starts the next round at once", async () => {
   await expire(5)
   const events: WorkerEvent[] = []
-  const reaper = startReaper(schema.driver, schema.table, {
+  const reaper = startReaper(schema.db.$queryOn(schema.driver), {
     interval: 3600,
     limit: 2,
     onEvent: e => events.push(e),
@@ -74,7 +74,7 @@ test("a full batch starts the next round at once", async () => {
 test("a producer that holds a pending insert of an expired job's key does not stop the return of other expired jobs, and the reaper returns the job once the producer ends", async () => {
   const blocked = await enqueue(schema.admin, schema.table, { task: "t", key: "blocked" })
   const independent = await enqueue(schema.admin, schema.table, { task: "t", key: "independent" })
-  await claimPlain(schema.admin, schema.table, {
+  await claimPlain(schema.admin.query, {
     worker: "dead",
     tasks: ["t"],
     limit: 2,
@@ -85,20 +85,20 @@ test("a producer that holds a pending insert of an expired job's key does not st
   await producer.query`begin`
   await enqueue(producer, schema.table, { task: "t", key: "blocked" })
   const log = recordEvents()
-  const reaper = startReaper(schema.driver, schema.table, {
+  const reaper = startReaper(schema.db.$queryOn(schema.driver), {
     interval: 0.05,
     limit: 100,
     onEvent: log.onEvent,
   })
   try {
     await log.waitFor("reap", e => e.jobs.some(j => j.id === independent.id))
-    expect((await jobs(schema)).map(r => [r.key, r.state])).toEqual([
+    expect((await jobs(schema.admin.query)).map(r => [r.key, r.state])).toEqual([
       ["blocked", "active"],
       ["independent", "pending"],
     ])
     await producer.query`rollback`
     await log.waitFor("reap", e => e.jobs.some(j => j.id === blocked.id))
-    expect((await jobs(schema)).map(r => [r.key, r.state])).toEqual([
+    expect((await jobs(schema.admin.query)).map(r => [r.key, r.state])).toEqual([
       ["blocked", "pending"],
       ["independent", "pending"],
     ])

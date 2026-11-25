@@ -1,8 +1,6 @@
 // Settlement of a claim by the worker: complete, fail, or requeue, retried on a new connection while the worker owns the claim.
 import { ConnectionError, isOutcomeUnknown } from "kern-orm/db"
 
-import type { JobTable } from "../sql/job-table"
-
 import type { Claim } from "./db/claim"
 import type { WorkerDb } from "./db/db"
 import {
@@ -30,7 +28,6 @@ export type SettleAction =
 export interface SettleOptions {
   /** Worker database whose pool runs complete and whose transactions run fail and requeue. */
   db: WorkerDb
-  table: JobTable
   claim: Claim
   /** Lease of the claim, which the heartbeat keeps during the settlement. */
   lease: KeptLease
@@ -76,8 +73,8 @@ async function run(o: SettleOptions): Promise<"completed" | FailOutcome | Requeu
     case "complete":
       return (await complete(o.db, o.claim)) ? "completed" : "fenced"
     case "fail":
-      return await fail(o.db, o.table, o.claim, o.action.options)
+      return await fail(o.db, o.claim, o.action.options)
     case "requeue":
-      return await requeue(o.db, o.table, o.claim)
+      return await requeue(o.db, o.claim)
   }
 }

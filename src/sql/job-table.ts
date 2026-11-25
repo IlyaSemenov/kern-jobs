@@ -1,19 +1,17 @@
 import { isStorableText, storableTextRule, utf8Length } from "../limits"
 
-// Job table of the SQL core with its claim sequence, named in a PostgreSQL schema of their own.
+// Job table of the SQL core, named in a PostgreSQL schema of its own.
 import { quoteIdentifier } from "./postgres"
 
 /**
- * Job table of the SQL core with its claim sequence, in a PostgreSQL schema of their own.
- * Statements name them qualified by the schema, so that they do not depend on the `search_path` of a connection.
+ * Job table of the SQL core, in a PostgreSQL schema of its own.
+ * Statements name it qualified by the schema, so that they do not depend on the `search_path` of a connection.
  */
 export interface JobTable {
   /** Name of the PostgreSQL schema. */
   readonly schemaName: string
   /** Qualified name of the table in SQL. */
   readonly name: string
-  /** Qualified name of the claim sequence in SQL. */
-  readonly sequence: string
 }
 
 /** Name of the PostgreSQL schema of the job table when the application gives none. */
@@ -44,6 +42,5 @@ export function checkSchemaName(schemaName: unknown): asserts schemaName is stri
  */
 export function createJobTable(schemaName: string): JobTable {
   checkSchemaName(schemaName)
-  const s = quoteIdentifier(schemaName)
-  return { schemaName, name: `${s}.job`, sequence: `${s}.claim_seq` }
+  return { schemaName, name: `${quoteIdentifier(schemaName)}.job` }
 }

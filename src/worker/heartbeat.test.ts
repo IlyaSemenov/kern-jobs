@@ -11,9 +11,8 @@ import {
   type TextValue,
 } from "kern-orm/db"
 
-import { createJobTable } from "../sql/job-table"
-
 import type { ClaimRef } from "./db/claim"
+import { bindWorkerDb } from "./db/db"
 import * as t from "./db/types"
 import type { WorkerEvent } from "./events"
 import { HandlerAbort, type Heartbeat, startHeartbeat } from "./heartbeat"
@@ -144,12 +143,14 @@ function start(
   onSuccess = () => {},
 ) {
   heartbeat = startHeartbeat({
-    database: createDatabase({
-      driver: createAcquireOnlyDriver(() => source.acquire()),
-      onReleaseError: error => events.push({ type: "release-error", error }),
-    }),
+    db: bindWorkerDb(
+      createDatabase({
+        driver: createAcquireOnlyDriver(() => source.acquire()),
+        onReleaseError: error => events.push({ type: "release-error", error }),
+      }),
+      "fake",
+    ),
     lock: { key: "worker", busyMessage: "worker id in use" },
-    table: createJobTable("fake"),
     interval: 0.02,
     margin: 0.1,
     onEvent: e => events.push(e),

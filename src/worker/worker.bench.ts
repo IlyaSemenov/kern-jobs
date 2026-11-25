@@ -6,9 +6,9 @@ import { param } from "kern-orm/db"
 import { createTestSchema, type TestSchema } from "../test-harness/database"
 
 import { claimCycle, claimPlain, createClaimState } from "./db/claim"
+import { workerSchema } from "./db/db"
 import { heartbeat } from "./db/lease"
 import { complete } from "./db/settlement"
-import { jobTableSql } from "./db/sql"
 import * as t from "./db/types"
 import { startRuntime } from "./runtime"
 
@@ -16,7 +16,7 @@ const JOBS = 3000
 
 async function fill(schema: TestSchema, n: number) {
   await schema.admin.query`
-    insert into ${jobTableSql(schema.table)} (task, payload, run_at, window_started_at, created_at, max_attempts)
+    insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now(), now(), now(), 25 from generate_series(1, ${n}::int)`
 }
 
@@ -58,8 +58,7 @@ async function bareThroughput(concurrency: number): Promise<number> {
   const started = performance.now()
   while (left > 0) {
     const claims = await claimCycle(
-      driver,
-      schema.table,
+      schema.db.$queryOn(driver),
       { worker: "w", tasks: ["t"], slots: concurrency },
       undefined,
       state,
@@ -75,7 +74,7 @@ async function bareThroughput(concurrency: number): Promise<number> {
 async function heartbeatCost(claimsCount: number) {
   const schema = await createTestSchema()
   await fill(schema, claimsCount)
-  const claims = await claimPlain(schema.admin, schema.table, {
+  const claims = await claimPlain(schema.admin.query, {
     worker: "w",
     tasks: ["t"],
     limit: claimsCount,
@@ -89,10 +88,10 @@ async function heartbeatCost(claimsCount: number) {
     for (let i = 0; i < rounds; i++) await fn()
     return (performance.now() - t) / rounds
   }
-  const skipping = await time(() => heartbeat(schema.admin, schema.table, { claims: refs }))
+  const skipping = await time(() => heartbeat(schema.admin.query, { claims: refs }))
   const plain = await time(() =>
     schema.admin.query`
-        update ${jobTableSql(schema.table)} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
+        update ${workerSchema.job} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
         from unnest(${param(
           t.array(t.bigintText),
           refs.map(r => r.id),

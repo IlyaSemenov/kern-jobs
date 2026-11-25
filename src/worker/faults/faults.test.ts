@@ -18,8 +18,8 @@ import {
   type TestSchema,
 } from "../../test-harness/database"
 import { claimPlain } from "../db/claim"
+import { workerSchema } from "../db/db"
 import { reap } from "../db/lease"
-import { jobTableSql } from "../db/sql"
 import { signalWindow } from "../shutdown"
 
 import { type Proxy, proxyTo } from "./proxy"
@@ -108,7 +108,7 @@ function spawnWorker(id: string, overrides: Partial<WorkerConfig> = {}) {
   return { cfg, proc, events, waitFor, kill }
 }
 
-const row = async (id: string) => (await jobs(schema, sql`id = ${id}`))[0]
+const row = async (id: string) => (await jobs(schema.admin.query, sql`id = ${id}`))[0]
 const backendAlive = async (pid: number) =>
   (await schema.admin.query`select 1 from pg_stat_activity where pid = ${pid}`) > 0
 
@@ -116,7 +116,7 @@ const backendAlive = async (pid: number) =>
 async function reapUntil(id: string, pred: (r: any) => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    await reap(schema.admin, schema.table)
+    await reap(schema.admin.query)
     const r = await row(id)
     if (r && pred(r)) return r
     await sleep(100)
@@ -192,7 +192,7 @@ describe("SIGKILL inside fail and reap", () => {
     expect((await row(job.id))!.state).toBe("active")
     // The competitor is not locked any more.
     await schema.admin
-      .query`select id from ${jobTableSql(schema.table)} where id = ${b.id} for update nowait`
+      .query`select id from ${workerSchema.job} where id = ${b.id} for update nowait`
     const reaped = await reapUntil(job.id, r => r.state === "pending")
     expect([reaped.key, (await row(b.id))!.key]).toEqual([null, "k"])
   }, 30_000)
@@ -201,7 +201,7 @@ describe("SIGKILL inside fail and reap", () => {
     test(`mid-reap, connection check ${check ? "100 ms" : "off"}: all or nothing`, async () => {
       for (let i = 0; i < 20; i++)
         await enqueue(schema.admin, schema.table, { task: "t", key: `k${i}` })
-      await claimPlain(schema.admin, schema.table, {
+      await claimPlain(schema.admin.query, {
         worker: "dead",
         tasks: ["t"],
         limit: 20,
@@ -224,12 +224,12 @@ describe("SIGKILL inside fail and reap", () => {
       }
       await release()
       await sleep(300)
-      const states = (await jobs(schema)).map(x => x.state)
+      const states = (await jobs(schema.admin.query)).map(x => x.state)
       const pending = states.filter(s => s === "pending").length
       console.log(`mid-reap kill, check ${check}: ${pending} of 20 reaped by the dead reaper`)
       expect(pending).toBe(check ? 0 : 20)
-      await reap(schema.admin, schema.table)
-      expect((await jobs(schema)).every(x => x.state === "pending")).toBe(true)
+      await reap(schema.admin.query)
+      expect((await jobs(schema.admin.query)).every(x => x.state === "pending")).toBe(true)
     }, 30_000)
   }
 })
@@ -265,7 +265,7 @@ describe("heartbeat on an independent connection", () => {
       const b = spawnWorker("b", { handlerMs: 300 })
       const reaper = (async () => {
         for (let i = 0; i < 60; i++) {
-          await reap(schema.admin, schema.table)
+          await reap(schema.admin.query)
           await sleep(100)
         }
       })()
@@ -366,8 +366,8 @@ describe("slots and heartbeats", () => {
     // The reaper returns the job while its handler runs.
     await schema.admin.query`begin`
     await schema.admin.query`
-      update ${jobTableSql(schema.table)} set lease_until = now() - interval '1 second' where id = ${job.id}`
-    await reap(schema.admin, schema.table)
+      update ${workerSchema.job} set lease_until = now() - interval '1 second' where id = ${job.id}`
+    await reap(schema.admin.query)
     await schema.admin.query`commit`
     const second = await w.waitFor(e => e.ev === "start" && e.id === job.id && e.attempts === 2)
     const other = await enqueue(schema.admin, schema.table, { task: "t" })
@@ -479,7 +479,7 @@ describe("fairness across processes under continuous inflow", () => {
     while (Date.now() < stopAt) {
       // About 200 plain jobs/s and 400 queued jobs/s against a capacity of about 300 jobs/s.
       await schema.admin.query`
-        insert into ${jobTableSql(schema.table)} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
+        insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', q, '{}', now(), now(), now(), 25
         from unnest(array[null, null] || array(select 'q' || lpad(i::text, 2, '0') from generate_series(0, 19) i
                                                where random() < 0.2)) q`

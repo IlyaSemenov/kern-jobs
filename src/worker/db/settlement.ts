@@ -1,14 +1,13 @@
 // Settlement of a claimed job: complete, fail with retry, merge, or a final failure, and requeue of a job whose attempt is given back.
-import { param, queryOn, sql, type StatementExecutor } from "kern-orm/db"
+import { param, sql, type StatementExecutor } from "kern-orm/db"
 
-import type { JobTable } from "../../sql/job-table"
 import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
 import type { ClaimRef } from "./claim"
-import type { WorkerDb } from "./db"
+import { type WorkerDb, workerSchema } from "./db"
 import { insertFailureJobsSql } from "./failure"
-import { jobTableSql, nowSql } from "./sql"
+import { nowSql } from "./sql"
 import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
@@ -54,12 +53,11 @@ export interface FailOptions {
  */
 export async function fail(
   db: WorkerDb,
-  table: JobTable,
   c: ClaimRef,
   o: FailOptions,
   stats: { uniqueViolations: number } = { uniqueViolations: 0 },
 ): Promise<FailOutcome> {
-  return await returnClaim(db, table, c, { ...o, refund: false }, stats)
+  return await returnClaim(db, c, { ...o, refund: false }, stats)
 }
 
 /** Outcome of a requeue. */
@@ -75,18 +73,11 @@ export type RequeueOptions = Pick<FailOptions, "now" | "maxRetries" | "pause">
  */
 export async function requeue(
   db: WorkerDb,
-  table: JobTable,
   c: ClaimRef,
   o: RequeueOptions = {},
   stats: { uniqueViolations: number } = { uniqueViolations: 0 },
 ): Promise<RequeueOutcome> {
-  const outcome = await returnClaim(
-    db,
-    table,
-    c,
-    { ...o, error: null, backoff: 0, refund: true },
-    stats,
-  )
+  const outcome = await returnClaim(db, c, { ...o, error: null, backoff: 0, refund: true }, stats)
   // A refunded attempt never makes the job failed.
   return outcome === "retry" ? "requeued" : (outcome as Exclude<FailOutcome, "failed" | "retry">)
 }
@@ -101,7 +92,6 @@ interface ReturnOptions extends Omit<FailOptions, "error"> {
 /** Runs the transaction of fail or requeue, and retries it after a `23505` on the pending-key index. */
 async function returnClaim(
   db: WorkerDb,
-  table: JobTable,
   c: ClaimRef,
   o: ReturnOptions,
   stats: { uniqueViolations: number },
@@ -110,7 +100,7 @@ async function returnClaim(
     try {
       return await db.$transaction(
         async () => {
-          const outcome = await returnOnce(db, table, c, o)
+          const outcome = await returnOnce(db, c, o)
           await o.pause?.beforeCommit?.(db.$database)
           return outcome
         },
@@ -129,16 +119,10 @@ async function returnClaim(
 }
 
 /** Runs the statements of one transaction of fail or requeue. */
-async function returnOnce(
-  db: WorkerDb,
-  table: JobTable,
-  c: ClaimRef,
-  o: ReturnOptions,
-): Promise<FailOutcome> {
-  // Raw statements on the database of `db` join the ambient transaction of `db.$transaction`, as its typed queries do.
+async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<FailOutcome> {
+  // Statements of `db.$query` and on the database of `db`, which the pauses get, join the ambient transaction of `db.$transaction`, as its typed queries do.
   const tx = db.$database
   const now = nowSql(o.now)
-  const jobs = jobTableSql(table)
   const a = await db.job
     .where({ id: c.id, claimId: c.claimId, state: "active" })
     .select("id", "scope", "task", "key", "attempts", "maxAttempts")
@@ -151,14 +135,14 @@ async function returnOnce(
   // A terminal outcome is always recorded as failed and never merged away; failed rows are outside key uniqueness.
   // The failure job is inserted by the statement that fails the job, so both commit or roll back together, and only a claim that commits its own transition from active inserts one.
   if (o.reason === "terminal-error" || (!o.refund && a.attempts >= a.maxAttempts)) {
-    await queryOn(tx)`
+    await db.$query`
       with s as (
-        update ${jobs} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = ${o.error},
+        update ${workerSchema.job} set state = 'failed', claim_id = null, locked_by = null, lease_until = null, last_error = ${o.error},
           failed_at = ${now}
         where id = ${c.id}
         returning *, ${c.claimId}::bigint as failed_claim_id
       ), i as (
-        ${insertFailureJobsSql(table, sql`s`, o.reason ?? "handler-error")}
+        ${insertFailureJobsSql(sql`s`, o.reason ?? "handler-error")}
       )
       select from s`.comment(toStatementLabel("settle:fail"))
     return "failed"
@@ -166,8 +150,8 @@ async function returnOnce(
   // A null error keeps the error of the latest failure, since a requeue records none.
   const backoff = param(t.doublePrecision, o.backoff)
   const toPending = () =>
-    queryOn(tx)`
-      update ${jobs} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
+    db.$query`
+      update ${workerSchema.job} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
         run_at = n.t + make_interval(secs => ${backoff}), not_before = n.t + make_interval(secs => ${backoff}),
         window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null,
         last_error = coalesce(${param(t.text.nullable(), o.error)}, last_error)

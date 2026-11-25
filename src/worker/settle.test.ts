@@ -45,7 +45,7 @@ async function proxied(): Promise<{ proxy: Proxy; driver: Driver }> {
 async function claimJob(): Promise<Claim> {
   await enqueue(schema.admin, schema.table, { task: "t" })
   return only(
-    await claimPlain(schema.admin, schema.table, {
+    await claimPlain(schema.admin.query, {
       worker: "w",
       tasks: ["t"],
       limit: 1,
@@ -76,7 +76,6 @@ async function run({
   const events: WorkerEvent[] = []
   const outcome = await settle({
     db: schema.createDb(driver),
-    table: schema.table,
     lease: keptLease(o.claim),
     action: { type: "complete" },
     retryDelay: 0.01,
@@ -97,7 +96,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "completed" : "unknown",
       errors: 1,
     })
-    expect(await jobs(schema)).toEqual([])
+    expect(await jobs(schema.admin.query)).toEqual([])
   })
 }
 
@@ -110,7 +109,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "retry" : "unknown",
       errors: 1,
     })
-    const row = only(await jobs(schema))
+    const row = only(await jobs(schema.admin.query))
     expect([row.state, row.attempts, row.lastError]).toEqual(["pending", 1, "boom"])
   })
 }
@@ -120,7 +119,7 @@ for (const mode of ["before", "after"] as const) {
     const { proxy, driver } = await proxied()
     await enqueue(schema.admin, schema.table, { task: "t", maxAttempts: 1 })
     const claim = only(
-      await claimPlain(schema.admin, schema.table, {
+      await claimPlain(schema.admin.query, {
         worker: "w",
         tasks: ["t"],
         limit: 1,
@@ -133,7 +132,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "failed" : "unknown",
       errors: 1,
     })
-    expect((await jobs(schema)).map(r => [r.task, r.state])).toEqual([
+    expect((await jobs(schema.admin.query)).map(r => [r.task, r.state])).toEqual([
       ["t", "failed"],
       ["t:failure", "pending"],
     ])
@@ -148,7 +147,7 @@ test("a claim that a heartbeat found lost is not settled", async () => {
     outcome: "lost",
     errors: 0,
   })
-  expect(only(await jobs(schema)).state).toBe("active")
+  expect(only(await jobs(schema.admin.query)).state).toBe("active")
 })
 
 for (const unsent of [true, false]) {
@@ -160,7 +159,6 @@ for (const unsent of [true, false]) {
     const events: WorkerEvent[] = []
     const outcome = await settle({
       db: schema.createDb(driver),
-      table: schema.table,
       claim,
       lease: keptLease(claim),
       // The transaction of fail reserves its connection first, which a refused connection leaves unsent.
@@ -174,7 +172,7 @@ for (const unsent of [true, false]) {
       unsent ? "stopped" : "unknown",
       ["settle-error"],
     ])
-    expect((await jobs(schema)).map(row => row.state)).toEqual(unsent ? ["active"] : [])
+    expect((await jobs(schema.admin.query)).map(row => row.state)).toEqual(unsent ? ["active"] : [])
   })
 }
 
@@ -189,7 +187,7 @@ test("a statement that PostgreSQL keeps rejecting is given up after three retrie
     },
   }
   expect(await run({ driver: rejecting, claim })).toEqual({ outcome: "error", errors: 4 })
-  expect(only(await jobs(schema)).state).toBe("active")
+  expect(only(await jobs(schema.admin.query)).state).toBe("active")
 })
 
 test("rejections after a statement of unknown outcome give up the settlement with the outcome unknown", async () => {
@@ -221,5 +219,5 @@ test("connection errors past the confirmed lease give up the settlement: abandon
   expect(result.outcome).toBe("abandoned")
   expect(result.errors).toBeGreaterThan(1)
   expect(monotonicNow() - started).toBeGreaterThanOrEqual(200)
-  expect(only(await jobs(schema)).state).toBe("active")
+  expect(only(await jobs(schema.admin.query)).state).toBe("active")
 })
