@@ -1,4 +1,4 @@
-// Fourth migration of kern-jobs: the attempt budget of the failure job that a claim of an implementation with `onFailure` stamps on its job, by which a terminal failure of the claim inserts the failure job.
+// The column `failure_max_attempts`: the attempt budget of a failure job, which a claim stamps on its job when the implementation has `onFailure`, so that a terminal failure of the claim inserts a failure job.
 
 import { addColumn, addConstraint, defineMigration } from "kern-migrations"
 
