@@ -24,6 +24,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Accumulating payloads](accumulating-payloads.md): a key mode that appends payloads to the pending job.
 - [Payload validation](payload-validation.md): by a Standard Schema of the task.
 - [Retention](retention.md): deleting failed jobs after a configured time, and keeping completed jobs for a configured time.
+- [Published benchmarks](published-benchmarks.md): throughput and latency on stated hardware, against pg-boss and Graphile Worker on the same workload.
 
 ## Without a use case
 

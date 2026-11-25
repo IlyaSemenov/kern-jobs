@@ -45,6 +45,12 @@ Order concurrent transactions explicitly rather than by timing:
 - The seed of the randomized test `src/worker/fuzz.test.ts`, `FUZZ_SEED`, does not fix the order of async events: reproduce a defect that it finds with a deterministic test.
 - The process-level scenarios in `src/worker/faults/` run worker processes of `src/worker/faults/worker.ts`; the restart scenario starts a temporary cluster from the binaries in `PG_BIN`, or in `pg_config --bindir` when it is not set.
 
+## Benchmarks
+
+- Compare the throughput of revisions where the benchmark and PostgreSQL get CPUs that no other load takes, such as containers with a fixed number of CPUs on a server with spare ones: on a workstation, some runs of `src/worker/worker.bench.ts` drop several times for any revision.
+- Run each revision in a container of its own, built from `git archive` of the revision with its own dependencies, against PostgreSQL in a container on tmpfs with `fsync`, `synchronous_commit`, and `full_page_writes` off.
+- Run at least 15 rounds, each running every revision in an order that rotates between rounds, and compare the medians and the ranges of the runs.
+
 ## Package
 
 `tests/package/install.package-test.ts` installs the dependencies of the packed package with npm from the registry and runs the quickstart of [docs/getting-started.md](../docs/getting-started.md), `tests/package/quickstart/quickstart.ts`, in a temporary database: it needs the network and a user of `DATABASE_URL` that can create databases.

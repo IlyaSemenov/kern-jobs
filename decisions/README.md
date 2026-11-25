@@ -3,7 +3,7 @@
 Trade-offs between designs of kern-jobs: what each decision chose, the alternatives it weighed, their measured costs, and the other projects that chose an alternative.
 Architecture states the chosen designs and links each decision from the contract of its design.
 
-Measurements come from single runs on one local machine without network, so they compare designs rather than promise throughput.
+Measurements come from one machine without network, so they compare designs rather than promise throughput.
 
 ## Enqueue
 
@@ -35,6 +35,7 @@ Measurements come from single runs on one local machine without network, so they
 ## Drivers
 
 - [Typed table queries for simple worker mutations](drivers/worker-orm.md).
+- [Hand-written worker statements are kern-orm templates](drivers/worker-templates.md), rather than SQL text with parameters cast from text.
 - [Parameters and results as text](drivers/text-values.md).
 - [A transaction owns its connection](drivers/transaction-connection.md): a worker needs a pool.
 - [Enqueues through the client of the application](drivers/executor.md): its results are read by position, as text.

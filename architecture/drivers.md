@@ -35,7 +35,7 @@ Simple worker statements use typed table queries on the database of the worker, 
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, the return to pending, and an enqueue, use hand-written SQL, which in fail, requeue, and the check of a schedule runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
 
-Hand-written statements that only the worker runs are templates of `$queryOn` of the worker `Db` on the executor of the operation, such as the pool or the session of the heartbeat, or of `$query` in a transaction of the `Db`, and decode the result columns that `select` names by their types.
+Hand-written statements that only the worker runs are templates of `$queryOn` of the worker `Db` on the executor of the operation, such as the pool or the session of the heartbeat, or of `$query` in a transaction of the `Db`, and decode the result columns that `select` names by their types ([decision](../decisions/drivers/worker-templates.md)).
 A statement that also runs on the executor of an application, such as an enqueue, is SQL text that runs through `queryValues` of `sql/statement.ts`, which returns the rows as arrays of values, since the client of the application may rename the columns ([Producer](producer.md#executor)).
 
 - A worker template interpolates its values as parameters, and gives `param` with its type to a value whose place in the statement does not tell its type, such as JSON, an array, or an operand of `IS NULL`; it interpolates the time of the statement as `nowSql` of `worker/db/sql.ts`, once per statement, which binds one parameter wherever the statement reads it.
