@@ -1,5 +1,18 @@
 # kern-jobs
 
+## 0.4.0
+
+### Minor Changes
+
+- dcdc055: Add `runFailure` and `testJobs.runFailure` to `kern-jobs/testing`, which run the `onFailure` of a task implementation with a `JobFailure` built from the payload of the failed job.
+- 4e25ac9: Add the `runHandler` option of a worker to `runJob`, `runFailure`, `testJobs.runJob`, and `testJobs.runFailure`, and export the `RunHandler` and `RunHandlerContext` types from `kern-jobs/testing`.
+- 96326a8: Add the SQL function `retry`, which retries a failed job by its id in any scope, such as in `psql`.
+- 75d0b64: Add `testJobs.runJob`, which runs a handler as `runJob` does and gives the job of a scoped task the scope of `createTestJobs`.
+
+### Patch Changes
+
+- dcdc055: Fix `runJob` and `testJobs.runJob` accepting a `job.id` that is not the id of a job, such as `"job-1"`.
+
 ## 0.3.0
 
 ### Minor Changes
