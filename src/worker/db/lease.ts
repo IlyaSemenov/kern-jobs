@@ -1,8 +1,9 @@
 // Leases of claimed jobs: heartbeats that extend them, and the reaper that returns expired jobs or the jobs of a worker that has ended.
 
 import type { DbSqlQueryTemplate } from "kern-orm"
-import { isQueryError, param, sql, type SqlFragment } from "kern-orm/db"
+import { isQueryError, param, sql, type SqlFragment, unsafeSql } from "kern-orm/db"
 
+import { hook } from "../../sql/postgres"
 import { toStatementLabel } from "../../sql/statement"
 import type { FailureReason } from "../../task/failure"
 
@@ -55,7 +56,7 @@ export async function heartbeat(
       select j.claim_id from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id where j.state = 'active'
     ), locked as (
       select j.id, x.lease from ${workerSchema.job} j join x on j.id = x.id and j.claim_id = x.claim_id
-      where j.state = 'active' and /*hook:heartbeat*/true
+      where j.state = 'active' and ${unsafeSql(hook("heartbeat"))}
       for update of j skip locked
     ), extended as (
       update ${workerSchema.job} j set lease_until = greatest(j.lease_until, ${nowSql(o.now)} + make_interval(secs => l.lease))
@@ -159,7 +160,7 @@ function reapStatement(
       for update of j skip locked
     ), ranked as (
       select e.*,
-        /*hook:reap*/true as hooked,
+        ${unsafeSql(hook("reap"))} as hooked,
         row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
         exists (select 1 from ${workerSchema.job} p
                 where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending

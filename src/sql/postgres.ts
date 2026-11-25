@@ -9,7 +9,7 @@ export const NOW = `(select coalesce($1::text::timestamptz, statement_timestamp(
 /**
  * Marks a breakpoint in SQL text for deterministic tests: the inert expression `true`, which the test helpers replace on their connections with a call that blocks while the test holds the breakpoint.
  * The breakpoint runs after the statement has taken its snapshot.
- * A template writes the text of the marker literally, since it would pass an interpolated string as a parameter.
+ * A template interpolates it as `unsafeSql(hook(name))`, since it would pass a bare string as a parameter.
  */
 export const hook = (name: string) => `/*hook:${name}*/true`
 

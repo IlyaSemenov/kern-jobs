@@ -36,7 +36,7 @@ How to place and write the tests of kern-jobs.
 Order concurrent transactions explicitly rather than by timing:
 
 - hold a transaction open on one connection and wait with `waitForLock` of `kern-db/testing` until another backend blocks on its lock;
-- stop a statement after its snapshot at a breakpoint that the SQL core marks with `/*hook:<name>*/true`, which `hook(name)` writes into SQL text: open the connection with that hook and hold the breakpoint with `holdHook`;
+- stop a statement after its snapshot at a breakpoint that the SQL core marks with `/*hook:<name>*/true`, which `hook(name)` writes, into a template as `unsafeSql(hook(name))`: open the connection with that hook and hold the breakpoint with `holdHook`;
 - stop a transaction between its statements through the `pause` callbacks of its operation.
 
 ## Worker

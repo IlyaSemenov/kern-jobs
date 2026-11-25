@@ -9,8 +9,9 @@ import {
   sql,
   type UntypedExpression,
 } from "kern-orm"
-import { param, type SqlFragment } from "kern-orm/db"
+import { param, type SqlFragment, unsafeSql } from "kern-orm/db"
 
+import { hook } from "../../sql/postgres"
 import { toStatementLabel } from "../../sql/statement"
 
 import { workerSchema } from "./db"
@@ -85,7 +86,7 @@ export async function claimPlain(
     with c as (
       select id from ${workerSchema.job}
       where state = 'pending' and queue is null and run_at <= ${now} and task = any(${param(t.array(t.text), o.tasks)})
-        and /*hook:claim_plain*/true
+        and ${unsafeSql(hook("claim_plain"))}
       order by run_at
       limit ${o.limit}
       for update skip locked
@@ -144,7 +145,7 @@ export async function claimQueued(
       from (
         select c.scope, c.queue
         from qs c
-        where /*hook:claim_queue*/true
+        where ${unsafeSql(hook("claim_queue"))}
           and exists (select 1 from ${workerSchema.job} h where h.state = 'pending' and h.scope = c.scope and h.queue = c.queue
                       and h.run_at <= ${now} and h.task = any(${tasks}))
           and not exists (select 1 from unnest(${param(
