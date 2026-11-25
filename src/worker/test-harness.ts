@@ -78,12 +78,12 @@ export const testTimings = {
  * Call `stopTestWorkers` before `dispose` of the schema, whose pools wait for the connections that workers hold.
  */
 export function startTestWorker(
-  schema: TestSchema,
+  testSchema: TestSchema,
   options: Partial<RuntimeOptions> & Pick<RuntimeOptions, "tasks">,
 ): Worker {
   const worker = startRuntime({
-    driver: schema.driver,
-    table: schema.table,
+    driver: testSchema.driver,
+    table: testSchema.table,
     id: `test-${++started}`,
     concurrency: 1,
     reaper: false,
@@ -128,8 +128,8 @@ export async function terminateBackends(
 }
 
 /** Moves the lease of a job into the past and reaps it in one transaction, while its handler may still run. */
-export async function reapNow(schema: TestSchema, id: string): Promise<void> {
-  const conn = await schema.connect()
+export async function reapNow(testSchema: TestSchema, id: string): Promise<void> {
+  const conn = await testSchema.connect()
   await conn.query`begin`
   await conn.query`
     update ${workerSchema.job} set lease_until = now() - interval '1 second' where id = ${id}`

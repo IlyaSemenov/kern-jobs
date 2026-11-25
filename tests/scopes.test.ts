@@ -35,15 +35,15 @@ const currentTenant = new AsyncLocalStorage<string>()
 
 const tenants = ["a", "b"] as const
 
-let schema: TestSchema
+let testSchema: TestSchema
 let driver: Driver
 let worker: Worker | undefined
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
   driver = nodePostgresDriver(new pg.Pool({ connectionString: databaseUrl(), max: 3 }))
   // The data of each tenant in a schema of its own, with a product of the same id and its own title.
   for (const tenant of tenants) {
-    await schema.pool.query(
+    await testSchema.pool.query(
       `create schema "${tenantSchema(tenant)}";
        create table "${tenantSchema(tenant)}".product (id text primary key, title text, indexed_title text);
        insert into "${tenantSchema(tenant)}".product (id, title) values ('42', 'title of ${tenant}')`,
@@ -55,20 +55,20 @@ afterEach(async () => {
   worker = undefined
   await driver.close()
   for (const tenant of tenants) {
-    await schema.pool.query(`drop schema if exists "${tenantSchema(tenant)}" cascade`)
+    await testSchema.pool.query(`drop schema if exists "${tenantSchema(tenant)}" cascade`)
   }
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /** Returns the PostgreSQL schema of the data of a tenant, as an application with a schema per tenant names it. */
 function tenantSchema(tenant: string): string {
-  return `${schema.name}_${tenant}`
+  return `${testSchema.name}_${tenant}`
 }
 
 /** Returns the jobs API of the application, whose scoped tasks take the tenant of the current request. */
 function createAppJobs() {
-  return createJobs(schema.pool, {
-    schemaName: schema.name,
+  return createJobs(testSchema.pool, {
+    schemaName: testSchema.name,
     scope: () => currentTenant.getStore()!,
   })
 }
@@ -78,7 +78,7 @@ function start(manifest: Manifest, concurrency = 1) {
   const reports: [unknown, WorkerErrorInfo][] = []
   worker = startWorker(driver, {
     manifest,
-    schemaName: schema.name,
+    schemaName: testSchema.name,
     concurrency,
     pollInterval: 0.02,
     onError: (error, info) => reports.push([error, info]),
@@ -98,8 +98,8 @@ test("jobs of a scoped task in two tenants with the same key and queue stay apar
   const exported = await enqueueIn("a", exportProduct, 1)
   expect([a.created, b.created, exported.created]).toEqual([true, true, true])
   expect(await enqueueIn("a", indexProduct, 2)).toEqual({ id: a.id, created: false })
-  const { rows } = await schema.pool.query(
-    `select id, task, scope, key, queue, payload from "${schema.name}".job order by id`,
+  const { rows } = await testSchema.pool.query(
+    `select id, task, scope, key, queue, payload from "${testSchema.name}".job order by id`,
   )
   expect(
     rows.map(row => [row.id, row.task, row.scope, row.key, row.queue, row.payload.version]),
@@ -132,7 +132,7 @@ test("a worker runs the jobs of one queue in two scopes at once, and each handle
           const aborted = new Promise(resolve => signal.addEventListener("abort", resolve))
           await Promise.race([bothStarted, aborted])
           signal.throwIfAborted()
-          await schema.pool.query(
+          await testSchema.pool.query(
             `update "${tenantSchema(job.scope)}".product set indexed_title = title where id = $1`,
             [productId],
           )
@@ -146,7 +146,7 @@ test("a worker runs the jobs of one queue in two scopes at once, and each handle
   await worker.stop()
   const products = []
   for (const tenant of tenants) {
-    const { rows } = await schema.pool.query(
+    const { rows } = await testSchema.pool.query(
       `select id, indexed_title from "${tenantSchema(tenant)}".product`,
     )
     products.push(rows)
@@ -155,7 +155,7 @@ test("a worker runs the jobs of one queue in two scopes at once, and each handle
     [{ id: "42", indexed_title: "title of a" }],
     [{ id: "42", indexed_title: "title of b" }],
   ])
-  const { rows } = await schema.pool.query(`select id from "${schema.name}".job`)
+  const { rows } = await testSchema.pool.query(`select id from "${testSchema.name}".job`)
   expect([rows, reports]).toEqual([[], []])
 })
 

@@ -24,12 +24,12 @@ import { reap } from "./lease"
 import { complete, fail, requeue } from "./settlement"
 import * as t from "./types"
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 const W = { worker: "w1", tasks: ["t"] }
@@ -38,19 +38,19 @@ test("complete matches both bigint ids beyond the safe integer range", async () 
   const id = unsafeInteger
   // The next integer that a number cannot hold either.
   const claimId = id + 2n
-  await schema.conn.query`
+  await testSchema.conn.query`
     alter table ${workerSchema.job} alter column id restart with ${literal(id)}`
-  await schema.conn.query`select ${workerSchema.claimSeq.setval(claimId, false)}`
-  await enqueue(schema.conn, schema.table, { task: "t" })
-  const claim = only(await claimPlain(schema.conn.query, { ...W, limit: 1 }))
+  await testSchema.conn.query`select ${workerSchema.claimSeq.setval(claimId, false)}`
+  await enqueue(testSchema.conn, testSchema.table, { task: "t" })
+  const claim = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1 }))
   expect([claim.id, claim.claimId]).toEqual([String(id), String(claimId)])
-  expect(await complete(schema.db, { ...claim, claimId: String(claimId - 1n) })).toBe(false)
-  expect(await complete(schema.db, claim)).toBe(true)
+  expect(await complete(testSchema.db, { ...claim, claimId: String(claimId - 1n) })).toBe(false)
+  expect(await complete(testSchema.db, claim)).toBe(true)
 })
 
 /** A is active, and B is pending with the same key. */
 async function activeWithPending(o: { maxAttempts?: number; mode?: KeyMode } = {}) {
-  await enqueue(schema.conn, schema.table, {
+  await enqueue(testSchema.conn, testSchema.table, {
     task: "t",
     key: "k",
     payload: "a",
@@ -58,8 +58,8 @@ async function activeWithPending(o: { maxAttempts?: number; mode?: KeyMode } = {
     mode: o.mode,
     now: T(0),
   })
-  const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-  const b = await enqueue(schema.conn, schema.table, {
+  const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+  const b = await enqueue(testSchema.conn, testSchema.table, {
     task: "t",
     key: "k",
     payload: "b",
@@ -71,13 +71,13 @@ async function activeWithPending(o: { maxAttempts?: number; mode?: KeyMode } = {
 }
 
 const failA = (a: Claim, o: Partial<Parameters<typeof fail>[2]> = {}) =>
-  fail(schema.db, a, { error: "boom", backoff: 30, now: T(2), ...o })
+  fail(testSchema.db, a, { error: "boom", backoff: 30, now: T(2), ...o })
 
 describe("last attempt and terminal error", () => {
   test("A on its last attempt with B pending: A failed with its key at the time of the fail, B unchanged", async () => {
     const { a, b } = await activeWithPending({ maxAttempts: 1 })
     expect(await failA(a)).toBe("failed")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.failedAt])).toEqual([
       [a.id, "failed", "k", 1, T(2)],
       [b.id, "pending", "k", 0, null],
@@ -88,14 +88,19 @@ describe("last attempt and terminal error", () => {
   test("A before its last attempt with B pending, replace: A deleted as superseded, B unchanged", async () => {
     const { a, b } = await activeWithPending()
     expect(await failA(a)).toBe("superseded")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.attempts, secondsOf(r.runAt)])).toEqual([[b.id, 0, 20]])
   })
 
   test("A before its last attempt with B pending, debounce: A deleted as superseded, B unchanged", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-    const b = await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+    const b = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "b",
@@ -105,7 +110,7 @@ describe("last attempt and terminal error", () => {
       now: T(1),
     })
     expect(await failA(a)).toBe("superseded")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.payload, r.attempts, secondsOf(r.runAt)])).toEqual([
       [b.id, "b", 0, 11],
     ])
@@ -114,7 +119,7 @@ describe("last attempt and terminal error", () => {
   test("a terminal error with B pending: A failed at the time of the fail, B unchanged", async () => {
     const { a, b } = await activeWithPending()
     expect(await failA(a, { reason: "terminal-error" })).toBe("failed")
-    expect((await jobs(schema.conn.query)).map(r => [r.id, r.state, r.failedAt])).toEqual([
+    expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state, r.failedAt])).toEqual([
       [a.id, "failed", T(2)],
       [b.id, "pending", null],
     ])
@@ -123,17 +128,17 @@ describe("last attempt and terminal error", () => {
   test("keep: B deleted, A pending with its own attempts and backoff", async () => {
     const { a } = await activeWithPending({ mode: "keep" })
     expect(await failA(a)).toBe("replaced-pending")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.runAt), r.payload])).toEqual([
       [a.id, "pending", 1, 32, "a"],
     ])
   })
 
   test("without a competitor: pending with its key, run_at = not_before = now + backoff", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", now: T(0) })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     expect(await failA(a)).toBe("retry")
-    const row = only(await jobs(schema.conn.query))
+    const row = only(await jobs(testSchema.conn.query))
     expect([
       row.state,
       row.key,
@@ -144,9 +149,9 @@ describe("last attempt and terminal error", () => {
   })
 
   test("a pending job of the key in another scope is no competitor: A retries with its key, B unchanged", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", scope: "a", key: "k", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-    const b = await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", scope: "a", key: "k", now: T(0) })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+    const b = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       scope: "b",
       key: "k",
@@ -154,7 +159,7 @@ describe("last attempt and terminal error", () => {
       now: T(1),
     })
     expect(await failA(a)).toBe("retry")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.scope, r.state, r.key, secondsOf(r.runAt)])).toEqual([
       [a.id, "a", "pending", "k", 32],
       [b.id, "b", "pending", "k", 20],
@@ -162,67 +167,84 @@ describe("last attempt and terminal error", () => {
   })
 
   test("fail with a stale claim: fenced, and the row does not change", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", now: T(0) })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     expect(await failA({ ...a, claimId: "0" })).toBe("fenced")
-    expect((await jobs(schema.conn.query))[0]!.state).toBe("active")
+    expect((await jobs(testSchema.conn.query))[0]!.state).toBe("active")
   })
 })
 
 describe("merge policy is read from the rows, not from the caller", () => {
   test("A enqueued as replace, B as keep (newer producer code): B's mode applies", async () => {
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "a",
       mode: "replace",
       now: T(0),
     })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-    await enqueue(schema.conn, schema.table, {
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "b",
       mode: "keep",
       now: T(1),
     })
-    expect(await fail(schema.db, a, { error: "boom", backoff: 30, now: T(2) })).toBe(
+    expect(await fail(testSchema.db, a, { error: "boom", backoff: 30, now: T(2) })).toBe(
       "replaced-pending",
     )
-    expect((await jobs(schema.conn.query)).map(r => [r.id, r.payload])).toEqual([[a.id, "a"]])
+    expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.payload])).toEqual([[a.id, "a"]])
   })
 
   test("A enqueued as keep, B as replace: B's mode applies", async () => {
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "a",
       mode: "keep",
       now: T(0),
     })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-    const b = await enqueue(schema.conn, schema.table, {
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+    const b = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "b",
       mode: "replace",
       now: T(1),
     })
-    expect(await fail(schema.db, a, { error: "boom", backoff: 30, now: T(2) })).toBe("superseded")
-    expect((await jobs(schema.conn.query)).map(r => r.id)).toEqual([b.id])
+    expect(await fail(testSchema.db, a, { error: "boom", backoff: 30, now: T(2) })).toBe(
+      "superseded",
+    )
+    expect((await jobs(testSchema.conn.query)).map(r => r.id)).toEqual([b.id])
   })
 
   test("the last enqueue sets key_mode of the pending row", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", mode: "replace", now: T(0) })
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", mode: "keep", now: T(1) })
-    expect((await jobs(schema.conn.query))[0]!.keyMode).toBe("keep")
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      mode: "replace",
+      now: T(0),
+    })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      mode: "keep",
+      now: T(1),
+    })
+    expect((await jobs(testSchema.conn.query))[0]!.keyMode).toBe("keep")
   })
 })
 
 describe("uniqueness of pending keys during a retry", () => {
   async function retrying() {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     await failA(a)
     return a
   }
@@ -231,7 +253,7 @@ describe("uniqueness of pending keys during a retry", () => {
   test("keep during a retry merges into the retried row", async () => {
     const a = await retrying()
     expect(
-      await enqueue(schema.conn, schema.table, {
+      await enqueue(testSchema.conn, testSchema.table, {
         task: "t",
         key: "k",
         payload: "b",
@@ -239,32 +261,37 @@ describe("uniqueness of pending keys during a retry", () => {
         now: T(3),
       }),
     ).toEqual({ id: a.id, created: false })
-    expect((await jobs(schema.conn.query)).map(r => [r.payload, secondsOf(r.runAt)])).toEqual([
+    expect((await jobs(testSchema.conn.query)).map(r => [r.payload, secondsOf(r.runAt)])).toEqual([
       ["a", 32],
     ])
   })
 
   test("replace during a retry changes the payload, keeps run_at at or after not_before, and keeps attempts", async () => {
     const a = await retrying()
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "b", now: T(3) })
-    const row = only(await jobs(schema.conn.query))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "b",
+      now: T(3),
+    })
+    const row = only(await jobs(testSchema.conn.query))
     expect([row.id, row.payload, secondsOf(row.runAt), row.attempts]).toEqual([a.id, "b", 32, 1])
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "c",
       runAt: T(50),
       now: T(4),
     })
-    expect(secondsOf(only(await jobs(schema.conn.query)).runAt)).toBe(50)
+    expect(secondsOf(only(await jobs(testSchema.conn.query)).runAt)).toBe(50)
   })
 
   test("20 concurrent producers during a retry: one pending row, created by none", async () => {
     const a = await retrying()
-    const conns = await Promise.all(Array.from({ length: 20 }, () => schema.connect()))
+    const conns = await Promise.all(Array.from({ length: 20 }, () => testSchema.connect()))
     const results = await Promise.all(
       conns.map((c, i) =>
-        enqueue(c, schema.table, {
+        enqueue(c, testSchema.table, {
           task: "t",
           key: "k",
           payload: i,
@@ -274,26 +301,33 @@ describe("uniqueness of pending keys during a retry", () => {
       ),
     )
     expect(results.every(r => r.id === a.id && !r.created)).toBe(true)
-    expect(await jobs(schema.conn.query)).toHaveLength(1)
+    expect(await jobs(testSchema.conn.query)).toHaveLength(1)
   })
 })
 
 describe("attempt budget", () => {
   test("max_attempts 3: three failures make the job failed; replace events between retries do not reset attempts", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", maxAttempts: 3, now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      maxAttempts: 3,
+      now: T(0),
+    })
     const outcomes = []
     for (let i = 0; i < 3; i++) {
       for (let e = 0; e < 5; e++)
-        await enqueue(schema.conn, schema.table, {
+        await enqueue(testSchema.conn, testSchema.table, {
           task: "t",
           key: "k",
           maxAttempts: 3,
           now: T(100 * i + e),
         })
-      const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(100 * i + 50) }))
+      const a = only(
+        await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(100 * i + 50) }),
+      )
       expect(a.job.attempts).toBe(i + 1)
       outcomes.push(
-        await fail(schema.db, a, {
+        await fail(testSchema.db, a, {
           error: `e${i}`,
           backoff: 1,
           now: T(100 * i + 50),
@@ -301,25 +335,35 @@ describe("attempt budget", () => {
       )
     }
     expect(outcomes).toEqual(["retry", "retry", "failed"])
-    expect((await jobs(schema.conn.query)).map(r => [r.state, r.attempts, r.lastError])).toEqual([
-      ["failed", 3, "e2"],
-    ])
+    expect(
+      (await jobs(testSchema.conn.query)).map(r => [r.state, r.attempts, r.lastError]),
+    ).toEqual([["failed", 3, "e2"]])
   })
 
   test("superseding does not move attempts: B starts its own budget from zero", async () => {
     const { a, b } = await activeWithPending({ maxAttempts: 2 })
     expect(await failA(a)).toBe("superseded")
-    const claimB = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(20) }))
+    const claimB = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(20) }))
     expect([claimB.id, claimB.job.attempts]).toEqual([b.id, 1])
   })
 
   test("replace lowered max_attempts below the spent attempts: the claim still runs one more attempt", async () => {
     // Accepted behavior: a claim does not filter attempts >= max_attempts, otherwise the row would stay pending forever.
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", maxAttempts: 5, now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      maxAttempts: 5,
+      now: T(0),
+    })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     await failA(a, { backoff: 0 })
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", maxAttempts: 1, now: T(3) })
-    const again = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(3) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      maxAttempts: 1,
+      now: T(3),
+    })
+    const again = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(3) }))
     expect([again.job.attempts, again.job.maxAttempts]).toEqual([2, 1])
     expect(await failA(again, { now: T(4) })).toBe("failed")
   })
@@ -327,16 +371,21 @@ describe("attempt budget", () => {
 
 describe("requeue", () => {
   const requeueA = (a: Claim, o: Parameters<typeof requeue>[2] = {}) =>
-    requeue(schema.db, a, { now: T(2), ...o })
+    requeue(testSchema.db, a, { now: T(2), ...o })
 
   test("on its last attempt: pending at once with the attempt given back and the error of the latest failure", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", maxAttempts: 2, now: T(0) })
-    const first = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      maxAttempts: 2,
+      now: T(0),
+    })
+    const first = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     await failA(first, { backoff: 0, now: T(0) })
-    const last = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(1) }))
+    const last = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(1) }))
     expect(last.job.attempts).toBe(2)
     expect(await requeueA(last)).toBe("requeued")
-    const row = only(await jobs(schema.conn.query))
+    const row = only(await jobs(testSchema.conn.query))
     expect([
       row.state,
       row.key,
@@ -351,7 +400,7 @@ describe("requeue", () => {
   test("keep: B deleted, A pending with the attempt given back", async () => {
     const { a } = await activeWithPending({ mode: "keep" })
     expect(await requeueA(a)).toBe("replaced-pending")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.state, r.attempts, secondsOf(r.runAt), r.payload])).toEqual([
       [a.id, "pending", 0, 2, "a"],
     ])
@@ -360,17 +409,22 @@ describe("requeue", () => {
   test("replace on the last attempt of A: A deleted as superseded, B unchanged", async () => {
     const { a, b } = await activeWithPending({ maxAttempts: 1 })
     expect(await requeueA(a)).toBe("superseded")
-    const rows = await jobs(schema.conn.query)
+    const rows = await jobs(testSchema.conn.query)
     expect(rows.map(r => [r.id, r.attempts, secondsOf(r.runAt)])).toEqual([[b.id, 0, 20]])
   })
 
   test("a producer commits B between the competitor check and the update: 23505, and the retry merges", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     const stats = { uniqueViolations: 0 }
     let once = false
     const outcome = await requeue(
-      schema.db,
+      testSchema.db,
       a,
       {
         now: T(2),
@@ -378,7 +432,7 @@ describe("requeue", () => {
           afterCompetitorCheck: async () => {
             if (once) return
             once = true
-            await enqueue(schema.conn, schema.table, {
+            await enqueue(testSchema.conn, testSchema.table, {
               task: "t",
               key: "k",
               payload: "b",
@@ -390,25 +444,32 @@ describe("requeue", () => {
       stats,
     )
     expect([outcome, stats.uniqueViolations]).toEqual(["superseded", 1])
-    expect((await jobs(schema.conn.query)).map(r => r.payload)).toEqual(["b"])
+    expect((await jobs(testSchema.conn.query)).map(r => r.payload)).toEqual(["b"])
   })
 
   test("with a stale claim: fenced, and the row does not change", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", now: T(0) })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     expect(await requeueA({ ...a, claimId: "0" })).toBe("fenced")
-    expect((await jobs(schema.conn.query)).map(r => [r.state, r.attempts])).toEqual([["active", 1]])
+    expect((await jobs(testSchema.conn.query)).map(r => [r.state, r.attempts])).toEqual([
+      ["active", 1],
+    ])
   })
 })
 
 describe("races of the return to pending with enqueues", () => {
   test("a producer commits B between the competitor check and the update: 23505, and the retry merges", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     const stats = { uniqueViolations: 0 }
     let once = false
     const outcome = await fail(
-      schema.db,
+      testSchema.db,
       a,
       {
         error: "boom",
@@ -418,7 +479,7 @@ describe("races of the return to pending with enqueues", () => {
           afterCompetitorCheck: async () => {
             if (once) return
             once = true
-            await enqueue(schema.conn, schema.table, {
+            await enqueue(testSchema.conn, testSchema.table, {
               task: "t",
               key: "k",
               payload: "b",
@@ -430,34 +491,41 @@ describe("races of the return to pending with enqueues", () => {
       stats,
     )
     expect([outcome, stats.uniqueViolations]).toEqual(["superseded", 1])
-    expect((await jobs(schema.conn.query)).map(r => r.payload)).toEqual(["b"])
+    expect((await jobs(testSchema.conn.query)).map(r => r.payload)).toEqual(["b"])
   })
 
   for (const end of ["commit", "rollback"] as const) {
     test(`an uncommitted insert of B blocks the update of A; producer ${end}`, async () => {
-      await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
+      await enqueue(testSchema.conn, testSchema.table, {
+        task: "t",
+        key: "k",
+        payload: "a",
+        now: T(0),
+      })
       // A pool of one connection, so that the backend of the fail transaction is known.
-      const worker = schema.createDriver({ max: 1 })
+      const worker = testSchema.createDriver({ max: 1 })
       const workerPid = await getBackendPid(worker)
-      const producer = await schema.connect()
-      const a = only(await claimPlain(schema.db.$queryOn(worker), { ...W, limit: 1, now: T(0) }))
+      const producer = await testSchema.connect()
+      const a = only(
+        await claimPlain(testSchema.db.$queryOn(worker), { ...W, limit: 1, now: T(0) }),
+      )
       await producer.query`begin`
-      await enqueue(producer, schema.table, { task: "t", key: "k", payload: "b", now: T(1) })
+      await enqueue(producer, testSchema.table, { task: "t", key: "k", payload: "b", now: T(1) })
       const stats = { uniqueViolations: 0 }
       const outcome = fail(
-        schema.createDb(worker),
+        testSchema.createDb(worker),
         a,
         { error: "boom", backoff: 30, now: T(2) },
         stats,
       )
-      await waitForLock(schema.conn, workerPid)
+      await waitForLock(testSchema.conn, workerPid)
       await (end === "commit" ? producer.query`commit` : producer.query`rollback`)
       if (end === "commit") {
         expect([await outcome, stats.uniqueViolations]).toEqual(["superseded", 1])
-        expect((await jobs(schema.conn.query)).map(r => r.payload)).toEqual(["b"])
+        expect((await jobs(testSchema.conn.query)).map(r => r.payload)).toEqual(["b"])
       } else {
         expect([await outcome, stats.uniqueViolations]).toEqual(["retry", 0])
-        expect((await jobs(schema.conn.query)).map(r => [r.id, r.state])).toEqual([
+        expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state])).toEqual([
           [a.id, "pending"],
         ])
       }
@@ -465,37 +533,42 @@ describe("races of the return to pending with enqueues", () => {
   }
 
   test("a producer waits for the uncommitted return of A to pending and merges into A after the commit", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
-    const producer = await schema.connect()
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
+    const producer = await testSchema.connect()
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     let event: Promise<{ id: string; created: boolean }> | undefined
-    const outcome = await fail(schema.db, a, {
+    const outcome = await fail(testSchema.db, a, {
       error: "boom",
       backoff: 30,
       now: T(2),
       pause: {
         beforeCommit: async () => {
-          event = enqueue(producer, schema.table, {
+          event = enqueue(producer, testSchema.table, {
             task: "t",
             key: "k",
             payload: "b",
             runAt: T(3),
             now: T(3),
           })
-          await waitForLock(schema.conn, producer.pid)
+          await waitForLock(testSchema.conn, producer.pid)
         },
       },
     })
     expect(outcome).toBe("retry")
     expect(await event!).toEqual({ id: a.id, created: false })
-    const [row] = await jobs(schema.conn.query)
+    const [row] = await jobs(testSchema.conn.query)
     expect([row!.payload, row!.attempts, secondsOf(row!.runAt)]).toEqual(["b", 1, 32])
   })
 
   test("fail runs at READ COMMITTED, on which these races rely, also where the default isolation is higher", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", now: T(0) })
-    const a = only(await claimPlain(schema.conn.query, { ...W, limit: 1, now: T(0) }))
-    const serializable = schema.createDb({ defaultIsolation: "serializable" })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", now: T(0) })
+    const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+    const serializable = testSchema.createDb({ defaultIsolation: "serializable" })
     let isolation: string | null | undefined
     const outcome = await fail(serializable, a, {
       error: "boom",
@@ -515,7 +588,7 @@ describe("settlements of different handlers on one driver", () => {
   // The spike worker sent the statements of all its handlers through one connection, so a complete or a claim cycle that ran while a fail transaction of another handler was open became part of it and rolled back with it.
   const failRolledBackOnce = (a: Claim, during: () => Promise<void>) => {
     let once = false
-    return fail(schema.db, a, {
+    return fail(testSchema.db, a, {
       error: "boom",
       backoff: 30,
       now: T(1),
@@ -525,7 +598,7 @@ describe("settlements of different handlers on one driver", () => {
           once = true
           await during()
           // A producer commits a pending job of the key of A, so the return of A to pending fails with 23505 and its transaction rolls back.
-          await enqueue(schema.conn, schema.table, {
+          await enqueue(testSchema.conn, testSchema.table, {
             task: "t",
             key: "k",
             payload: "event",
@@ -537,14 +610,14 @@ describe("settlements of different handlers on one driver", () => {
   }
 
   test("a complete during the fail transaction of another handler stays applied when that transaction rolls back", async () => {
-    const keyed = await enqueue(schema.conn, schema.table, {
+    const keyed = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       payload: "a",
       now: T(0),
     })
-    await enqueue(schema.conn, schema.table, { task: "t", payload: "b", now: T(0) })
-    const claims = await claimPlain(schema.db.$queryOn(schema.driver), {
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", payload: "b", now: T(0) })
+    const claims = await claimPlain(testSchema.db.$queryOn(testSchema.driver), {
       ...W,
       limit: 2,
       now: T(0),
@@ -553,35 +626,40 @@ describe("settlements of different handlers on one driver", () => {
     const b = claims.find(c => c.id !== keyed.id)
     // A different handler starts its settlement outside the ambient fail transaction.
     const start = Promise.withResolvers<void>()
-    const completed = start.promise.then(() => complete(schema.db, b!))
+    const completed = start.promise.then(() => complete(testSchema.db, b!))
     const outcome = await failRolledBackOnce(a!, async () => {
       start.resolve()
       await completed
     })
     expect([await completed, outcome]).toEqual([true, "superseded"])
-    expect(await jobs(schema.conn.query, sql`id = ${b!.id}`)).toEqual([])
+    expect(await jobs(testSchema.conn.query, sql`id = ${b!.id}`)).toEqual([])
   })
 
   test("a claim cycle during the fail transaction of another handler stays applied when that transaction rolls back", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", payload: "a", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: "a",
+      now: T(0),
+    })
     const a = only(
-      await claimPlain(schema.db.$queryOn(schema.driver), { ...W, limit: 1, now: T(0) }),
+      await claimPlain(testSchema.db.$queryOn(testSchema.driver), { ...W, limit: 1, now: T(0) }),
     )
-    await enqueue(schema.conn, schema.table, { task: "t", payload: "c", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", payload: "c", now: T(0) })
     let claimed: string[] = []
     await failRolledBackOnce(a, async () => {
       claimed = (
-        await claimCycle(schema.db.$queryOn(schema.driver), { ...W, slots: 1, now: T(1) })
+        await claimCycle(testSchema.db.$queryOn(testSchema.driver), { ...W, slots: 1, now: T(1) })
       ).map(c => c.id)
     })
     expect(claimed).toHaveLength(1)
-    expect((await jobs(schema.conn.query, sql`id = ${claimed[0]!}`)).map(r => r.state)).toEqual([
-      "active",
-    ])
+    expect((await jobs(testSchema.conn.query, sql`id = ${claimed[0]!}`)).map(r => r.state)).toEqual(
+      ["active"],
+    )
   })
 })
 
-const terminate = (pid: number) => schema.conn.query`select pg_terminate_backend(${pid}::int)`
+const terminate = (pid: number) => testSchema.conn.query`select pg_terminate_backend(${pid}::int)`
 
 /** Counts the transactions that a driver starts. */
 function countingBegins(driver: Driver) {
@@ -599,14 +677,14 @@ function countingBegins(driver: Driver) {
       }
     },
   }
-  return { counter, db: schema.createDb(counted) }
+  return { counter, db: testSchema.createDb(counted) }
 }
 
 describe("connection loss in fail", () => {
   async function claimed() {
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", now: T(0) })
     return only(
-      await claimPlain(schema.conn.query, {
+      await claimPlain(testSchema.conn.query, {
         worker: "w",
         tasks: ["t"],
         limit: 1,
@@ -618,7 +696,7 @@ describe("connection loss in fail", () => {
 
   test("before COMMIT: TransactionConnectionError(commit), no retry, row rolled back and later reaped", async () => {
     const claim = await claimed()
-    const { counter, db } = countingBegins(schema.driver)
+    const { counter, db } = countingBegins(testSchema.driver)
     const err = await fail(db, claim, {
       error: "boom",
       backoff: 30,
@@ -628,14 +706,14 @@ describe("connection loss in fail", () => {
     expect(err).toBeInstanceOf(TransactionConnectionError)
     expect(err.phase).toBe("commit")
     expect(counter.begins).toBe(1)
-    expect((await jobs(schema.conn.query))[0]!.state).toBe("active")
-    expect(await reap(schema.conn.query, { now: T(11) })).toHaveLength(1)
+    expect((await jobs(testSchema.conn.query))[0]!.state).toBe("active")
+    expect(await reap(testSchema.conn.query, { now: T(11) })).toHaveLength(1)
   })
 
   test("mid-transaction: TransactionConnectionError(transaction), rollback failure does not mask it", async () => {
     const claim = await claimed()
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", now: T(1) })
-    const err = await fail(schema.db, claim, {
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", now: T(1) })
+    const err = await fail(testSchema.db, claim, {
       error: "boom",
       backoff: 30,
       now: T(2),
@@ -643,13 +721,13 @@ describe("connection loss in fail", () => {
     }).catch(e => e)
     expect(err).toBeInstanceOf(TransactionConnectionError)
     expect(err.phase).toBe("transaction")
-    expect((await jobs(schema.conn.query)).map(r => r.state)).toEqual(["active", "pending"])
+    expect((await jobs(testSchema.conn.query)).map(r => r.state)).toEqual(["active", "pending"])
   })
 
   test("unreachable server before BEGIN: TransactionConnectionError(begin)", async () => {
     const claim = await claimed()
-    const unreachable = createTestDriver("postgres://127.0.0.1:1/none", schema.name)
-    const err = await fail(schema.createDb(unreachable), claim, {
+    const unreachable = createTestDriver("postgres://127.0.0.1:1/none", testSchema.name)
+    const err = await fail(testSchema.createDb(unreachable), claim, {
       error: "boom",
       backoff: 30,
       now: T(2),

@@ -26,20 +26,20 @@ import { signalWindow } from "../shutdown"
 import { type Proxy, proxyTo } from "./proxy"
 import type { WorkerConfig } from "./worker"
 
-let schema: TestSchema
+let testSchema: TestSchema
 let dir: string
 const procs: Bun.Subprocess[] = []
 const proxies: Proxy[] = []
 
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
   dir = mkdtempSync(join(tmpdir(), "kern-jobs-faults-"))
 })
 afterEach(async () => {
   for (const p of procs.splice(0)) p.kill(9)
   await Promise.all(proxies.splice(0).map(p => p.close()))
   await sleep(100)
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 const DATABASE_URL = databaseUrl()
@@ -66,7 +66,7 @@ function spawnWorker(id: string, overrides: Partial<WorkerConfig> = {}) {
   const cfg: WorkerConfig = {
     id,
     role: "worker",
-    schemaName: schema.name,
+    schemaName: testSchema.name,
     mainUrl: DATABASE_URL,
     heartbeatUrl: DATABASE_URL,
     log: join(dir, `${id}.jsonl`),
@@ -109,15 +109,15 @@ function spawnWorker(id: string, overrides: Partial<WorkerConfig> = {}) {
   return { cfg, proc, events, waitFor, kill }
 }
 
-const row = async (id: string) => (await jobs(schema.conn.query, sql`id = ${id}`))[0]
+const row = async (id: string) => (await jobs(testSchema.conn.query, sql`id = ${id}`))[0]
 const backendAlive = async (pid: number) =>
-  (await schema.conn.query`select 1 from pg_stat_activity where pid = ${pid}`) > 0
+  (await testSchema.conn.query`select 1 from pg_stat_activity where pid = ${pid}`) > 0
 
 /** Reaps until the predicate holds for the row. */
 async function reapUntil(id: string, pred: (r: any) => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    await reap(schema.conn.query)
+    await reap(testSchema.conn.query)
     const r = await row(id)
     if (r && pred(r)) return r
     await sleep(100)
@@ -127,11 +127,11 @@ async function reapUntil(id: string, pred: (r: any) => boolean, timeoutMs = 5000
 
 describe("SIGKILL during claiming", () => {
   test("inside the claim statement, default settings: the orphaned backend commits the claim; the reaper recovers it", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t" })
-    const resume = await pauseAt(schema.conn, "claim_plain")
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
+    const resume = await pauseAt(testSchema.conn, "claim_plain")
     const a = spawnWorker("a", { pauses: ["claim_plain"], poolSize: 1 })
     const ready = await a.waitFor(e => e.ev === "ready")
-    await waitForLock(schema.conn, ready.mainPid)
+    await waitForLock(testSchema.conn, ready.mainPid)
     await a.kill()
     await resume()
     await sleep(200)
@@ -145,11 +145,11 @@ describe("SIGKILL during claiming", () => {
   }, 30_000)
 
   test("inside the claim statement, client_connection_check_interval 100 ms: the backend aborts, nothing is claimed", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t" })
-    const resume = await pauseAt(schema.conn, "claim_plain")
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
+    const resume = await pauseAt(testSchema.conn, "claim_plain")
     const a = spawnWorker("a", { pauses: ["claim_plain"], connectionCheckMs: 100, poolSize: 1 })
     const ready = await a.waitFor(e => e.ev === "ready")
-    await waitForLock(schema.conn, ready.mainPid)
+    await waitForLock(testSchema.conn, ready.mainPid)
     await a.kill()
     const deadline = Date.now() + 3000
     while ((await backendAlive(ready.mainPid)) && Date.now() < deadline) await sleep(50)
@@ -162,7 +162,7 @@ describe("SIGKILL during claiming", () => {
   }, 30_000)
 
   test("after the claim commit: the handler started and died; the reaper recovers; another worker completes", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t" })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     const a = spawnWorker("a", { pauseAt: "after-claim" })
     await a.waitFor(e => e.ev === "paused")
     await a.kill()
@@ -177,11 +177,11 @@ describe("SIGKILL during claiming", () => {
 
 describe("SIGKILL inside fail and reap", () => {
   test("mid-fail with the competitor locked: the transaction rolls back, both rows intact, competitor unlocked", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t", key: "k" })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k" })
     const gateFile = join(dir, "gate")
     const a = spawnWorker("a", { failAll: true, pauseAt: "mid-fail", handlerMs: 0, gateFile })
     await a.waitFor(e => e.ev === "start")
-    const b = await enqueue(schema.conn, schema.table, {
+    const b = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       key: "k",
       runAt: new Date(Date.now() + 3600_000),
@@ -192,7 +192,8 @@ describe("SIGKILL inside fail and reap", () => {
     await sleep(200)
     expect((await row(job.id))!.state).toBe("active")
     // The competitor is not locked any more.
-    await schema.conn.query`select id from ${workerSchema.job} where id = ${b.id} for update nowait`
+    await testSchema.conn
+      .query`select id from ${workerSchema.job} where id = ${b.id} for update nowait`
     const reaped = await reapUntil(job.id, r => r.state === "pending")
     expect([reaped.key, (await row(b.id))!.key]).toEqual([null, "k"])
   }, 30_000)
@@ -200,15 +201,15 @@ describe("SIGKILL inside fail and reap", () => {
   for (const check of [false, true]) {
     test(`mid-reap, connection check ${check ? "100 ms" : "off"}: all or nothing`, async () => {
       for (let i = 0; i < 20; i++)
-        await enqueue(schema.conn, schema.table, { task: "t", key: `k${i}` })
-      await claimPlain(schema.conn.query, {
+        await enqueue(testSchema.conn, testSchema.table, { task: "t", key: `k${i}` })
+      await claimPlain(testSchema.conn.query, {
         worker: "dead",
         tasks: ["t"],
         limit: 20,
         defaultLease: 0.1,
       })
       await sleep(200)
-      const resume = await pauseAt(schema.conn, "reap")
+      const resume = await pauseAt(testSchema.conn, "reap")
       const r = spawnWorker("reaper", {
         role: "reaper",
         pauses: ["reap"],
@@ -216,7 +217,7 @@ describe("SIGKILL inside fail and reap", () => {
         connectionCheckMs: check ? 100 : undefined,
       })
       const ready = await r.waitFor(e => e.ev === "ready")
-      await waitForLock(schema.conn, ready.mainPid)
+      await waitForLock(testSchema.conn, ready.mainPid)
       await r.kill()
       if (check) {
         const deadline = Date.now() + 3000
@@ -224,12 +225,12 @@ describe("SIGKILL inside fail and reap", () => {
       }
       await resume()
       await sleep(300)
-      const states = (await jobs(schema.conn.query)).map(x => x.state)
+      const states = (await jobs(testSchema.conn.query)).map(x => x.state)
       const pending = states.filter(s => s === "pending").length
       console.log(`mid-reap kill, check ${check}: ${pending} of 20 reaped by the dead reaper`)
       expect(pending).toBe(check ? 0 : 20)
-      await reap(schema.conn.query)
-      expect((await jobs(schema.conn.query)).every(x => x.state === "pending")).toBe(true)
+      await reap(testSchema.conn.query)
+      expect((await jobs(testSchema.conn.query)).every(x => x.state === "pending")).toBe(true)
     }, 30_000)
   }
 })
@@ -238,7 +239,7 @@ describe("connection cut at COMMIT of fail", () => {
   for (const mode of ["before", "after"] as const) {
     test(`cut ${mode} COMMIT reaches the server: the worker retries on a new connection`, async () => {
       const p = await proxy()
-      const job = await enqueue(schema.conn, schema.table, { task: "t" })
+      const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
       p.proxy.cutNext(/^\s*commit\b/i, mode)
       const a = spawnWorker("a", { mainUrl: p.url, failAll: true, backoff: 3600, handlerMs: 100 })
       const lost = await a.waitFor(e => e.ev === "settle-error")
@@ -257,7 +258,7 @@ describe("heartbeat on an independent connection", () => {
   for (const honorAbort of [true, false]) {
     test(`heartbeat connection lost, handler ${honorAbort ? "honors abort" : "ignores abort (zombie)"}`, async () => {
       const p = await proxy()
-      const job = await enqueue(schema.conn, schema.table, { task: "t", queue: "q" })
+      const job = await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q" })
       const a = spawnWorker("a", { heartbeatUrl: p.url, handlerMs: 3000, honorAbort })
       await a.waitFor(e => e.ev === "start")
       p.proxy.refuse = true
@@ -265,7 +266,7 @@ describe("heartbeat on an independent connection", () => {
       const b = spawnWorker("b", { handlerMs: 300 })
       const reaper = (async () => {
         for (let i = 0; i < 60; i++) {
-          await reap(schema.conn.query)
+          await reap(testSchema.conn.query)
           await sleep(100)
         }
       })()
@@ -304,18 +305,18 @@ describe("slots and heartbeats", () => {
   const far = () => new Date(Date.now() + 3600_000)
 
   test("a slot stays taken until its job is settled", async () => {
-    const a = await enqueue(schema.conn, schema.table, { task: "t", key: "k" })
+    const a = await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k" })
     const gateFile = join(dir, "gate")
     const w = spawnWorker("a", { slots: 1, failAll: true, handlerMs: 0, gateFile, lease: 2 })
     await w.waitFor(e => e.ev === "start" && e.id === a.id)
     // The pending job of the key, held by an open producer transaction, makes the fail of A wait.
-    await enqueue(schema.conn, schema.table, { task: "t", key: "k", runAt: far() })
-    const producer = await schema.connect()
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", runAt: far() })
+    const producer = await testSchema.connect()
     await producer.query`begin`
-    await enqueue(producer, schema.table, { task: "t", key: "k", runAt: far() })
-    const c = await enqueue(schema.conn, schema.table, { task: "t" })
+    await enqueue(producer, testSchema.table, { task: "t", key: "k", runAt: far() })
+    const c = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     writeFileSync(gateFile, "")
-    await waitForLockedStatement(schema.conn, toStatementLabel("settle:lock-competitor"))
+    await waitForLockedStatement(testSchema.conn, toStatementLabel("settle:lock-competitor"))
     await sleep(500)
     const startedEarly = w.events().some(e => e.ev === "start" && e.id === c.id)
     await producer.query`commit`
@@ -325,8 +326,8 @@ describe("slots and heartbeats", () => {
   }, 30_000)
 
   test("heartbeats run one at a time", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t" })
-    const resume = await pauseAt(schema.conn, "heartbeat")
+    await enqueue(testSchema.conn, testSchema.table, { task: "t" })
+    const resume = await pauseAt(testSchema.conn, "heartbeat")
     const w = spawnWorker("a", {
       heartbeatPauses: ["heartbeat"],
       handlerMs: 3000,
@@ -341,8 +342,8 @@ describe("slots and heartbeats", () => {
   }, 30_000)
 
   test("a worker whose heartbeat is stuck does not claim", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t" })
-    const resume = await pauseAt(schema.conn, "heartbeat")
+    await enqueue(testSchema.conn, testSchema.table, { task: "t" })
+    const resume = await pauseAt(testSchema.conn, "heartbeat")
     const w = spawnWorker("a", {
       heartbeatPauses: ["heartbeat"],
       handlerMs: 5000,
@@ -351,7 +352,7 @@ describe("slots and heartbeats", () => {
     })
     await w.waitFor(e => e.ev === "heartbeat")
     await sleep(300)
-    const late = await enqueue(schema.conn, schema.table, { task: "t" })
+    const late = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     await sleep(500)
     const claimed = w.events().some(e => e.ev === "start" && e.id === late.id)
     await resume()
@@ -360,17 +361,17 @@ describe("slots and heartbeats", () => {
   }, 30_000)
 
   test("a zombie of a reclaimed job keeps its slot and cannot settle the new claim", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t" })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     const w = spawnWorker("a", { slots: 2, handlerMs: 2500, honorAbort: false })
     const first = await w.waitFor(e => e.ev === "start" && e.id === job.id)
     // The reaper returns the job while its handler runs.
-    await schema.conn.query`begin`
-    await schema.conn.query`
+    await testSchema.conn.query`begin`
+    await testSchema.conn.query`
       update ${workerSchema.job} set lease_until = now() - interval '1 second' where id = ${job.id}`
-    await reap(schema.conn.query)
-    await schema.conn.query`commit`
+    await reap(testSchema.conn.query)
+    await testSchema.conn.query`commit`
     const second = await w.waitFor(e => e.ev === "start" && e.id === job.id && e.attempts === 2)
-    const other = await enqueue(schema.conn, schema.table, { task: "t" })
+    const other = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     await sleep(500)
     const otherEarly = w.events().some(e => e.ev === "start" && e.id === other.id)
     await w.waitFor(e => completed(job.id)(e) && e.claimId === second.claimId, 15_000)
@@ -384,12 +385,12 @@ describe("slots and heartbeats", () => {
 
 describe("long producer transaction", () => {
   test("holding a due row delays only that row; claim lag shows the delay", async () => {
-    const held = await enqueue(schema.conn, schema.table, { task: "t", key: "held" })
-    const producer = await schema.connect()
+    const held = await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "held" })
+    const producer = await testSchema.connect()
     await producer.query`begin`
-    await enqueue(producer, schema.table, { task: "t", key: "held", payload: "event" })
+    await enqueue(producer, testSchema.table, { task: "t", key: "held", payload: "event" })
     const a = spawnWorker("a")
-    const other = await enqueue(schema.conn, schema.table, { task: "t" })
+    const other = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     const otherStart = await a.waitFor(e => e.ev === "start" && e.id === other.id)
     await sleep(2000)
     expect(a.events().some(e => e.ev === "start" && e.id === held.id)).toBe(false)
@@ -405,7 +406,7 @@ describe("long producer transaction", () => {
 
 describe("stopOnSignals", () => {
   test("a handler that honors the abort: one stop for both signals, the process exits with 0, and the job returns without spending its last attempt", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t", maxAttempts: 1 })
     const abortGateFile = join(dir, "abort-gate")
     const a = spawnWorker("a", {
       handlerMs: 60_000,
@@ -431,7 +432,7 @@ describe("stopOnSignals", () => {
   }, 30_000)
 
   test("a signal once 2 s have passed since the first forces the stop: the process calls close and exits with 1, and the job on its last attempt fails once its lease expires", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t", maxAttempts: 1 })
     const a = spawnWorker("a", {
       handlerMs: 60_000,
       shutdown: { abortAfter: 60, timeout: 10 },
@@ -453,7 +454,7 @@ describe("stopOnSignals", () => {
   }, 30_000)
 
   test("a handler that ignores the abort: the process exits with 1 at the timeout, and the job returns after its lease with the attempt spent", async () => {
-    const job = await enqueue(schema.conn, schema.table, { task: "t" })
+    const job = await enqueue(testSchema.conn, testSchema.table, { task: "t" })
     const a = spawnWorker("a", {
       handlerMs: 60_000,
       honorAbort: false,
@@ -478,7 +479,7 @@ describe("fairness across processes under continuous inflow", () => {
     const stopAt = Date.now() + 5000
     while (Date.now() < stopAt) {
       // About 200 plain jobs/s and 400 queued jobs/s against a capacity of about 300 jobs/s.
-      await schema.conn.query`
+      await testSchema.conn.query`
         insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', q, '{}', now(), now(), now(), 25
         from unnest(array[null, null] || array(select 'q' || lpad(i::text, 2, '0') from generate_series(0, 19) i

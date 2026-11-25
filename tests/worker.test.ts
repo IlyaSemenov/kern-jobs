@@ -38,21 +38,21 @@ const renderPreview = defineTask("documents.renderPreview", {
 const syncAccount = defineTask("accounts.sync").withPayload<{ accountId: string }>()
 const importFeed = defineTask("feeds.import", { maxAttempts: 1 }).withPayload<{ feedId: string }>()
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /**
  * Returns the task, state, attempts, error, and seconds until the run time of the jobs of the test schema by id; the seconds are rounded to tens, so that the time that the test takes does not change them.
  */
 async function jobRows() {
-  const { rows } = await schema.pool.query(
+  const { rows } = await testSchema.pool.query(
     `select task, state, attempts, last_error, round(extract(epoch from run_at - now()), -1)::int as due
-     from "${schema.name}".job order by id`,
+     from "${testSchema.name}".job order by id`,
   )
   return rows.map(row => [row.task, row.state, row.attempts, row.last_error, row.due])
 }
@@ -70,7 +70,7 @@ for (const [name, createDriver] of drivers) {
       await driver.close()
     })
 
-    const createTestJobs = () => createJobs(() => schema.pool, { schemaName: schema.name })
+    const createTestJobs = () => createJobs(() => testSchema.pool, { schemaName: testSchema.name })
 
     /** Starts the worker of the test, which polls fast, with the reports of its `onError`. */
     function start(
@@ -80,7 +80,7 @@ for (const [name, createDriver] of drivers) {
       const reports: [unknown, WorkerErrorInfo][] = []
       worker = startWorker(o.driver ?? driver, {
         manifest,
-        schemaName: schema.name,
+        schemaName: testSchema.name,
         concurrency: o.concurrency,
         lease: o.lease,
         pollInterval: 0.02,

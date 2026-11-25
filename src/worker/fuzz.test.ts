@@ -34,16 +34,16 @@ import { type Proxy, proxyTo } from "./faults/proxy"
 import { startRuntime, type Worker, type WorkerTask } from "./runtime"
 import { terminateBackends } from "./test-harness"
 
-let schema: TestSchema
+let testSchema: TestSchema
 /** Stops the faults and the workers of the test and closes their connections before its schema is dropped, also after a test that failed or timed out. */
 let cleanUp: (() => Promise<void>) | undefined
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
   await cleanUp?.()
   cleanUp = undefined
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 const SEED = Number(process.env.FUZZ_SEED ?? 1)
@@ -101,13 +101,14 @@ function pause(ms: number, signal: AbortSignal | null): Promise<void> {
 
 test(`fuzz seed ${SEED}`, async () => {
   const random = createRandom(SEED)
-  const data = identifier(schema.name, "data")
-  const terminalLedger = identifier(schema.name, "terminal_ledger")
-  const failureLedger = identifier(schema.name, "failure_ledger")
-  await schema.conn.query`
+  const data = identifier(testSchema.name, "data")
+  const terminalLedger = identifier(testSchema.name, "terminal_ledger")
+  const failureLedger = identifier(testSchema.name, "failure_ledger")
+  await testSchema.conn.query`
     create table ${data} (key text primary key, version int not null default 0)`
-  await schema.conn.query`insert into ${data} (key) select unnest(${param(t.array(t.text), KEYS)})`
-  await createLedger(schema.conn, schema.name, schema.table.name)
+  await testSchema.conn
+    .query`insert into ${data} (key) select unnest(${param(t.array(t.text), KEYS)})`
+  await createLedger(testSchema.conn, testSchema.name, testSchema.table.name)
 
   const seen = new Map<string, number>()
   const stats = {
@@ -145,7 +146,7 @@ test(`fuzz seed ${SEED}`, async () => {
   let producing = false
   let faults = false
   const lost: { round: number; key: string; seen: number; version: number }[] = []
-  const producerConns = await Promise.all(Array.from({ length: 4 }, () => schema.connect()))
+  const producerConns = await Promise.all(Array.from({ length: 4 }, () => testSchema.connect()))
   // Failures named by the failure handlers that started, and failure jobs whose handler returned.
   const failureRuns = new Set<string>()
   const failureReturned = new Set<string>()
@@ -158,9 +159,9 @@ test(`fuzz seed ${SEED}`, async () => {
       await c.query`begin`
       if (doomed) {
         // A budget of one or two attempts, so that handlers and faults fail them for good.
-        await enqueue(c, schema.table, { task: "d", maxAttempts: random.int(1, 2) })
+        await enqueue(c, testSchema.table, { task: "d", maxAttempts: random.int(1, 2) })
       } else if (queued) {
-        await enqueue(c, schema.table, {
+        await enqueue(c, testSchema.table, {
           task: "q",
           queue: `q${random.int(0, 2)}`,
           maxAttempts: 50,
@@ -172,7 +173,7 @@ test(`fuzz seed ${SEED}`, async () => {
         const mode = modeOf(key)
         const runAt =
           mode === "debounce" ? null : new Date(Date.now() + (mode === "keep" ? 30 : 20))
-        await enqueue(c, schema.table, {
+        await enqueue(c, testSchema.table, {
           task: "t",
           key,
           mode,
@@ -212,9 +213,9 @@ test(`fuzz seed ${SEED}`, async () => {
       }
       try {
         const version = job.key
-          ? await queryOn(schema.driver)`select version from ${data} where key = ${job.key}`.get(
-              t.integer,
-            )
+          ? await queryOn(
+              testSchema.driver,
+            )`select version from ${data} where key = ${job.key}`.get(t.integer)
           : 0
         const long = faults && random.float() < 0.1
         await pause(long ? LEASE * 1400 : random.float() * 15, zombie ? null : signal)
@@ -303,11 +304,11 @@ test(`fuzz seed ${SEED}`, async () => {
   for (let i = 0; i < 4; i++) {
     const { proxy, url } = await proxyTo(databaseUrl())
     proxies.push(proxy)
-    const driver = createTestDriver(databaseUrl(), schema.name, {
+    const driver = createTestDriver(databaseUrl(), testSchema.name, {
       max: 5,
       applicationName: `w${i}`,
     })
-    const heartbeatSource = createTestDriver(url, schema.name, {
+    const heartbeatSource = createTestDriver(url, testSchema.name, {
       max: 1,
       applicationName: `w${i}-heartbeat`,
     })
@@ -316,7 +317,7 @@ test(`fuzz seed ${SEED}`, async () => {
       startRuntime({
         id: `w${i}`,
         driver,
-        table: schema.table,
+        table: testSchema.table,
         heartbeatSource,
         tasks: { t: task, q: task, d: doomedTask, [FAILURE_TASK]: failureTask },
         concurrency: 3,
@@ -339,9 +340,9 @@ test(`fuzz seed ${SEED}`, async () => {
       const w = random.int(0, 3)
       const roll = random.float()
       if (roll < 0.15) {
-        stats.terminated += await terminateBackends(schema.conn, `w${w}`)
+        stats.terminated += await terminateBackends(testSchema.conn, `w${w}`)
       } else if (roll < 0.3) {
-        stats.terminated += await terminateBackends(schema.conn, `w${w}-heartbeat`)
+        stats.terminated += await terminateBackends(testSchema.conn, `w${w}-heartbeat`)
       } else if (roll < 0.4) {
         const proxy = proxies[w]!
         if (proxy.refuse) continue
@@ -354,14 +355,14 @@ test(`fuzz seed ${SEED}`, async () => {
   })()
 
   const idle = async () =>
-    (await schema.conn.query`
+    (await testSchema.conn.query`
       select count(*)::int from ${workerSchema.job} where state in ('pending', 'active')`.get(
       t.integer,
     )) === 0
 
   /** Returns a JSON snapshot of the claims in flight, the states of the workers, and the unfinished jobs. */
   const describeDrain = async () => {
-    const jobs = await schema.conn.query`
+    const jobs = await testSchema.conn.query`
       select id, state, task, queue, key, attempts, claim_id, locked_by,
         (run_at - now())::text as run_in, (not_before - now())::text as not_before_in, (lease_until - now())::text as lease_left
       from ${workerSchema.job} where state in ('pending', 'active') order by id`.select({
@@ -414,7 +415,8 @@ test(`fuzz seed ${SEED}`, async () => {
       }
       await sleep(10)
     }
-    const finals = await schema.conn.query`select key, version from ${data} order by key`.select({
+    const finals = await testSchema.conn
+      .query`select key, version from ${data} order by key`.select({
       key: t.text,
       version: t.integer,
     })
@@ -429,7 +431,7 @@ test(`fuzz seed ${SEED}`, async () => {
   await Promise.all(workers.map(w => w.stop()))
   stats.queueDone = doneQueueIds.size
 
-  const ledger = await schema.conn.query`
+  const ledger = await testSchema.conn.query`
     select
       (select count(*) from ${terminalLedger})::int as terminal,
       (select count(*) from ${failureLedger})::int as failure,
@@ -443,7 +445,7 @@ test(`fuzz seed ${SEED}`, async () => {
   expect(stats.outcomes.error ?? 0).toBe(0)
   // Only doomed jobs and failure jobs that spent their budgets stay, as failed.
   expect(
-    await schema.conn.query`
+    await testSchema.conn.query`
       select task, state from ${workerSchema.job}
       where not (state = 'failed' and task in ('d', ${FAILURE_TASK})) order by id`.select({
       task: t.text,
@@ -455,7 +457,7 @@ test(`fuzz seed ${SEED}`, async () => {
   expect(ledger.terminal).toBe(stats.doomed)
   // Each committed failure for good of a claim with a stamp inserted exactly one failure job of that failure, and no failure job names another.
   expect(
-    await schema.conn.query`
+    await testSchema.conn.query`
       select t.claim_id, count(f.job_id)::int as failure_jobs
       from ${terminalLedger} t left join ${failureLedger} f on f.failure_id = t.claim_id
       group by t.claim_id having count(f.job_id) <> 1 or count(distinct t.job_id) <> 1 or count(*) <> count(f.job_id)`.select(
@@ -463,7 +465,7 @@ test(`fuzz seed ${SEED}`, async () => {
     ),
   ).toEqual([])
   expect(
-    await schema.conn.query`
+    await testSchema.conn.query`
       select f.failure_id from ${failureLedger} f
       where not exists (select from ${terminalLedger} t where t.claim_id = f.failure_id)`.pluck(
       t.bigintText,
@@ -471,7 +473,7 @@ test(`fuzz seed ${SEED}`, async () => {
   ).toEqual([])
   // The reason of a failure that the reaper recorded agrees with the error of the failed row.
   expect(
-    await schema.conn.query`
+    await testSchema.conn.query`
       select f.failure_id, f.reason, t.last_error from ${failureLedger} f
       join ${terminalLedger} t on t.claim_id = f.failure_id
       where (f.reason = 'lease-expired') <> (t.last_error = 'lease expired')`.select({
@@ -482,11 +484,11 @@ test(`fuzz seed ${SEED}`, async () => {
   ).toEqual([])
   // Each failure handler that ran named a committed failure.
   const committed = new Set(
-    await schema.conn.query`select claim_id from ${terminalLedger}`.pluck(t.bigintText),
+    await testSchema.conn.query`select claim_id from ${terminalLedger}`.pluck(t.bigintText),
   )
   expect([...failureRuns].filter(id => !committed.has(id))).toEqual([])
   // A failure job that is gone completed, which follows a handler of it that returned; any other failed for good by its own budget.
-  const gone = await schema.conn.query`
+  const gone = await testSchema.conn.query`
     select f.job_id from ${failureLedger} f
     where not exists (select from ${workerSchema.job} j where j.id = f.job_id)`.pluck(t.bigintText)
   expect(gone.filter(id => !failureReturned.has(id))).toEqual([])

@@ -52,17 +52,19 @@ const indexProduct = defineTask("search.indexProduct")
   .withPayload<{ productId: string; version: number }>()
   .withOptions(({ productId }) => ({ key: `product:${productId}`, keyMode: "keep" }))
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /** Returns the payloads of the jobs of the test schema in the order of their ids. */
 async function payloads() {
-  const { rows } = await schema.pool.query(`select payload from "${schema.name}".job order by id`)
+  const { rows } = await testSchema.pool.query(
+    `select payload from "${testSchema.name}".job order by id`,
+  )
   return rows.map(row => row.payload)
 }
 
@@ -76,7 +78,7 @@ for (const [name, createOrm] of orms) {
       await orm.close()
     })
 
-    const createTestJobs = () => createJobs(orm.jobsClient, { schemaName: schema.name })
+    const createTestJobs = () => createJobs(orm.jobsClient, { schemaName: testSchema.name })
 
     test("merges an enqueue outside a transaction into the pending job of its key", async () => {
       const jobs = createTestJobs()
@@ -129,7 +131,7 @@ describe("application on kern-orm", () => {
       const database = createDatabase({ driver })
       const db = bindSchema(defineSchema(), database)
       // A schema of its own, since the migrations of the test create it.
-      const schemaName = `${schema.name}_app`
+      const schemaName = `${testSchema.name}_app`
       try {
         const jobs = createJobs(db, { schemaName })
         await database.transaction(async () => {
@@ -154,7 +156,7 @@ describe("application on kern-orm", () => {
         }
       } finally {
         try {
-          await schema.pool.query(`drop schema if exists "${schemaName}" cascade`)
+          await testSchema.pool.query(`drop schema if exists "${schemaName}" cascade`)
         } finally {
           await database.close()
         }

@@ -35,38 +35,50 @@ import { complete } from "./settlement"
 import * as t from "./types"
 import { isUniqueViolation } from "./violation"
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 const W = (worker: string) => ({ worker, tasks: ["t"] })
 
 test("plain and queued claims have distinct statement labels", async () => {
-  const { target, labels } = recordLabels(schema.conn)
-  await claimPlain(schema.db.$queryOn(target), { ...W("a"), limit: 1, now: T(0) })
-  await claimQueued(schema.db.$queryOn(target), { ...W("a"), now: T(0) })
+  const { target, labels } = recordLabels(testSchema.conn)
+  await claimPlain(testSchema.db.$queryOn(target), { ...W("a"), limit: 1, now: T(0) })
+  await claimQueued(testSchema.db.$queryOn(target), { ...W("a"), now: T(0) })
   expect(labels).toEqual((["claim:plain", "claim:queued"] as const).map(toStatementLabel))
 })
 
 describe("tasks of the worker", () => {
   test("a worker claims only jobs of its tasks, and a queue starts its earliest job of them, also behind a job of another task", async () => {
-    const plainB = await enqueue(schema.conn, schema.table, { task: "b", now: T(0) })
+    const plainB = await enqueue(testSchema.conn, testSchema.table, { task: "b", now: T(0) })
     // A queue with jobs of task b only, which the scan visits first, must not end the claims of task a.
-    const onlyB = await enqueue(schema.conn, schema.table, { task: "b", queue: "p", now: T(0) })
-    const queuedB = await enqueue(schema.conn, schema.table, { task: "b", queue: "q", now: T(0) })
-    const plainA = await enqueue(schema.conn, schema.table, { task: "a", now: T(1) })
-    const queuedA = await enqueue(schema.conn, schema.table, { task: "a", queue: "q", now: T(1) })
-    const a = await claimCycle(schema.conn.query, {
+    const onlyB = await enqueue(testSchema.conn, testSchema.table, {
+      task: "b",
+      queue: "p",
+      now: T(0),
+    })
+    const queuedB = await enqueue(testSchema.conn, testSchema.table, {
+      task: "b",
+      queue: "q",
+      now: T(0),
+    })
+    const plainA = await enqueue(testSchema.conn, testSchema.table, { task: "a", now: T(1) })
+    const queuedA = await enqueue(testSchema.conn, testSchema.table, {
+      task: "a",
+      queue: "q",
+      now: T(1),
+    })
+    const a = await claimCycle(testSchema.conn.query, {
       worker: "a",
       tasks: ["a"],
       slots: 4,
       now: T(2),
     })
-    const b = await claimCycle(schema.conn.query, {
+    const b = await claimCycle(testSchema.conn.query, {
       worker: "b",
       tasks: ["b"],
       slots: 4,
@@ -77,15 +89,15 @@ describe("tasks of the worker", () => {
       [plainA.id, queuedA.id].sort(),
       [plainB.id, onlyB.id].sort(),
     ])
-    expect(only(await jobs(schema.conn.query, sql`id = ${queuedB.id}`)).state).toBe("pending")
+    expect(only(await jobs(testSchema.conn.query, sql`id = ${queuedB.id}`)).state).toBe("pending")
   })
 })
 
 describe("queue mutex", () => {
   test("two active jobs in one (scope, queue) are structurally impossible", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", now: T(0) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", now: T(0) })
-    const err = await schema.conn.query`
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
+    const err = await testSchema.conn.query`
       update ${workerSchema.job} set state = 'active', claim_id = id, lease_until = now()`.catch(
       e => e,
     )
@@ -95,14 +107,14 @@ describe("queue mutex", () => {
   // Graphile Worker ran jobs of one named queue concurrently with its batch fetch, `localQueue`: https://github.com/graphile/worker/issues/621
   test("one worker with 4 slots and 4 ready jobs of one queue: one active", async () => {
     for (let i = 0; i < 4; i++)
-      await enqueue(schema.conn, schema.table, { task: "t", queue: "q", now: T(i) })
-    const claims = await claimCycle(schema.conn.query, {
+      await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(i) })
+    const claims = await claimCycle(testSchema.conn.query, {
       ...W("w1"),
       slots: 4,
       now: T(10),
     })
     expect(claims).toHaveLength(1)
-    expect((await jobs(schema.conn.query)).map(r => r.state)).toEqual([
+    expect((await jobs(testSchema.conn.query)).map(r => r.state)).toEqual([
       "active",
       "pending",
       "pending",
@@ -111,10 +123,21 @@ describe("queue mutex", () => {
   })
 
   test("one queue name in different scopes is not serialized; jobs without a queue are claimed in a batch", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", scope: "a", now: T(0) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", scope: "b", now: T(0) })
-    for (let i = 0; i < 3; i++) await enqueue(schema.conn, schema.table, { task: "t", now: T(0) })
-    const claims = await claimCycle(schema.conn.query, {
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "q",
+      scope: "a",
+      now: T(0),
+    })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "q",
+      scope: "b",
+      now: T(0),
+    })
+    for (let i = 0; i < 3; i++)
+      await enqueue(testSchema.conn, testSchema.table, { task: "t", now: T(0) })
+    const claims = await claimCycle(testSchema.conn.query, {
       ...W("w1"),
       slots: 10,
       now: T(1),
@@ -125,20 +148,20 @@ describe("queue mutex", () => {
 
 describe("start order", () => {
   test("interleaving of A and B: a busy queue does not wait, and J2 starts only after J1 completes", async () => {
-    const j1 = await enqueue(schema.conn, schema.table, {
+    const j1 = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       payload: 1,
       now: T(1),
     })
-    const j2 = await enqueue(schema.conn, schema.table, {
+    const j2 = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       payload: 2,
       now: T(2),
     })
-    const a = await schema.connect()
-    const b = await schema.connect()
+    const a = await testSchema.connect()
+    const b = await testSchema.connect()
     await a.query`begin`
     const ra = await claimQueued(a.query, { ...W("a"), now: T(5) })
     expect(ra.kind === "job" && ra.claim.id).toBe(j1.id)
@@ -149,29 +172,29 @@ describe("start order", () => {
     await a.query`commit`
     expect((await claimQueued(b.query, { ...W("b"), now: T(5) })).kind).toBe("none")
     if (ra.kind !== "job") throw new Error()
-    expect(await complete(schema.db, ra.claim)).toBe(true)
+    expect(await complete(testSchema.db, ra.claim)).toBe(true)
     const rb2 = await claimQueued(b.query, { ...W("b"), now: T(5) })
     expect(rb2.kind === "job" && rb2.claim.id).toBe(j2.id)
   })
 
   test("a producer holds the head: the queue is skipped as busy, J2 is not claimed, and nothing waits", async () => {
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k1",
       payload: 1,
       now: T(1),
     })
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k2",
       payload: 2,
       now: T(2),
     })
-    const producer = await schema.connect()
+    const producer = await testSchema.connect()
     await producer.query`begin`
-    await enqueue(producer, schema.table, {
+    await enqueue(producer, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k1",
@@ -179,35 +202,35 @@ describe("start order", () => {
       runAt: T(1),
       now: T(3),
     })
-    const r = claimQueued(schema.conn.query, { ...W("a"), now: T(5) })
+    const r = claimQueued(testSchema.conn.query, { ...W("a"), now: T(5) })
     expect(await isPending(r, 300)).toBe(false)
     expect(await r).toEqual({ kind: "busy", queue: { scope: "", queue: "q" } })
-    expect(await claimCycle(schema.conn.query, { ...W("a"), slots: 4, now: T(5) })).toEqual([])
+    expect(await claimCycle(testSchema.conn.query, { ...W("a"), slots: 4, now: T(5) })).toEqual([])
     await producer.query`commit`
-    const claim = only(await claimCycle(schema.conn.query, { ...W("a"), slots: 4, now: T(5) }))
+    const claim = only(await claimCycle(testSchema.conn.query, { ...W("a"), slots: 4, now: T(5) }))
     expect(claim.job.payload).toBe(11)
   })
 
   test("a head that a producer moved after the claim snapshot does not start early", async () => {
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k1",
       payload: 1,
       now: T(1),
     })
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k2",
       payload: 2,
       now: T(2),
     })
-    const worker = await schema.connect({ pauses: ["claim_queue"] })
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    const worker = await testSchema.connect({ pauses: ["claim_queue"] })
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const claim = claimQueued(worker.query, { ...W("a"), now: T(5) })
-    await waitForLock(schema.conn, worker.pid)
-    await enqueue(schema.conn, schema.table, {
+    await waitForLock(testSchema.conn, worker.pid)
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k1",
@@ -221,13 +244,23 @@ describe("start order", () => {
 
   test("a head that a producer moved after the claim snapshot to a later time that is still due starts before a job that is now earlier", async () => {
     // Accepted behavior: the order is that of the claim snapshot, and the recheck of run_at rejects a head only when it is no longer due.
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", key: "k1", now: T(1) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", key: "k2", now: T(2) })
-    const worker = await schema.connect({ pauses: ["claim_queue"] })
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "q",
+      key: "k1",
+      now: T(1),
+    })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "q",
+      key: "k2",
+      now: T(2),
+    })
+    const worker = await testSchema.connect({ pauses: ["claim_queue"] })
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const claim = claimQueued(worker.query, { ...W("a"), now: T(5) })
-    await waitForLock(schema.conn, worker.pid)
-    await enqueue(schema.conn, schema.table, {
+    await waitForLock(testSchema.conn, worker.pid)
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k1",
@@ -237,21 +270,26 @@ describe("start order", () => {
     await resume()
     const r = await claim
     if (r.kind !== "job") throw new Error(`Expected a claimed job, got ${r.kind}`)
-    const claimed = only(await jobs(schema.conn.query, sql`id = ${r.claim.id}`))
+    const claimed = only(await jobs(testSchema.conn.query, sql`id = ${r.claim.id}`))
     expect([claimed.key, secondsOf(claimed.runAt)]).toEqual(["k1", 3])
-    expect((await jobs(schema.conn.query, sql`key = 'k2'`)).map(row => row.state)).toEqual([
+    expect((await jobs(testSchema.conn.query, sql`key = 'k2'`)).map(row => row.state)).toEqual([
       "pending",
     ])
   })
 
   test("a job that a producer inserted before the head after the claim snapshot starts after the head", async () => {
     // Accepted behavior: the order is that of the claim snapshot.
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", key: "k1", now: T(2) })
-    const worker = await schema.connect({ pauses: ["claim_queue"] })
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "q",
+      key: "k1",
+      now: T(2),
+    })
+    const worker = await testSchema.connect({ pauses: ["claim_queue"] })
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const claim = claimQueued(worker.query, { ...W("a"), now: T(5) })
-    await waitForLock(schema.conn, worker.pid)
-    await enqueue(schema.conn, schema.table, {
+    await waitForLock(testSchema.conn, worker.pid)
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k0",
@@ -261,19 +299,29 @@ describe("start order", () => {
     await resume()
     const r = await claim
     expect(r.kind === "job" && r.claim.job.key).toBe("k1")
-    expect((await jobs(schema.conn.query, sql`key = 'k0'`)).map(row => row.state)).toEqual([
+    expect((await jobs(testSchema.conn.query, sql`key = 'k0'`)).map(row => row.state)).toEqual([
       "pending",
     ])
   })
 
   test("a head that a producer moved to another queue after the claim snapshot does not start before the head of that queue", async () => {
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "a", key: "k1", now: T(2) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "b", key: "k0", now: T(1) })
-    const worker = await schema.connect({ pauses: ["claim_queue"] })
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "a",
+      key: "k1",
+      now: T(2),
+    })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      queue: "b",
+      key: "k0",
+      now: T(1),
+    })
+    const worker = await testSchema.connect({ pauses: ["claim_queue"] })
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const claim = claimQueued(worker.query, { ...W("a"), now: T(5) })
-    await waitForLock(schema.conn, worker.pid)
-    await enqueue(schema.conn, schema.table, {
+    await waitForLock(testSchema.conn, worker.pid)
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "b",
       key: "k1",
@@ -282,32 +330,32 @@ describe("start order", () => {
     })
     await resume()
     expect(await claim).toEqual({ kind: "busy", queue: { scope: "", queue: "a" } })
-    const next = await claimQueued(schema.conn.query, { ...W("a"), now: T(5) })
+    const next = await claimQueued(testSchema.conn.query, { ...W("a"), now: T(5) })
     expect(next.kind === "job" && next.claim.job.key).toBe("k0")
   })
 
   test("a stale snapshot claims J3 while J2 became the head and active at another worker: 23505, and the retry claims nothing", async () => {
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k2",
       runAt: T(100),
       now: T(0),
     })
-    const j3 = await enqueue(schema.conn, schema.table, {
+    const j3 = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k3",
       runAt: T(3),
       now: T(0),
     })
-    const b = await schema.connect({ pauses: ["claim_queue"] })
-    const c = await schema.connect()
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    const b = await testSchema.connect({ pauses: ["claim_queue"] })
+    const c = await testSchema.connect()
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const stale = claimQueued(b.query, { ...W("b"), now: T(5) })
-    await waitForLock(schema.conn, b.pid)
+    await waitForLock(testSchema.conn, b.pid)
     // A producer moves J2 before J3, and another worker claims J2 as the head.
-    await enqueue(schema.conn, schema.table, {
+    await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
       queue: "q",
       key: "k2",
@@ -321,7 +369,7 @@ describe("start order", () => {
     expect(isUniqueViolation(err, "job_active_queue_idx")).toBe(true)
     const stats: ClaimCycleStats = { uniqueViolations: 0, busy: 0 }
     expect(await claimCycle(b.query, { ...W("b"), slots: 1, now: T(5) }, stats)).toEqual([])
-    expect((await jobs(schema.conn.query, sql`id = ${j3.id}`))[0]!.state).toBe("pending")
+    expect((await jobs(testSchema.conn.query, sql`id = ${j3.id}`))[0]!.state).toBe("pending")
   })
 })
 
@@ -339,10 +387,10 @@ describe("stress", () => {
   test("8 workers × 4 slots, 1000 jobs in 10 queues and 500 without a queue", async () => {
     const queued = 1000
     const plain = 500
-    await schema.conn.query`
+    await testSchema.conn.query`
       insert into ${workerSchema.job} (task, queue, payload, run_at, window_started_at, created_at, max_attempts)
       select 't', 'q' || (i % 10), to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${queued}::int) i`
-    await schema.conn.query`
+    await testSchema.conn.query`
       insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
       select 't', to_jsonb(i), now(), now(), now(), 25 from generate_series(1, ${plain}::int) i`
     const order = new Map<string, number[]>()
@@ -373,7 +421,7 @@ describe("stress", () => {
     const started = performance.now()
     await Promise.all(
       Array.from({ length: 8 }, async (_, wi) => {
-        const run = serial(schema.createDb({ max: 1 }))
+        const run = serial(testSchema.createDb({ max: 1 }))
         const inflight = new Set<Promise<void>>()
         const claimState = createClaimState()
         while (done < queued + plain) {
@@ -382,7 +430,7 @@ describe("stress", () => {
             free > 0
               ? await run(db =>
                   claimCycle(
-                    schema.db.$queryOn(db.$database),
+                    testSchema.db.$queryOn(db.$database),
                     { worker: `w${wi}`, tasks: ["t"], slots: free },
                     stats,
                     claimState,
@@ -421,7 +469,7 @@ describe("stress", () => {
     expect(completed.size).toBe(queued + plain)
     expect([...completed.values()].every(n => n === 1)).toBe(true)
     expect(plainMax).toBeGreaterThan(4)
-    expect(await jobs(schema.conn.query)).toEqual([])
+    expect(await jobs(testSchema.conn.query)).toEqual([])
   }, 60_000)
 })
 
@@ -445,11 +493,11 @@ async function simulate(o: {
     const now = T(step)
     const work = o.inflow(step)
     for (let i = 0; i < work.plain; i++)
-      await enqueue(schema.conn, schema.table, { task: "t", now })
+      await enqueue(testSchema.conn, testSchema.table, { task: "t", now })
     for (const q of work.queues)
-      await enqueue(schema.conn, schema.table, { task: "t", queue: queueName(q), now })
+      await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: queueName(q), now })
     const claims = await claimCycle(
-      schema.conn.query,
+      testSchema.conn.query,
       { worker: "w", tasks: ["t"], slots: o.slots, now },
       undefined,
       state,
@@ -460,7 +508,7 @@ async function simulate(o: {
         perQueue.set(c.job.queue, (perQueue.get(c.job.queue) ?? 0) + 1)
         maxWait.set(c.job.queue, Math.max(maxWait.get(c.job.queue) ?? 0, c.lag))
       } else plain++
-      await complete(schema.db, c)
+      await complete(testSchema.db, c)
     }
   }
   return { plain, queued, perQueue, maxWait }
@@ -519,15 +567,20 @@ describe("queue references", () => {
   test("U+001F in a queue name keeps the round-robin order", async () => {
     for (const queue of ["a\x1fb", "c"])
       for (let i = 0; i < 2; i++)
-        await enqueue(schema.conn, schema.table, { task: "t", queue, now: T(i) })
+        await enqueue(testSchema.conn, testSchema.table, { task: "t", queue, now: T(i) })
     const state = createClaimState()
     const order: (string | null)[] = []
     for (let i = 0; i < 4; i++) {
       const claim = only(
-        await claimCycle(schema.conn.query, { ...W("w"), slots: 1, now: T(5) }, undefined, state),
+        await claimCycle(
+          testSchema.conn.query,
+          { ...W("w"), slots: 1, now: T(5) },
+          undefined,
+          state,
+        ),
       )
       order.push(claim.job.queue)
-      await complete(schema.db, claim)
+      await complete(testSchema.db, claim)
     }
     expect(order).toEqual(["a\x1fb", "c", "a\x1fb", "c"])
   })
@@ -535,10 +588,10 @@ describe("queue references", () => {
 
 describe("an interrupted claim cycle", () => {
   test("a connection lost in the queue phase keeps the claims of the plain phase", async () => {
-    const plain = await enqueue(schema.conn, schema.table, { task: "t", now: T(0) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", now: T(0) })
-    const worker = await schema.connect({ pauses: ["claim_queue"] })
-    const resume = await pauseAt(schema.conn, "claim_queue")
+    const plain = await enqueue(testSchema.conn, testSchema.table, { task: "t", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
+    const worker = await testSchema.connect({ pauses: ["claim_queue"] })
+    const resume = await pauseAt(testSchema.conn, "claim_queue")
     const received: Claim[] = []
     const cycle = claimCycle(worker.query, {
       ...W("w"),
@@ -546,24 +599,24 @@ describe("an interrupted claim cycle", () => {
       now: T(1),
       onClaim: claim => received.push(claim),
     })
-    await waitForLock(schema.conn, worker.pid)
-    await schema.conn.query`select pg_terminate_backend(${worker.pid}::int)`
+    await waitForLock(testSchema.conn, worker.pid)
+    await testSchema.conn.query`select pg_terminate_backend(${worker.pid}::int)`
     await expect(cycle).rejects.toBeInstanceOf(ConnectionError)
     await resume()
     expect(received.map(c => c.id)).toEqual([plain.id])
   })
 
   test("a cycle whose proceed check fails sends no further claim statement and keeps its claims", async () => {
-    const plain = await enqueue(schema.conn, schema.table, { task: "t", now: T(0) })
-    await enqueue(schema.conn, schema.table, { task: "t", queue: "q", now: T(0) })
+    const plain = await enqueue(testSchema.conn, testSchema.table, { task: "t", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", queue: "q", now: T(0) })
     let statements = 0
     const counting: StatementExecutor = {
       execute: statement => {
         statements++
-        return schema.conn.execute(statement)
+        return testSchema.conn.execute(statement)
       },
     }
-    const claims = await claimCycle(schema.db.$queryOn(counting), {
+    const claims = await claimCycle(testSchema.db.$queryOn(counting), {
       ...W("w"),
       slots: 2,
       now: T(1),
@@ -589,19 +642,27 @@ describe("advisory locks of claimQueued", () => {
     for (const plan of PLANS) {
       test(`${busy} busy of 60 queues, plan [${plan.map(setting => `${setting} = off`).join(", ") || "default"}]: one lock held`, async () => {
         for (let i = 0; i < 60; i++)
-          await enqueue(schema.conn, schema.table, { task: "t", queue: queueName(i), now: T(0) })
-        await schema.conn.query`
+          await enqueue(testSchema.conn, testSchema.table, {
+            task: "t",
+            queue: queueName(i),
+            now: T(0),
+          })
+        await testSchema.conn.query`
           update ${workerSchema.job} set state = 'active', claim_id = id, lease_until = ${T(3600)}
           where queue < ${queueName(busy)}`
         for (let i = 0; i < busy; i++)
-          await enqueue(schema.conn, schema.table, { task: "t", queue: queueName(i), now: T(0) })
-        await schema.conn.query`analyze ${workerSchema.job}`
-        const c = await schema.connect()
+          await enqueue(testSchema.conn, testSchema.table, {
+            task: "t",
+            queue: queueName(i),
+            now: T(0),
+          })
+        await testSchema.conn.query`analyze ${workerSchema.job}`
+        const c = await testSchema.connect()
         for (const setting of plan) await c.query`select set_config(${setting}, 'off', false)`
         // An explicit transaction keeps xact locks until commit, which makes extra locks observable.
         await c.query`begin`
         const r = await claimQueued(c.query, { worker: "w", tasks: ["t"], now: T(1) })
-        const locks = await schema.conn.query`
+        const locks = await testSchema.conn.query`
           select count(*)::int from pg_locks where pid = ${c.pid} and locktype = 'advisory'`.get(
           t.integer,
         )

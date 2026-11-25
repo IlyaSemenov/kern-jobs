@@ -22,31 +22,31 @@ import type { KeptLease } from "./heartbeat"
 import { monotonicNow } from "./loop"
 import { settle, type SettleOptions } from "./settle"
 
-let schema: TestSchema
+let testSchema: TestSchema
 const proxies: Proxy[] = []
 const drivers: Driver[] = []
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
   await Promise.all(drivers.splice(0).map(d => d.close()))
   await Promise.all(proxies.splice(0).map(p => p.close()))
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /** Pool of the test schema through a proxy. */
 async function proxied(): Promise<{ proxy: Proxy; driver: Driver }> {
   const { proxy, url } = await proxyTo(databaseUrl())
   proxies.push(proxy)
-  const driver = createTestDriver(url, schema.name, { max: 2 })
+  const driver = createTestDriver(url, testSchema.name, { max: 2 })
   drivers.push(driver)
   return { proxy, driver }
 }
 
 async function claimJob(): Promise<Claim> {
-  await enqueue(schema.conn, schema.table, { task: "t" })
+  await enqueue(testSchema.conn, testSchema.table, { task: "t" })
   return only(
-    await claimPlain(schema.conn.query, {
+    await claimPlain(testSchema.conn.query, {
       worker: "w",
       tasks: ["t"],
       limit: 1,
@@ -76,7 +76,7 @@ async function run({
 }: Partial<Omit<SettleOptions, "db">> & Pick<SettleOptions, "claim"> & { driver: Driver }) {
   const events: WorkerEvent[] = []
   const outcome = await settle({
-    db: schema.createDb(driver),
+    db: testSchema.createDb(driver),
     lease: keptLease(o.claim),
     action: { type: "complete" },
     retryDelay: 0.01,
@@ -97,7 +97,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "completed" : "unknown",
       errors: 1,
     })
-    expect(await jobs(schema.conn.query)).toEqual([])
+    expect(await jobs(testSchema.conn.query)).toEqual([])
   })
 }
 
@@ -110,7 +110,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "retry" : "unknown",
       errors: 1,
     })
-    const row = only(await jobs(schema.conn.query))
+    const row = only(await jobs(testSchema.conn.query))
     expect([row.state, row.attempts, row.lastError]).toEqual(["pending", 1, "boom"])
   })
 }
@@ -118,9 +118,9 @@ for (const mode of ["before", "after"] as const) {
 for (const mode of ["before", "after"] as const) {
   test(`terminal fail of a claim stamped with a failure job cut ${mode} its COMMIT reaches the server: one failure job either way`, async () => {
     const { proxy, driver } = await proxied()
-    await enqueue(schema.conn, schema.table, { task: "t", maxAttempts: 1 })
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", maxAttempts: 1 })
     const claim = only(
-      await claimPlain(schema.conn.query, {
+      await claimPlain(testSchema.conn.query, {
         worker: "w",
         tasks: ["t"],
         limit: 1,
@@ -133,7 +133,7 @@ for (const mode of ["before", "after"] as const) {
       outcome: mode === "before" ? "failed" : "unknown",
       errors: 1,
     })
-    expect((await jobs(schema.conn.query)).map(r => [r.task, r.state])).toEqual([
+    expect((await jobs(testSchema.conn.query)).map(r => [r.task, r.state])).toEqual([
       ["t", "failed"],
       ["t:failure", "pending"],
     ])
@@ -143,12 +143,12 @@ for (const mode of ["before", "after"] as const) {
 test("a claim that a heartbeat found lost is not settled", async () => {
   const claim = await claimJob()
   expect(
-    await run({ driver: schema.driver, claim, lease: keptLease(claim, { lost: true }) }),
+    await run({ driver: testSchema.driver, claim, lease: keptLease(claim, { lost: true }) }),
   ).toEqual({
     outcome: "lost",
     errors: 0,
   })
-  expect(only(await jobs(schema.conn.query)).state).toBe("active")
+  expect(only(await jobs(testSchema.conn.query)).state).toBe("active")
 })
 
 for (const unsent of [true, false]) {
@@ -159,7 +159,7 @@ for (const unsent of [true, false]) {
     else proxy.cutNext(new RegExp(toStatementLabel("settle:complete")), "after")
     const events: WorkerEvent[] = []
     const outcome = await settle({
-      db: schema.createDb(driver),
+      db: testSchema.createDb(driver),
       claim,
       lease: keptLease(claim),
       // The transaction of fail reserves its connection first, which a refused connection leaves unsent.
@@ -173,32 +173,34 @@ for (const unsent of [true, false]) {
       unsent ? "stopped" : "unknown",
       ["settle-error"],
     ])
-    expect((await jobs(schema.conn.query)).map(row => row.state)).toEqual(unsent ? ["active"] : [])
+    expect((await jobs(testSchema.conn.query)).map(row => row.state)).toEqual(
+      unsent ? ["active"] : [],
+    )
   })
 }
 
 test("a statement that PostgreSQL keeps rejecting is given up after three retries", async () => {
   const claim = await claimJob()
   const rejecting: Driver = {
-    ...schema.driver,
+    ...testSchema.driver,
     execute: async statement => {
       if (statement.text.includes(toStatementLabel("settle:complete")))
         throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
-      return schema.driver.execute(statement)
+      return testSchema.driver.execute(statement)
     },
   }
   expect(await run({ driver: rejecting, claim })).toEqual({ outcome: "error", errors: 4 })
-  expect(only(await jobs(schema.conn.query)).state).toBe("active")
+  expect(only(await jobs(testSchema.conn.query)).state).toBe("active")
 })
 
 test("rejections after a statement of unknown outcome give up the settlement with the outcome unknown", async () => {
   const claim = await claimJob()
   let deletes = 0
   const driver: Driver = {
-    ...schema.driver,
+    ...testSchema.driver,
     execute: async statement => {
       if (!statement.text.includes(toStatementLabel("settle:complete")))
-        return schema.driver.execute(statement)
+        return testSchema.driver.execute(statement)
       if (deletes++ === 0) throw new ConnectionError("connection reset")
       throw new QueryError("canceling statement due to statement timeout", { code: "57014" })
     },
@@ -220,5 +222,5 @@ test("connection errors past the confirmed lease give up the settlement: abandon
   expect(result.outcome).toBe("abandoned")
   expect(result.errors).toBeGreaterThan(1)
   expect(monotonicNow() - started).toBeGreaterThanOrEqual(200)
-  expect(only(await jobs(schema.conn.query)).state).toBe("active")
+  expect(only(await jobs(testSchema.conn.query)).state).toBe("active")
 })

@@ -9,10 +9,10 @@ import { createTestSchema } from "../test-harness/database"
 import { jobMigrations } from "./migrations"
 
 test("every migration applies, rolls back to the structure before it, and applies again", async () => {
-  const schema = await createTestSchema()
+  const testSchema = await createTestSchema()
   try {
-    await verifyMigrations(schema.database, jobMigrations)
+    await verifyMigrations(testSchema.database, jobMigrations)
   } finally {
-    await schema.dispose()
+    await testSchema.dispose()
   }
 })

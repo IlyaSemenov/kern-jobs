@@ -14,19 +14,19 @@ import { enqueue } from "./enqueue"
 import { checkSchemaName } from "./job-table"
 
 test("the statements of the core run in a schema whose name needs quoting", async () => {
-  const schema = await createTestSchema()
-  const table = schema.unmigratedTable(`Kern "jobs" 'q'`)
+  const testSchema = await createTestSchema()
+  const table = testSchema.unmigratedTable(`Kern "jobs" 'q'`)
   try {
-    await migrate(schema.database, jobMigrations, { schemaName: table.schemaName })
-    const db = bindWorkerDb(schema.database, table.schemaName)
-    const { id } = await enqueue(schema.conn, table, { task: "t" })
+    await migrate(testSchema.database, jobMigrations, { schemaName: table.schemaName })
+    const db = bindWorkerDb(testSchema.database, table.schemaName)
+    const { id } = await enqueue(testSchema.conn, table, { task: "t" })
     const claim = only(
-      await claimPlain(db.$queryOn(schema.conn), { worker: "w", tasks: ["t"], limit: 1 }),
+      await claimPlain(db.$queryOn(testSchema.conn), { worker: "w", tasks: ["t"], limit: 1 }),
     )
     expect(claim.id).toBe(id)
     expect(await complete(db, claim)).toBe(true)
   } finally {
-    await schema.dispose()
+    await testSchema.dispose()
   }
 })
 
@@ -54,17 +54,17 @@ test("checkSchemaName counts the length of a name in bytes of UTF-8, up to 63, a
 })
 
 test("a name of 63 bytes in UTF-8 names its schema without truncation", async () => {
-  const schema = await createTestSchema()
+  const testSchema = await createTestSchema()
   // `unmigratedTable` prefixes the label with the name of the test schema and "_", which are ASCII.
-  const free = 63 - schema.name.length - 1
-  const table = schema.unmigratedTable("é".repeat(Math.floor(free / 2)) + "a".repeat(free % 2))
+  const free = 63 - testSchema.name.length - 1
+  const table = testSchema.unmigratedTable("é".repeat(Math.floor(free / 2)) + "a".repeat(free % 2))
   try {
     expect(new TextEncoder().encode(table.schemaName).length).toBe(63)
-    await migrate(schema.database, jobMigrations, { schemaName: table.schemaName })
+    await migrate(testSchema.database, jobMigrations, { schemaName: table.schemaName })
     expect(
-      await schema.database.query`select from pg_namespace where nspname = ${table.schemaName}`,
+      await testSchema.database.query`select from pg_namespace where nspname = ${table.schemaName}`,
     ).toBe(1)
   } finally {
-    await schema.dispose()
+    await testSchema.dispose()
   }
 })

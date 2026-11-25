@@ -141,17 +141,17 @@ const indexProduct = defineTask("search.indexProduct")
   .withPayload<{ productId: string; version: number }>()
   .withOptions(({ productId }) => ({ key: `product:${productId}`, keyMode: "keep" }))
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /** Marks a pending job of the test schema failed `age` seconds ago, as a worker does after the last attempt of the job. */
 const markFailed = (id: string, age = 0) =>
-  schema.conn.query`
+  testSchema.conn.query`
     update ${workerSchema.job} set state = 'failed', attempts = 1, last_error = 'boom',
       failed_at = now() - make_interval(secs => ${param(t.doublePrecision, age)})
     where id = ${id}`
@@ -166,11 +166,11 @@ for (const [name, createClient] of clients) {
       await client.close()
     })
 
-    const createTestJobs = () => createJobs(client.jobsClient, { schemaName: schema.name })
+    const createTestJobs = () => createJobs(client.jobsClient, { schemaName: testSchema.name })
 
     test("enqueues a job outside a transaction", async () => {
       const result = await createTestJobs().enqueue(sendEmail, { to: "a@example.com" })
-      const row = only(await jobRows(schema.conn.query))
+      const row = only(await jobRows(testSchema.conn.query))
       expect(result).toEqual({ id: row.id, created: true })
       expect([row.task, row.payload]).toEqual(["email.send", { to: "a@example.com" }])
     })
@@ -179,19 +179,19 @@ for (const [name, createClient] of clients) {
       const jobs = createTestJobs()
       await client.transaction(async () => {
         await jobs.enqueue(sendEmail, { to: "a@example.com" })
-        expect(await jobRows(schema.conn.query)).toEqual([])
+        expect(await jobRows(testSchema.conn.query)).toEqual([])
       })
-      expect(await jobRows(schema.conn.query)).toHaveLength(1)
+      expect(await jobRows(testSchema.conn.query)).toHaveLength(1)
     })
 
     test("enqueues in a transaction through the client of the transaction", async () => {
       await client.transaction(async tx => {
-        await createJobs(tx, { schemaName: schema.name }).enqueue(sendEmail, {
+        await createJobs(tx, { schemaName: testSchema.name }).enqueue(sendEmail, {
           to: "a@example.com",
         })
-        expect(await jobRows(schema.conn.query)).toEqual([])
+        expect(await jobRows(testSchema.conn.query)).toEqual([])
       })
-      expect(await jobRows(schema.conn.query)).toHaveLength(1)
+      expect(await jobRows(testSchema.conn.query)).toHaveLength(1)
     })
 
     test("a job enqueued in a transaction that rolls back never appears", async () => {
@@ -203,7 +203,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.conn.query)).toEqual([])
+      expect(await jobRows(testSchema.conn.query)).toEqual([])
     })
 
     test("merges an enqueue into the pending job of its key", async () => {
@@ -211,7 +211,7 @@ for (const [name, createClient] of clients) {
       const first = await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       const second = await jobs.enqueue(indexProduct, { productId: "42", version: 2 })
       expect(second).toEqual({ id: first.id, created: false })
-      expect(only(await jobRows(schema.conn.query)).payload).toEqual({
+      expect(only(await jobRows(testSchema.conn.query)).payload).toEqual({
         productId: "42",
         version: 1,
       })
@@ -226,9 +226,9 @@ for (const [name, createClient] of clients) {
           { productId: "43", version: 1 },
           { productId: "42", version: 2 },
         ])
-        expect(await jobRows(schema.conn.query)).toHaveLength(1)
+        expect(await jobRows(testSchema.conn.query)).toHaveLength(1)
       })
-      const rows = await jobRows(schema.conn.query)
+      const rows = await jobRows(testSchema.conn.query)
       expect(rows.map(row => row.key)).toEqual(["product:42", "product:43"])
       expect(results).toEqual([
         { id: rows[1]!.id, created: true },
@@ -245,7 +245,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.conn.query)).toEqual([])
+      expect(await jobRows(testSchema.conn.query)).toEqual([])
     })
 
     test("retries a failed job, reports a pending job of its key that keeps it from returning, and deletes a failed or pending job", async () => {
@@ -253,13 +253,13 @@ for (const [name, createClient] of clients) {
       const { id } = await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(id)
       expect(await jobs.retry(id)).toEqual({ retried: true })
-      expect(only(await jobRows(schema.conn.query)).state).toBe("pending")
+      expect(only(await jobRows(testSchema.conn.query)).state).toBe("pending")
       await markFailed(id)
       const { id: pending } = await jobs.enqueue(indexProduct, { productId: "42", version: 2 })
       expect(await jobs.retry(id)).toEqual({ retried: false, pendingId: pending })
       expect([await jobs.delete(id), await jobs.delete(pending)]).toEqual([true, true])
       expect([await jobs.retry(id), await jobs.delete(id)]).toEqual([null, false])
-      expect(await jobRows(schema.conn.query)).toEqual([])
+      expect(await jobRows(testSchema.conn.query)).toEqual([])
     })
 
     test("a retry and deletes in a transaction that rolls back change nothing", async () => {
@@ -270,7 +270,7 @@ for (const [name, createClient] of clients) {
       await jobs.enqueue(indexProduct, { productId: "42", version: 1 })
       await markFailed(retried)
       await markFailed(old, 60)
-      const before = await jobRows(schema.conn.query)
+      const before = await jobRows(testSchema.conn.query)
       const error = new Error("rollback")
       await expect(
         client.transaction(async () => {
@@ -281,7 +281,7 @@ for (const [name, createClient] of clients) {
           throw error
         }),
       ).rejects.toBe(error)
-      expect(await jobRows(schema.conn.query)).toEqual(before)
+      expect(await jobRows(testSchema.conn.query)).toEqual(before)
     })
   })
 }
@@ -576,14 +576,14 @@ describe("scope", () => {
   const indexProduct = defineTask("search.indexProduct", { scoped: true })
 
   /** Returns the scopes of the jobs of the test schema in the order of their ids. */
-  const scopes = async () => (await jobRows(schema.conn.query)).map(row => row.scope)
+  const scopes = async () => (await jobRows(testSchema.conn.query)).map(row => row.scope)
 
   test("writes the scope of createJobs, a string or what its function returns at the enqueue, to each job of a scoped task", async () => {
     // 128 bytes in UTF-8, the longest scope.
     const longest = "é".repeat(64)
-    await createJobs(pool, { schemaName: schema.name, scope: longest }).enqueue(indexProduct)
+    await createJobs(pool, { schemaName: testSchema.name, scope: longest }).enqueue(indexProduct)
     let tenant = "a"
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: () => tenant })
     await jobs.enqueue(indexProduct)
     tenant = "b"
     await jobs.enqueue(indexProduct)
@@ -597,7 +597,7 @@ describe("scope", () => {
       return "a"
     }
     for (const scope of ["a", tenant, ALL_SCOPES, null, undefined] as JobsOptions["scope"][]) {
-      await createJobs(pool, { schemaName: schema.name, scope }).enqueue(sendEmail, { to: "a" })
+      await createJobs(pool, { schemaName: testSchema.name, scope }).enqueue(sendEmail, { to: "a" })
     }
     expect([await scopes(), calls]).toEqual([["", "", "", "", ""], 0])
   })
@@ -609,7 +609,7 @@ describe("scope", () => {
         calls++
         return pool
       }
-      return createJobs(client, { schemaName: schema.name, scope }).enqueue(indexProduct)
+      return createJobs(client, { schemaName: testSchema.name, scope }).enqueue(indexProduct)
     }
     for (const scope of [undefined, null]) {
       await expect(enqueueIn(scope)).rejects.toThrow(
@@ -631,29 +631,29 @@ describe("scope", () => {
 
   test("retries and deletes only the jobs of the scope of createJobs, a string or what its function returns at the call, the jobs of every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
     const enqueueIn = (scope: string) =>
-      createJobs(pool, { schemaName: schema.name, scope }).enqueue(indexProduct)
+      createJobs(pool, { schemaName: testSchema.name, scope }).enqueue(indexProduct)
     const { id: failed } = await enqueueIn("a")
     const { id: pending } = await enqueueIn("b")
     await markFailed(failed)
-    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    const withoutScope = createJobs(pool, { schemaName: testSchema.name })
     const { id: unscoped } = await withoutScope.enqueue(sendEmail, { to: "a" })
     expect([await withoutScope.retry(failed), await withoutScope.delete(pending)]).toEqual([
       null,
       false,
     ])
     let tenant = "b"
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: () => tenant })
     expect([await jobs.retry(failed), await jobs.delete(failed)]).toEqual([null, false])
     tenant = "a"
     expect(await jobs.retry(failed)).toEqual({ retried: true })
-    expect(await createJobs(pool, { schemaName: schema.name, scope: "a" }).delete(pending)).toBe(
-      false,
-    )
+    expect(
+      await createJobs(pool, { schemaName: testSchema.name, scope: "a" }).delete(pending),
+    ).toBe(false)
     expect([await jobs.delete(unscoped), await withoutScope.delete(unscoped)]).toEqual([
       false,
       true,
     ])
-    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    const everyScope = createJobs(pool, { schemaName: testSchema.name, scope: ALL_SCOPES })
     await markFailed(failed)
     expect(await everyScope.retry(failed)).toEqual({ retried: true })
     expect([await everyScope.delete(failed), await everyScope.delete(pending)]).toEqual([
@@ -670,7 +670,7 @@ describe("scope", () => {
           calls++
           return pool
         },
-        { schemaName: schema.name, scope },
+        { schemaName: testSchema.name, scope },
       )
     const error = new Error("no request")
     const outsideRequest = jobsIn(() => {
@@ -693,7 +693,7 @@ describe("scope", () => {
 
   test("deletes the pending jobs of a scoped task, or of a key of it, in the scope of createJobs, and of a task that is not scoped in the empty scope", async () => {
     let tenant = "a"
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: () => tenant })
     await jobs.enqueue(indexProduct, undefined, { key: "k" })
     tenant = "b"
     await jobs.enqueue(indexProduct, undefined, { key: "k" })
@@ -710,11 +710,11 @@ describe("scope", () => {
   })
 
   test("deletes the pending jobs of a task that is not scoped without calling the function of the scope", async () => {
-    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    const withoutScope = createJobs(pool, { schemaName: testSchema.name })
     await withoutScope.enqueue(sendEmail, { to: "a" }, { key: "k" })
     await withoutScope.enqueue(sendEmail, { to: "a" })
     const outsideRequest = createJobs(pool, {
-      schemaName: schema.name,
+      schemaName: testSchema.name,
       scope: () => {
         throw new Error("no request")
       },
@@ -725,38 +725,38 @@ describe("scope", () => {
 
   test("deletes the pending jobs of every task in the scope of createJobs, a string or what its function returns at the call, in every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
     const enqueueIn = (scope: string) =>
-      createJobs(pool, { schemaName: schema.name, scope }).enqueue(indexProduct)
+      createJobs(pool, { schemaName: testSchema.name, scope }).enqueue(indexProduct)
     await enqueueIn("a")
     await enqueueIn("b")
     await enqueueIn("b")
-    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    const withoutScope = createJobs(pool, { schemaName: testSchema.name })
     await withoutScope.enqueue(sendEmail, { to: "a" })
     await enqueueIn("c")
     let tenant = "b"
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: () => tenant })
     expect(await jobs.deletePending()).toBe(2)
     expect(await scopes()).toEqual(["a", "", "c"])
     tenant = "d"
     expect(await jobs.deletePending()).toBe(0)
     expect(await withoutScope.deletePending()).toBe(1)
     expect(await scopes()).toEqual(["a", "c"])
-    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    const everyScope = createJobs(pool, { schemaName: testSchema.name, scope: ALL_SCOPES })
     expect(await everyScope.deletePending()).toBe(2)
     expect(await scopes()).toEqual([])
   })
 
   test("deletes the pending jobs of a scoped task, or of a key of it, in every scope with ALL_SCOPES, and of a task that is not scoped in the empty scope", async () => {
     for (const scope of ["a", "b"]) {
-      const jobs = createJobs(pool, { schemaName: schema.name, scope })
+      const jobs = createJobs(pool, { schemaName: testSchema.name, scope })
       await jobs.enqueue(indexProduct, undefined, { key: "k" })
       await jobs.enqueue(indexProduct, undefined, { key: "other" })
     }
-    await createJobs(pool, { schemaName: schema.name }).enqueue(sendEmail, { to: "a" })
+    await createJobs(pool, { schemaName: testSchema.name }).enqueue(sendEmail, { to: "a" })
     // A job of an earlier definition of the task that was scoped.
-    await createJobs(pool, { schemaName: schema.name, scope: "a" }).enqueue(
+    await createJobs(pool, { schemaName: testSchema.name, scope: "a" }).enqueue(
       defineTask("email.send", { scoped: true }),
     )
-    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    const everyScope = createJobs(pool, { schemaName: testSchema.name, scope: ALL_SCOPES })
     expect(await everyScope.deletePending({ task: indexProduct, key: "k" })).toBe(2)
     expect(await everyScope.deletePending({ task: indexProduct })).toBe(2)
     expect(await everyScope.deletePending({ task: sendEmail })).toBe(1)
@@ -765,7 +765,7 @@ describe("scope", () => {
 
   test("deletes the failed jobs of every task in the scope of createJobs, a string or what its function returns at the call, in every scope with ALL_SCOPES, and only the jobs without a scope when createJobs has none", async () => {
     const failIn = async (scope: string, age = 0) => {
-      const { id } = await createJobs(pool, { schemaName: schema.name, scope }).enqueue(
+      const { id } = await createJobs(pool, { schemaName: testSchema.name, scope }).enqueue(
         indexProduct,
       )
       await markFailed(id, age)
@@ -773,11 +773,11 @@ describe("scope", () => {
     await failIn("a")
     await failIn("b", 60)
     await failIn("b")
-    const withoutScope = createJobs(pool, { schemaName: schema.name })
+    const withoutScope = createJobs(pool, { schemaName: testSchema.name })
     await markFailed((await withoutScope.enqueue(sendEmail, { to: "a" })).id)
     await failIn("c")
     let tenant = "b"
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: () => tenant })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: () => tenant })
     expect(await jobs.deleteFailed({ olderThan: 30 })).toBe(1)
     expect(await jobs.deleteFailed()).toBe(1)
     expect(await scopes()).toEqual(["a", "", "c"])
@@ -785,14 +785,14 @@ describe("scope", () => {
     expect(await jobs.deleteFailed()).toBe(0)
     expect(await withoutScope.deleteFailed()).toBe(1)
     expect(await scopes()).toEqual(["a", "c"])
-    const everyScope = createJobs(pool, { schemaName: schema.name, scope: ALL_SCOPES })
+    const everyScope = createJobs(pool, { schemaName: testSchema.name, scope: ALL_SCOPES })
     expect(await everyScope.deleteFailed()).toBe(2)
     expect(await scopes()).toEqual([])
   })
 
   test("deletes the failed jobs of a scoped task in the scope of createJobs or in every scope with ALL_SCOPES, and of a task that is not scoped in the empty scope without calling the function of the scope", async () => {
     const jobsIn = (scope?: JobsOptions["scope"]) =>
-      createJobs(pool, { schemaName: schema.name, scope })
+      createJobs(pool, { schemaName: testSchema.name, scope })
     for (const scope of ["a", "b"]) await markFailed((await jobsIn(scope).enqueue(indexProduct)).id)
     await markFailed((await jobsIn().enqueue(sendEmail, { to: "a" })).id)
     // A job of an earlier definition of the task that was scoped.
@@ -815,7 +815,7 @@ describe("scope", () => {
         calls++
         return pool
       },
-      { schemaName: schema.name },
+      { schemaName: testSchema.name },
     )
     const error = new TypeError("Task search.indexProduct is scoped: pass its scope to createJobs")
     for (const filter of [{ task: indexProduct }, { task: indexProduct, key: "k" }]) {
@@ -864,10 +864,10 @@ describe("options", () => {
       .withPayload<{ id: string }>()
       // A field given as undefined keeps the option of defineTask.
       .withOptions(({ id }) => ({ key: `k:${id}`, maxAttempts: id === "1" ? undefined : 4 }))
-    const jobs = createJobs(pool, { schemaName: schema.name })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
     await jobs.enqueue(task, { id: "1" })
     await jobs.enqueue(task, { id: "2" }, { key: null, delay: 0 })
-    const [first, second] = await jobRows(schema.conn.query)
+    const [first, second] = await jobRows(testSchema.conn.query)
     expect(first).toMatchObject({ key: "k:1", queue: "q", maxAttempts: 3 })
     expect(first!.runAt.getTime() - first!.createdAt.getTime()).toBe(5000)
     expect(second).toMatchObject({ key: null, queue: "q", maxAttempts: 4 })
@@ -877,13 +877,13 @@ describe("options", () => {
   test("key true merges the enqueues of the task in each scope under the empty key, which deletePending takes too", async () => {
     const task = defineTask("t", { scoped: true, key: true }).withPayload<number>()
     const other = defineTask("other", { scoped: true, key: true })
-    const jobs = createJobs(pool, { schemaName: schema.name, scope: "a" })
+    const jobs = createJobs(pool, { schemaName: testSchema.name, scope: "a" })
     const first = await jobs.enqueue(task, 1)
     expect(await jobs.enqueue(task, 2)).toEqual({ id: first.id, created: false })
     await jobs.enqueue(other)
-    await createJobs(pool, { schemaName: schema.name, scope: "b" }).enqueue(task, 3)
+    await createJobs(pool, { schemaName: testSchema.name, scope: "b" }).enqueue(task, 3)
     await jobs.enqueue(task, 4, { key: "k" })
-    const rows = await jobRows(schema.conn.query)
+    const rows = await jobRows(testSchema.conn.query)
     expect(rows.map(({ task, scope, key, payload }) => ({ task, scope, key, payload }))).toEqual([
       { task: "t", scope: "a", key: "", payload: 2 },
       { task: "other", scope: "a", key: "", payload: undefined },
@@ -891,14 +891,18 @@ describe("options", () => {
       { task: "t", scope: "a", key: "k", payload: 4 },
     ])
     expect(await jobs.deletePending({ task, key: true })).toBe(1)
-    expect((await jobRows(schema.conn.query)).map(row => row.payload)).toEqual([undefined, 3, 4])
+    expect((await jobRows(testSchema.conn.query)).map(row => row.payload)).toEqual([
+      undefined,
+      3,
+      4,
+    ])
   })
 
   test("debounces by the delay and maxWait of the task", async () => {
     const task = defineTask("t", { key: "k", keyMode: "debounce", delay: 2, maxWait: 10 })
-    const jobs = createJobs(pool, { schemaName: schema.name })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
     await jobs.enqueue(task)
-    const row = only(await jobRows(schema.conn.query))
+    const row = only(await jobRows(testSchema.conn.query))
     expect(row.keyMode).toBe("debounce")
     expect(row.runAt.getTime() - row.createdAt.getTime()).toBe(2000)
   })
@@ -910,7 +914,7 @@ describe("options", () => {
         calls++
         return pool
       },
-      { schemaName: schema.name },
+      { schemaName: testSchema.name },
     )
     await expect(jobs.enqueue(sendEmail, { to: "a" }, { maxAttempts: 0 })).rejects.toBeInstanceOf(
       RangeError,
@@ -925,7 +929,7 @@ describe("options", () => {
         calls++
         return pool
       },
-      { schemaName: schema.name },
+      { schemaName: testSchema.name },
     )
     const staticQueue = defineTask("t", { queue: "q\udc00" })
     const computedKey = defineTask("t")
@@ -958,7 +962,7 @@ describe("enqueueMany", () => {
         counts.client++
         return pool
       },
-      { schemaName: schema.name, ...options },
+      { schemaName: testSchema.name, ...options },
     )
     return { jobs, counts }
   }
@@ -967,10 +971,10 @@ describe("enqueueMany", () => {
     const task = defineTask("t", { maxAttempts: 3 })
       .withPayload<{ id: string }>()
       .withOptions(({ id }) => (id === "a" ? { key: `k:${id}` } : {}))
-    const jobs = createJobs(pool, { schemaName: schema.name })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
     await jobs.enqueueMany(task, [{ id: "a" }, { id: "b" }, { id: "c" }], { queue: "q" })
     expect(
-      (await jobRows(schema.conn.query)).map(({ key, queue, maxAttempts, payload }) => [
+      (await jobRows(testSchema.conn.query)).map(({ key, queue, maxAttempts, payload }) => [
         key,
         queue,
         maxAttempts,
@@ -984,10 +988,10 @@ describe("enqueueMany", () => {
   })
 
   test("enqueues a job for each hole of a sparse array, as for undefined", async () => {
-    const jobs = createJobs(pool, { schemaName: schema.name })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
     const results = await jobs.enqueueMany(defineTask("t"), new Array<void>(2))
     expect(results.map(r => r.created)).toEqual([true, true])
-    expect((await jobRows(schema.conn.query)).map(row => row.payload)).toEqual([
+    expect((await jobRows(testSchema.conn.query)).map(row => row.payload)).toEqual([
       undefined,
       undefined,
     ])
@@ -1017,7 +1021,7 @@ describe("enqueueMany", () => {
     )
     await expect(jobs.enqueueMany(task, ["a", 1n])).rejects.toThrow("BigInt")
     expect(counts.client).toBe(0)
-    expect(await jobRows(schema.conn.query)).toEqual([])
+    expect(await jobRows(testSchema.conn.query)).toEqual([])
   })
 
   test("resolves to no results for no payloads, after the checks of the name of the task, the overrides, and the scope, without calling withOptions or the client", async () => {
@@ -1049,11 +1053,11 @@ describe("enqueueMany", () => {
   test("calls the function of the scope once, and writes its scope to each job of a scoped task", async () => {
     let calls = 0
     const jobs = createJobs(pool, {
-      schemaName: schema.name,
+      schemaName: testSchema.name,
       scope: () => `tenant ${++calls}`,
     })
     await jobs.enqueueMany(defineTask("t", { scoped: true }).withPayload<number>(), [1, 2])
-    expect((await jobRows(schema.conn.query)).map(row => row.scope)).toEqual([
+    expect((await jobRows(testSchema.conn.query)).map(row => row.scope)).toEqual([
       "tenant 1",
       "tenant 1",
     ])

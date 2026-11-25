@@ -15,31 +15,32 @@ import { bindWorkerDb } from "../worker/db/db"
 import { checkJobSchema, migrateJobs, type MigrateJobsOptions } from "./migrate"
 import { jobMigrations, MIGRATION_TABLE } from "./migrations"
 
-let schema: TestSchema
+let testSchema: TestSchema
 /** Job table of a schema that the test migrates, beside the migrated schema of the test. */
 let table: JobTable
 beforeEach(async () => {
-  schema = await createTestSchema()
-  table = schema.unmigratedTable("target")
+  testSchema = await createTestSchema()
+  table = testSchema.unmigratedTable("target")
 })
-afterEach(() => schema.dispose())
+afterEach(() => testSchema.dispose())
 
 /** Returns the keys of the migrations of kern-jobs that a PostgreSQL schema has applied, in their order. */
 async function appliedKeys(name: string): Promise<readonly string[]> {
-  return (await getMigrationStatus(schema.database, jobMigrations, { schemaName: name })).applied
+  return (await getMigrationStatus(testSchema.database, jobMigrations, { schemaName: name }))
+    .applied
 }
 
 /** Tells whether a PostgreSQL schema exists. */
 async function schemaExists(name: string): Promise<boolean> {
-  return (await schema.database.query`select from pg_namespace where nspname = ${name}`) === 1
+  return (await testSchema.database.query`select from pg_namespace where nspname = ${name}`) === 1
 }
 
 describe("migrateJobs", () => {
   test("creates the schema with the job table over a driver", async () => {
-    await migrateJobs(schema.driver, { schemaName: table.schemaName })
-    const { id } = await enqueue(schema.conn, table, { task: "t" })
+    await migrateJobs(testSchema.driver, { schemaName: table.schemaName })
+    const { id } = await enqueue(testSchema.conn, table, { task: "t" })
     expect(
-      (await jobs(bindWorkerDb(schema.database, table.schemaName).$query)).map(job => job.id),
+      (await jobs(bindWorkerDb(testSchema.database, table.schemaName).$query)).map(job => job.id),
     ).toEqual([id])
     expect(await appliedKeys(table.schemaName)).toEqual([
       "0001_create_job",
@@ -52,9 +53,9 @@ describe("migrateJobs", () => {
 
   test("with a database, migrates in its transaction, which rolls the schema back", async () => {
     const rollback = new Error("rollback")
-    const outcome = schema.database.transaction(async () => {
-      await migrateJobs(schema.database, { schemaName: table.schemaName })
-      await enqueue(schema.database, table, { task: "t" })
+    const outcome = testSchema.database.transaction(async () => {
+      await migrateJobs(testSchema.database, { schemaName: table.schemaName })
+      await enqueue(testSchema.database, table, { task: "t" })
       throw rollback
     })
     await expect(outcome).rejects.toBe(rollback)
@@ -62,7 +63,7 @@ describe("migrateJobs", () => {
   })
 
   test("with a Db of kern-orm, migrates the schema of kern-jobs rather than the schema of the Db", async () => {
-    const db = bindSchema(defineSchema(), schema.database, { schemaName: schema.name })
+    const db = bindSchema(defineSchema(), testSchema.database, { schemaName: testSchema.name })
     await migrateJobs(db, { schemaName: table.schemaName })
     expect(await appliedKeys(table.schemaName)).toEqual([
       "0001_create_job",
@@ -100,11 +101,11 @@ describe("migrateJobs", () => {
 
 describe("checkJobSchema", () => {
   test("rejects a schema that lacks migrations with an error that names migrateJobs, and passes it once migrated", async () => {
-    await expect(checkJobSchema(schema.database, table.schemaName)).rejects.toThrow(
+    await expect(checkJobSchema(testSchema.database, table.schemaName)).rejects.toThrow(
       `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary, 0004_failure_jobs, 0005_enqueue_function)`,
     )
-    await migrateJobs(schema.driver, { schemaName: table.schemaName })
-    await checkJobSchema(schema.database, table.schemaName)
+    await migrateJobs(testSchema.driver, { schemaName: table.schemaName })
+    await checkJobSchema(testSchema.database, table.schemaName)
   })
 
   test("passes a schema with migrations of a newer version, as during a rolling deploy", async () => {
@@ -119,7 +120,7 @@ describe("checkJobSchema", () => {
       },
       { tableName: MIGRATION_TABLE },
     )
-    await migrate(schema.database, newerMigrations, { schemaName: schema.name })
-    await checkJobSchema(schema.database, schema.name)
+    await migrate(testSchema.database, newerMigrations, { schemaName: testSchema.name })
+    await checkJobSchema(testSchema.database, testSchema.name)
   })
 })

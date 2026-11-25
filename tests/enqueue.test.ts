@@ -14,17 +14,17 @@ const indexProduct = defineTask("search.indexProduct")
   .withPayload<{ productId: string }>()
   .withOptions(({ productId }) => ({ key: `product:${productId}`, queue: "search" }))
 
-let schema: TestSchema
+let testSchema: TestSchema
 beforeEach(async () => {
-  schema = await createTestSchema()
+  testSchema = await createTestSchema()
 })
 afterEach(async () => {
-  await schema.dispose()
+  await testSchema.dispose()
 })
 
 /** Runs `fn` in a transaction on a client of the pool, which rolls back when `rollback` is set. */
 async function transaction(fn: (client: pg.PoolClient) => Promise<void>, rollback = false) {
-  const client = await schema.pool.connect()
+  const client = await testSchema.pool.connect()
   try {
     await client.query("begin")
     await fn(client)
@@ -36,16 +36,16 @@ async function transaction(fn: (client: pg.PoolClient) => Promise<void>, rollbac
 
 test("a job enqueued in a transaction of the application appears when it commits", async () => {
   let current: pg.PoolClient | undefined
-  const jobs = createJobs(() => current ?? schema.pool, { schemaName: schema.name })
-  const select = `select task, key, queue, payload from "${schema.name}".job`
+  const jobs = createJobs(() => current ?? testSchema.pool, { schemaName: testSchema.name })
+  const select = `select task, key, queue, payload from "${testSchema.name}".job`
   await transaction(async client => {
     current = client
     const { created } = await jobs.enqueue(indexProduct, { productId: "42" })
     current = undefined
     expect(created).toBe(true)
-    expect((await schema.pool.query(select)).rows).toEqual([])
+    expect((await testSchema.pool.query(select)).rows).toEqual([])
   })
-  expect((await schema.pool.query(select)).rows).toEqual([
+  expect((await testSchema.pool.query(select)).rows).toEqual([
     {
       task: "search.indexProduct",
       key: "product:42",
@@ -56,7 +56,7 @@ test("a job enqueued in a transaction of the application appears when it commits
 })
 
 test("migrateJobs and createJobs use the schema kern_jobs by default", async () => {
-  const database = createDatabase({ driver: nodePostgresDriver(schema.pool) })
+  const database = createDatabase({ driver: nodePostgresDriver(testSchema.pool) })
   const jobs = createJobs(database)
   // In a transaction of the database that rolls back, so the test leaves no schema behind.
   const rollback = new Error("rollback")

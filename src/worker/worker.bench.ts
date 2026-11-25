@@ -14,23 +14,23 @@ import { startRuntime } from "./runtime"
 
 const JOBS = 3000
 
-async function fill(schema: TestSchema, n: number) {
-  await schema.conn.query`
+async function fill(testSchema: TestSchema, n: number) {
+  await testSchema.conn.query`
     insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
     select 't', '{}', now(), now(), now(), 25 from generate_series(1, ${n}::int)`
 }
 
 async function runtimeThroughput(concurrency: number): Promise<number> {
-  const schema = await createTestSchema()
-  await fill(schema, JOBS)
-  const driver = schema.createDriver({ max: concurrency + 3 })
+  const testSchema = await createTestSchema()
+  await fill(testSchema, JOBS)
+  const driver = testSchema.createDriver({ max: concurrency + 3 })
   let settled = 0
   const done = Promise.withResolvers<void>()
   const started = performance.now()
   const worker = startRuntime({
     driver,
-    table: schema.table,
-    heartbeatSource: schema.createDriver({ max: 1 }),
+    table: testSchema.table,
+    heartbeatSource: testSchema.createDriver({ max: 1 }),
     tasks: { t: { handler() {} } },
     id: "bench",
     concurrency,
@@ -44,21 +44,21 @@ async function runtimeThroughput(concurrency: number): Promise<number> {
   await done.promise
   const ms = performance.now() - started
   await worker.stop()
-  await schema.dispose()
+  await testSchema.dispose()
   return (JOBS / ms) * 1000
 }
 
 async function bareThroughput(concurrency: number): Promise<number> {
-  const schema = await createTestSchema()
-  await fill(schema, JOBS)
-  const driver = schema.createDriver({ max: concurrency + 1 })
-  const db = schema.createDb(driver)
+  const testSchema = await createTestSchema()
+  await fill(testSchema, JOBS)
+  const driver = testSchema.createDriver({ max: concurrency + 1 })
+  const db = testSchema.createDb(driver)
   const state = createClaimState()
   let left = JOBS
   const started = performance.now()
   while (left > 0) {
     const claims = await claimCycle(
-      schema.db.$queryOn(driver),
+      testSchema.db.$queryOn(driver),
       { worker: "w", tasks: ["t"], slots: concurrency },
       undefined,
       state,
@@ -67,14 +67,14 @@ async function bareThroughput(concurrency: number): Promise<number> {
     left -= claims.length
   }
   const ms = performance.now() - started
-  await schema.dispose()
+  await testSchema.dispose()
   return (JOBS / ms) * 1000
 }
 
 async function heartbeatCost(claimsCount: number) {
-  const schema = await createTestSchema()
-  await fill(schema, claimsCount)
-  const claims = await claimPlain(schema.conn.query, {
+  const testSchema = await createTestSchema()
+  await fill(testSchema, claimsCount)
+  const claims = await claimPlain(testSchema.conn.query, {
     worker: "w",
     tasks: ["t"],
     limit: claimsCount,
@@ -88,9 +88,9 @@ async function heartbeatCost(claimsCount: number) {
     for (let i = 0; i < rounds; i++) await fn()
     return (performance.now() - t) / rounds
   }
-  const skipping = await time(() => heartbeat(schema.conn.query, { claims: refs }))
+  const skipping = await time(() => heartbeat(testSchema.conn.query, { claims: refs }))
   const plain = await time(() =>
-    schema.conn.query`
+    testSchema.conn.query`
         update ${workerSchema.job} j set lease_until = greatest(j.lease_until, now() + make_interval(secs => x.lease))
         from unnest(${param(
           t.array(t.bigintText),
@@ -105,7 +105,7 @@ async function heartbeatCost(claimsCount: number) {
         where j.id = x.id and j.claim_id = x.claim_id and j.state = 'active'
         returning j.claim_id`.pluck(t.bigintText),
   )
-  await schema.dispose()
+  await testSchema.dispose()
   return { skipping, plain }
 }
 

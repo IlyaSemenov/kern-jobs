@@ -80,12 +80,12 @@ const readEvents = (log: string): Event[] =>
 
 describe("reaper after a restart", () => {
   test("pg_ctl restart -m fast: the reaper reconnects and returns jobs that expire after the restart", async () => {
-    const schema: TestSchema = await createTestSchema(URL)
+    const testSchema: TestSchema = await createTestSchema(URL)
     const log = join(dir, "reaper.jsonl")
     const cfg: WorkerConfig = {
       id: "reaper",
       role: "reaper",
-      schemaName: schema.name,
+      schemaName: testSchema.name,
       mainUrl: URL,
       heartbeatUrl: URL,
       log,
@@ -111,11 +111,11 @@ describe("reaper after a restart", () => {
       // Jobs of a dead worker whose leases expire after the restart.
       await retrying(
         () =>
-          schema.db.$queryOn(schema.driver)`
+          testSchema.db.$queryOn(testSchema.driver)`
             insert into ${workerSchema.job} (task, payload, run_at, window_started_at, created_at, max_attempts)
             select 't', '{}', now(), now(), now(), 25 from generate_series(1, 5)`,
       )
-      const claims = await claimPlain(schema.db.$queryOn(schema.driver), {
+      const claims = await claimPlain(testSchema.db.$queryOn(testSchema.driver), {
         worker: "dead",
         tasks: ["t"],
         limit: 5,
@@ -125,7 +125,7 @@ describe("reaper after a restart", () => {
       const until = Date.now() + 10_000
       let pending = 0
       while (Date.now() < until) {
-        pending = await schema.db.$queryOn(schema.driver)`
+        pending = await testSchema.db.$queryOn(testSchema.driver)`
           select count(*)::int from ${workerSchema.job} where state = 'pending'`.get(t.integer)
         if (pending === 5) break
         await sleep(100)
@@ -139,7 +139,7 @@ describe("reaper after a restart", () => {
       expect(pending).toBe(5)
     } finally {
       proc.kill(9)
-      await schema.dispose()
+      await testSchema.dispose()
     }
   }, 30_000)
 })
@@ -147,23 +147,23 @@ describe("reaper after a restart", () => {
 describe("PostgreSQL restart under load", () => {
   for (const mode of ["fast", "immediate"] as const) {
     test(`pg_ctl restart -m ${mode}: every job completes, workers recover`, async () => {
-      const schema: TestSchema = await createTestSchema(URL)
-      await schema.conn.query`
+      const testSchema: TestSchema = await createTestSchema(URL)
+      await testSchema.conn.query`
         insert into ${workerSchema.job} (task, queue, key, payload, run_at, window_started_at, created_at, max_attempts)
         select 't', case when i % 3 = 0 then 'q' || (i % 5) end, case when i % 3 = 1 then 'k' || i end,
                to_jsonb(i), now(), now(), now(), 25
         from generate_series(1, 300) i`
       const ids = new Set(
-        await schema.conn.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
+        await testSchema.conn.query`select id from ${workerSchema.job}`.pluck(t.bigintText),
       )
-      const observer = schema.createDriver({ max: 2 })
+      const observer = testSchema.createDriver({ max: 2 })
 
       const logs = ["a", "b", "c"].map(id => join(dir, `${mode}-${id}.jsonl`))
       const procs = ["a", "b", "c"].map((id, i) => {
         const cfg: WorkerConfig = {
           id,
           role: "worker",
-          schemaName: schema.name,
+          schemaName: testSchema.name,
           mainUrl: URL,
           heartbeatUrl: URL,
           log: logs[i]!,
@@ -186,7 +186,7 @@ describe("PostgreSQL restart under load", () => {
       const reaper = (async () => {
         while (reaping) {
           try {
-            await reap(schema.db.$queryOn(observer))
+            await reap(testSchema.db.$queryOn(observer))
           } catch {}
           await sleep(200)
         }
@@ -198,8 +198,9 @@ describe("PostgreSQL restart under load", () => {
       const downMs = Date.now() - restartedAt
 
       const deadline = Date.now() + 60_000
-      while ((await countJobs(schema.db, observer)) > 0 && Date.now() < deadline) await sleep(200)
-      const left = await countJobs(schema.db, observer)
+      while ((await countJobs(testSchema.db, observer)) > 0 && Date.now() < deadline)
+        await sleep(200)
+      const left = await countJobs(testSchema.db, observer)
       reaping = false
       await reaper
       const alive = procs.every(p => p.exitCode == null)
@@ -230,7 +231,7 @@ describe("PostgreSQL restart under load", () => {
       expect(new Set([...completed, ...unknown])).toEqual(ids)
       expect(new Set(completed).size).toBe(completed.length)
       expect([...outcomes("error"), ...outcomes("abandoned")]).toEqual([])
-      await schema.dispose()
+      await testSchema.dispose()
     }, 90_000)
   }
 })

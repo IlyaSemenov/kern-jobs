@@ -281,7 +281,7 @@ export const unsafeInteger = 2n ** 53n + 1n
 /** Row of the job table with all its columns. */
 export type JobRow = Selectable<typeof job>
 
-/** Returns the job rows that match the condition `where` of the alias `j`, in the order of their ids, by a statement of `query`, a template of a `Db` of the worker ORM schema, such as `schema.conn.query`. */
+/** Returns the job rows that match the condition `where` of the alias `j`, in the order of their ids, by a statement of `query`, a template of a `Db` of the worker ORM schema, such as `testSchema.conn.query`. */
 export async function jobs(
   query: DbSqlQueryTemplate,
   where: SqlFragment = sql`true`,
