@@ -1,6 +1,6 @@
 {
   "name": "kern-jobs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Background jobs on PostgreSQL for TypeScript: typed tasks, transactional enqueue, keys, debounce, queues, and leases.",
   "homepage": "https://ilyasemenov.github.io/kern-jobs/",
   "bugs": "https://github.com/IlyaSemenov/kern-jobs/issues",
