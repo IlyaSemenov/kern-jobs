@@ -7,8 +7,10 @@ import { waitForLock } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
 import {
+  atTime,
   type Conn,
   createTestSchema,
+  idsOf,
   isPending,
   jobs,
   type TestSchema,
@@ -20,7 +22,7 @@ import * as t from "../worker/db/types"
 
 import { enqueue, type EnqueueParams } from "./enqueue"
 import type { JobTable } from "./job-table"
-import { encodeParam, type ValuesTarget } from "./statement"
+import { encodeParam } from "./statement"
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -93,12 +95,6 @@ async function rowsOf(scope: string) {
   })
 }
 
-/** Returns the ids of the rows of a scope in their order. */
-async function idsOf(scope: string): Promise<string[]> {
-  return await testSchema.conn.query`
-    select j.id from ${schema.job} j where scope = ${scope} order by j.id`.pluck(t.bigintText)
-}
-
 describe("the same jobs as the enqueue of the core", () => {
   /** Options of an enqueue in a step, those of the core without the task, the scope, and the time. */
   type Options = Omit<EnqueueParams, "task" | "scope" | "now">
@@ -133,29 +129,20 @@ describe("the same jobs as the enqueue of the core", () => {
     }
   }
 
-  /** Target of the statements of the core whose time, the `$1` parameter, is the given text, such as the time of a statement of the SQL function to the microsecond. */
-  function atTime(now: string): ValuesTarget {
-    return {
-      execute: statement =>
-        testSchema.conn.execute({
-          ...statement,
-          parameters: [now, ...statement.parameters.slice(1)],
-        }),
-    }
-  }
-
   /** Runs a step in both scopes and checks that they give the same result and the same rows. */
   async function runStep(step: Step): Promise<void> {
     if ("enqueue" in step) {
       const called = await callEnqueue(testSchema.conn, toSqlArgs(step.enqueue))
-      const core = await enqueue(atTime(called.now), testSchema.table, {
+      const core = await enqueue(atTime(testSchema.conn, called.now), testSchema.table, {
         task: "t",
         scope: "core",
         ...step.enqueue,
       })
       expect(called.created).toBe(core.created)
       // The rows of the two scopes match by their order, so each result is the row of the same position.
-      expect((await idsOf("sql")).indexOf(called.id)).toBe((await idsOf("core")).indexOf(core.id))
+      expect((await idsOf(testSchema.conn.query, "sql")).indexOf(called.id)).toBe(
+        (await idsOf(testSchema.conn.query, "core")).indexOf(core.id),
+      )
     } else if ("wait" in step) {
       const wait = param(t.doublePrecision, step.wait)
       await testSchema.conn.query`

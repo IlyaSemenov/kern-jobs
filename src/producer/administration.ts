@@ -36,6 +36,7 @@ export async function retryFailedJob(
   const rows = await queryValues(
     db,
     // One statement, since the client of the application gives no transaction of its own.
+    // The SQL function `retry` of the schema copies this statement, which `retry-function.test.ts` compares with it: a change of it needs a new migration that replaces the function.
     // The pending job of the key is locked, so that a claim that holds it is waited for and, once it commits, no longer conflicts; the unique index of pending keys still rejects one that the snapshot misses.
     // The run time, the window, and the absent backoff are those of a new enqueue; the other columns stay.
     labelSql(

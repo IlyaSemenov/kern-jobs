@@ -65,7 +65,7 @@ Module paths are relative to `src/`.
 - [Enqueue](enqueue.md): key modes, debounce, and the SQL function `enqueue`; `sql/enqueue.ts` and `migration/migrations/0005_enqueue_function.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, `limits.ts`, and `producer/`.
 - [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/` and `worker/db/schedule.ts`.
-- [Administration](administration.md): retry of failed jobs, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts`.
+- [Administration](administration.md): retry of failed jobs, also by the SQL function `retry`, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts` and `migration/migrations/0006_retry_function.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `worker/db/claim.ts`.
 - [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `worker/db/settlement.ts`.
 - [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `worker/db/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.

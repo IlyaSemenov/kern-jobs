@@ -46,6 +46,32 @@ A retry does not cancel the [failure job](../workers/failure-handlers) that the 
 An enqueue that adds a new pending job of its key and commits while `retry` runs can make it reject with the unique violation of your database client and change nothing.
 In a transaction, the error aborts the transaction: roll it back, and retry the job again.
 
+### Retry from SQL
+
+To retry a job where you have no `jobs`, such as in `psql`, call the function `retry` in the schema of kern-jobs:
+
+```sql
+select * from kern_jobs.retry(42)
+```
+
+It retries the job as `jobs.retry` does, in any scope, and returns a row with the columns `retried` and `pending_id`:
+
+- `true` and null when the job returned to pending;
+- `false` and the id of the pending job of its key when that job kept it from returning.
+
+It returns no row when no failed job has the id.
+
+To retry the failed jobs of a task once you have fixed the cause, call it for each of them in one statement:
+
+```sql
+select j.id, r.retried, r.pending_id
+from kern_jobs.job j
+cross join lateral kern_jobs.retry(j.id) r
+where j.state = 'failed' and j.task = 'email.send'
+```
+
+The calls retry the jobs one after another, so of the failed jobs of one key, at most one returns to pending, and a call that finds a pending job of the key returns its id as `pending_id`.
+
 ## Delete a job
 
 To give up a failed job, or to keep a pending one from running, delete it:
@@ -167,7 +193,7 @@ where state = 'failed' and failed_at < now() - interval '30 days'
 
 Never delete a running job, whose `state` is `'active'`: its handler runs on, the next job of its [queue](../tasks/queues) can start beside it, and its [`onFailure`](../workers/failure-handlers) does not run if it fails.
 
-Do not update the rows: retry a failed job through [`jobs.retry`](#retry-a-failed-job), which resets its attempts and run time together and keeps it from conflicting with the pending job of its key.
+Do not update the rows: retry a failed job through [`jobs.retry`](#retry-a-failed-job) or the [function `retry`](#retry-from-sql), which reset its attempts and run time together and keep it from conflicting with the pending job of its key.
 
 ## Jobs of a scope
 

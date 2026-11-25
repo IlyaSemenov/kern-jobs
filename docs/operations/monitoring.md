@@ -118,7 +118,7 @@ Later versions of kern-jobs only add columns to the view, so select the columns 
 A worker deletes a job when it completes, so the view does not count completed jobs.
 To count the errors of handlers as they happen, count the `handler` reports of [`onError`](#report-errors).
 
-Retry jobs through [`jobs.retry`](./managing-jobs#retry-a-failed-job).
+Retry jobs through [`jobs.retry`](./managing-jobs#retry-a-failed-job) or [from SQL](./managing-jobs#retry-from-sql).
 Delete jobs, including [old failed jobs](./managing-jobs#delete-failed-jobs), through `jobs` or [from SQL](./managing-jobs#delete-jobs-from-sql).
 
 ### Grant access to a monitoring role

@@ -16,6 +16,7 @@ export const jobMigrations = defineMigrations(
     "0003_job_summary": () => import("./migrations/0003_job_summary"),
     "0004_failure_jobs": () => import("./migrations/0004_failure_jobs"),
     "0005_enqueue_function": () => import("./migrations/0005_enqueue_function"),
+    "0006_retry_function": () => import("./migrations/0006_retry_function"),
   },
   { tableName: MIGRATION_TABLE },
 )

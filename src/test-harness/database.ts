@@ -24,8 +24,10 @@ import postgres from "postgres"
 import { jobMigrations } from "../migration/migrations"
 import { createJobTable, type JobTable } from "../sql/job-table"
 import { quoteIdentifier, replacePauseConditions } from "../sql/postgres"
+import type { ValuesTarget } from "../sql/statement"
 import { bindWorkerDb, schema, type WorkerDb } from "../worker/db/db"
 import { job } from "../worker/db/tables/job"
+import * as t from "../worker/db/types"
 
 /** Returns the URL of the test database. */
 export function databaseUrl(): string {
@@ -292,4 +294,18 @@ export async function jobs(
     job: columns,
   })
   return rows.map(row => row.job)
+}
+
+/** Returns the ids of the job rows of a scope in their order, by a statement of `query`, such as `testSchema.conn.query`. */
+export async function idsOf(query: DbSqlQueryTemplate, scope: string): Promise<string[]> {
+  return await query`
+    select j.id from ${schema.job} j where j.scope = ${scope} order by j.id`.pluck(t.bigintText)
+}
+
+/** Returns a target of the statements of the core on a connection whose time, the `$1` parameter, is the given text, such as the time of a statement of a SQL function of the schema to the microsecond. */
+export function atTime(conn: Pick<Conn, "execute">, now: string): ValuesTarget {
+  return {
+    execute: statement =>
+      conn.execute({ ...statement, parameters: [now, ...statement.parameters.slice(1)] }),
+  }
 }

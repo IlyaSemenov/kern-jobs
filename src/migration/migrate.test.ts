@@ -48,6 +48,7 @@ describe("migrateJobs", () => {
       "0003_job_summary",
       "0004_failure_jobs",
       "0005_enqueue_function",
+      "0006_retry_function",
     ])
   })
 
@@ -71,6 +72,7 @@ describe("migrateJobs", () => {
       "0003_job_summary",
       "0004_failure_jobs",
       "0005_enqueue_function",
+      "0006_retry_function",
     ])
   })
 
@@ -102,7 +104,7 @@ describe("migrateJobs", () => {
 describe("checkJobSchema", () => {
   test("rejects a schema that lacks migrations with an error that names migrateJobs, and passes it once migrated", async () => {
     await expect(checkJobSchema(testSchema.database, table.schemaName)).rejects.toThrow(
-      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary, 0004_failure_jobs, 0005_enqueue_function)`,
+      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary, 0004_failure_jobs, 0005_enqueue_function, 0006_retry_function)`,
     )
     await migrateJobs(testSchema.driver, { schemaName: table.schemaName })
     await checkJobSchema(testSchema.database, table.schemaName)
@@ -116,7 +118,8 @@ describe("checkJobSchema", () => {
         "0003_job_summary": () => import("./migrations/0003_job_summary"),
         "0004_failure_jobs": () => import("./migrations/0004_failure_jobs"),
         "0005_enqueue_function": () => import("./migrations/0005_enqueue_function"),
-        "0006_newer": { up: "select 1" },
+        "0006_retry_function": () => import("./migrations/0006_retry_function"),
+        "0007_newer": { up: "select 1" },
       },
       { tableName: MIGRATION_TABLE },
     )

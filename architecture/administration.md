@@ -5,7 +5,7 @@ None of them changes an active row, since the database cannot stop the handler o
 A failure job is an ordinary job of its failure task, which they reach as any job of that task, the `failure.task` of the implementation, and none of them changes a failure job by the job whose failure inserted it ([Failure jobs](failure-jobs.md#consequences-of-ordinary-jobs)).
 
 The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)).
-It deletes pending and failed jobs through `jobs` or by a statement of its own ([Delete from SQL](#delete-from-sql)), and must change the table otherwise only through `jobs` and the [SQL function](enqueue.md#sql-function) `enqueue`, since workers and enqueues rely on the rows that they write.
+It deletes pending and failed jobs through `jobs` or by a statement of its own ([Delete from SQL](#delete-from-sql)), and must change the table otherwise only through `jobs` and the SQL functions [`enqueue`](enqueue.md#sql-function) and [`retry`](#sql-function), since workers and enqueues rely on the rows that they write.
 
 ## Retry
 
@@ -24,6 +24,17 @@ The statement locks the failed row and the pending job of its key, and updates t
 - A second retry of the job waits for the first and finds the job no longer failed.
 
 A retried job is a pending job of its key like one that a producer inserts, so a fail that returns a job of the key to pending, or the reaper, which conflict with it, retry after `23505` as with a producer ([Settlement](settlement.md#fail), [Leases](leases.md#reaper)).
+
+### SQL function
+
+The function `retry` of the schema retries a failed job from SQL, such as from psql, by a copy of the statement of retry, and returns `retried` and `pending_id` as `OUT` parameters.
+
+- It takes the id of a job and no scope, and acts on a failed job of any scope, as `jobs` with `ALL_SCOPES` does.
+- It returns a row of `retried` true, or false with the id of the pending job of the key as `pending_id`, and no row when no failed job has the id.
+- Its time is `statement_timestamp()`, the start of the statement of the caller.
+- Each call runs its statement in the transaction of the caller, so the calls of one statement for the failed jobs of a query retry one after another, in an order that the plan of the query decides: of the failed jobs of a key, at most one returns to pending, and a call that finds a pending job of the key returns its id as `pending_id`.
+- Its body is a SQL-standard body, bound to the table at its creation, as that of [`enqueue`](enqueue.md#sql-function) is, so a call depends neither on the `search_path` of the caller nor on the name of the schema; it is `SECURITY INVOKER`, so it runs with the privileges of its caller.
+- The statement of the core and the function are two copies, which a test compares on the same jobs ([decision](../decisions/enqueue/sql-function-copies-the-statement.md)): a change of retry must come with a migration that replaces the function.
 
 ## Delete
 

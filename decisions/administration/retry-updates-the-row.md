@@ -18,8 +18,10 @@ A pending job of the key that a producer inserts after the snapshot of the state
 Deleting the failed row and inserting it again with its id, with `ON CONFLICT` on the unique index of pending keys, never fails with `23505`, since `ON CONFLICT` waits for such a job and takes it as the conflict.
 But `ON CONFLICT DO NOTHING` would still have deleted the failed row, so it fits only a retry that deletes the failed job when a pending job of its key exists, which [the retry does not do](retry-keeps-both-jobs.md); and the insert lists every column that it keeps, so a retry of the previous version of kern-jobs during a rolling deploy resets a column that a migration of the new version added.
 
-A function of the schema in PL/pgSQL could update the row in a block that catches the unique violation, and report the race as the conflict that it is, without aborting the transaction of the application.
-It adds a function to the schema, with its own history in the migrations and its versions during a rolling deploy, for a race of a manual operation.
+The SQL function `retry` of the schema could update the row in a block of PL/pgSQL that catches the unique violation, and report the race as the conflict that it is, without aborting the transaction of the caller.
+A PL/pgSQL body finds the table by the search path of its call rather than binding it at its creation ([decision](../enqueue/sql-function-binds-its-table.md)).
+For `jobs.retry` to report the race the same way, the core would call the function, which would take the time and the scope too.
+Arguments with defaults would add both to the signature that every caller of SQL sees, and keeping `retry(id)` as it is would take a second function of the schema with its own history in the migrations, for a race of a manual operation.
 
 A function over a driver of kern-db, as `migrateJobs` takes it, could run the retry in a transaction of its own and retry it after `23505`.
 It needs a new entry of the package, or the worker entry, and it cannot join the transaction of the application.
