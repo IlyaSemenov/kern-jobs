@@ -109,4 +109,8 @@ PostgreSQL may call a function in `FROM` whose arguments take no value of the ro
 
 Do not expand it as `(kern_jobs.enqueue(…)).*`, which PostgreSQL evaluates once for each column, enqueueing each job twice.
 
-The function runs with the privileges of the role that calls it, which needs `USAGE` on the schema of kern-jobs, `SELECT`, `INSERT`, and `UPDATE` on its table `job`, and `EXECUTE` on its functions `enqueue` and `check_enqueue`, which PostgreSQL grants to every role unless you revoked it.
+The function runs with the privileges of the role that calls it.
+Grant that role:
+
+- `INSERT` and `UPDATE` on the table `job`: an enqueue updates the pending job of its key that it merges into;
+- `EXECUTE` on the functions `enqueue` and `check_enqueue`, which `enqueue` calls, if you revoked `EXECUTE` on functions from `PUBLIC`.
