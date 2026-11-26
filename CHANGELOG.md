@@ -1,5 +1,15 @@
 # kern-jobs
 
+## 0.6.0
+
+### Minor Changes
+
+- 378b0b2: Add `BatchItemsError`, which a handler of a batch task throws with the indexes of its failed items, so that the job retries and fails for good with only those items.
+
+### Patch Changes
+
+- 60795a3: Depend on `kern-migrations` 0.10.
+
 ## 0.5.0
 
 ### Minor Changes
