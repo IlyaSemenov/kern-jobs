@@ -10,9 +10,9 @@ import type pg from "pg"
 
 import { createTestSchema, type TestSchema } from "../testing/database"
 
-const indexProduct = defineTask("search.indexProduct")
+const indexProduct = defineTask("search.indexProduct", { queue: "search" })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}`, queue: "search" }))
+  .withKey(({ productId }) => `product:${productId}`)
 
 let testSchema: TestSchema
 beforeEach(async () => {

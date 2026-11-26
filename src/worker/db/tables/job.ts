@@ -29,4 +29,8 @@ export const job = defineTable("job", {
   failedAt: t.epochTimestamp.nullable(),
   // Attempt budget of the failure job that the claim of an active row stamped, or null for a claim without one; ignored on an inactive row.
   failureMaxAttempts: t.integer.nullable(),
+  // Capacity of a batch job, null for a job that is not a batch.
+  maxItems: t.integer.nullable(),
+  // Whether a pending batch job takes no more items, which takes it out of the unique index of the open keys.
+  sealed: t.boolean,
 })

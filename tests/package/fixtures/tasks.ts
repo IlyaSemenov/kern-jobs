@@ -14,12 +14,21 @@ export const indexProductTask = defineTask("search.indexProduct", {
   backoff: indexBackoff,
 })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withKey(({ productId }) => `product:${productId}`)
 
 // Under `exactOptionalPropertyTypes`, the options must admit a field given as `undefined`.
 export const sendReminderTask = defineTask("reminders.send")
   .withPayload<{ reminderId: string; at?: string }>()
   .withOptions(({ at }) => ({ runAt: at === undefined ? undefined : new Date(at) }))
+
+export const publishPostsTask = defineTask("posts.publish", {
+  key: true,
+  keyMode: "debounce",
+  delay: 2,
+  maxWait: 10,
+}).withBatchPayload<number>({ maxItems: 100 })
+
+export const publishPostsOptions = publishPostsTask.options
 
 /** Defines a cleanup task, passing its optional lease through as it is. */
 export function defineCleanup<const Name extends string>(name: Name, lease?: number) {

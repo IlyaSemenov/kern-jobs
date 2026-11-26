@@ -5,7 +5,7 @@ import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
 import { decodePayload, encodePayload } from "../sql/job"
 import { getTaskEnqueueParams } from "../task/options"
 import { type RunHandler, runTaskHandler } from "../task/run-handler"
-import type { JobInfo, Task, TaskImplementation } from "../task/task"
+import type { JobInfo, TaskBase, TaskImplementation } from "../task/task"
 
 /** Metadata of the job that replace those that `runJob` gives, such as the attempt; a field given as `undefined` keeps its default. */
 export type RunJobInfo<Scope extends string | null = string | null> = {
@@ -68,10 +68,10 @@ export async function runJobWithScope<P>(
  * Returns the metadata of a job of a task with a payload that an enqueue without overrides would add, replaced by the fields of `job` other than `undefined`: the key, the queue, and `maxAttempts` of the options of the task, the attempt that `getDefaultAttempt` returns for `maxAttempts`, and the id `"1"`.
  * The scope is that of `job`, or the one that `getDefaultScope` returns when it is `undefined`.
  * It throws `TypeError` for a scoped task without a scope, the errors of `checkScope` for an invalid scope, the errors of an enqueue for the options of the task, and the errors of `checkJobId` for an id that is not that of a job.
- * It reads each field of `job` at most once, the other fields after the checks of the scope and the options of the task, so that they throw first.
+ * It reads each field of `job` at most once, the other fields after the checks of the scope and the options of the task, so that they throw first, except the key, which those of the options take as the key of an enqueue.
  */
 export function resolveJobInfo<P>(
-  task: Task<string, P>,
+  task: TaskBase<string, P>,
   payload: P,
   job: RunJobInfo,
   getDefaultScope: () => string | null,
@@ -87,8 +87,10 @@ export function resolveJobInfo<P>(
   } else {
     checkScope(scope)
   }
-  const params = getTaskEnqueueParams(task, payload)
-  const { id = "1", attempt, maxAttempts, key, queue } = job
+  // The key of the job stands for the key of its enqueue, which the items of a batch task need, so `withKey` is not called for it.
+  const key = job.key
+  const params = getTaskEnqueueParams(task, payload, key === undefined ? undefined : { key })
+  const { id = "1", attempt, maxAttempts, queue } = job
   checkJobId(id, "job.id")
   const jobMaxAttempts = maxAttempts ?? params.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
   return {

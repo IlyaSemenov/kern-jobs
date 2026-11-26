@@ -13,11 +13,15 @@ Measurements come from one machine without network, so they compare designs rath
 - [`replace` keeps attempts](enqueue/replace-keeps-attempts.md).
 - [`maxWait` bounds the computed run time](enqueue/max-wait-bounds-run-at.md), not the claim.
 - [A debounce window opens at its first debounce event, and its run time never moves backwards](enqueue/debounce-window.md).
-- [`enqueueMany` takes the payloads of one task](enqueue/batch-of-one-task.md), rather than items of several tasks.
-- [A key at most once per `enqueueMany`](enqueue/distinct-keys-in-batch.md), rather than the last item of a key winning.
-- [`enqueueMany` inserts in the order of its items](enqueue/batch-insert-order.md): concurrent batches with keys in different orders can deadlock.
+- [`enqueueMany` takes the payloads of one task](enqueue/many-of-one-task.md), rather than items of several tasks.
+- [A key at most once per `enqueueMany`](enqueue/distinct-keys-in-many.md), rather than the last item of a key winning.
+- [`enqueueMany` inserts in the order of its items](enqueue/many-insert-order.md): concurrent calls with keys in different orders can deadlock.
 - [The SQL function copies the statement of the core](enqueue/sql-function-copies-the-statement.md), which a test compares with it, rather than the core calling the function.
 - [The SQL function binds its table at its creation](enqueue/sql-function-binds-its-table.md): a SQL-standard body, with its checks in a second function.
+- [Items append by a function of the schema](enqueue/batch-function.md), which locks its key and reads the open batch in a snapshot of its own, rather than by one statement of the core.
+- [`enqueueItems` enqueues the items of a batch task](enqueue/items-method.md), rather than `enqueue` of either kind resolving to an array.
+- [Another `maxItems` seals the open batch](enqueue/resize-seals-open-batch.md), rather than rejecting the enqueue.
+- [A batch job that takes no more items has `sealed` beside its state](enqueue/sealed-column.md), which the unique index of the open keys leaves out, rather than a state of its own.
 
 ## Schedules
 
@@ -58,6 +62,7 @@ Measurements come from one machine without network, so they compare designs rath
 ## Tasks
 
 - [Static options in `defineTask`, options of a payload in `withOptions`](tasks/definition-shape.md).
+- [The key of a payload comes from `withKey`](tasks/with-key.md), of a payload or of an item, rather than from `withOptions`, and a key of the enqueue replaces it.
 - [The lease and the backoff are code of the task](tasks/worker-settings.md): the row stores neither.
 - [Handlers decide terminal errors and retry delays by error classes](tasks/handler-errors.md).
 

@@ -4,6 +4,56 @@
 
 import { createFunction, defineMigration } from "kern-migrations"
 
+/** Parameters of the function `enqueue`, which a later migration that replaces it names. */
+export const enqueueParameters = {
+  task: "text",
+  payload: { type: "jsonb", default: "null" },
+  scope: { type: "text", default: "''" },
+  key: { type: "text", default: "null" },
+  queue: { type: "text", default: "null" },
+  key_mode: { type: "text", default: "null" },
+  run_at: { type: "timestamptz", default: "null" },
+  delay: { type: "float8", default: "null" },
+  max_wait: { type: "float8", default: "null" },
+  max_attempts: { type: "int", default: "null" },
+  reset_attempts: { type: "boolean", default: "null" },
+  id: { mode: "out", type: "bigint" },
+  created: { mode: "out", type: "boolean" },
+} as const
+
+/**
+ * Definition of the function `enqueue`: a copy of the statement of `insertOne` and `mergeIntoPendingJob` of `sql/enqueue.ts` at this migration, whose test compares the two; an argument that is NULL takes its default, except `task` and `scope`, which `check_enqueue` rejects.
+ * Arguments are qualified by the name of the function, since a column of the statement of the same name would take their place.
+ */
+export const enqueueDefinition = `language sql
+begin atomic
+  select check_enqueue(enqueue.task, enqueue.scope, enqueue.key_mode, enqueue.run_at, enqueue.delay, enqueue.max_wait, enqueue.max_attempts);
+  insert into job as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
+  select enqueue.task, enqueue.scope, enqueue.queue, enqueue.key, n.mode, enqueue.payload,
+         case when n.mode = 'debounce' then n.t + make_interval(secs => least(enqueue.delay, enqueue.max_wait))
+              else coalesce(enqueue.run_at, n.t + make_interval(secs => coalesce(enqueue.delay, 0))) end,
+         n.t, n.t, coalesce(enqueue.max_attempts, 25)
+  from (select statement_timestamp() as t, coalesce(enqueue.key_mode, 'replace') as mode) n
+  on conflict (scope, task, key) where state = 'pending' and key is not null
+  do update set
+    key_mode     = excluded.key_mode,
+    payload      = case when excluded.key_mode = 'keep' then j.payload else excluded.payload end,
+    queue        = case when excluded.key_mode = 'keep' then j.queue else excluded.queue end,
+    max_attempts = case when excluded.key_mode = 'keep' then j.max_attempts else excluded.max_attempts end,
+    attempts     = case when excluded.key_mode <> 'keep' and coalesce(enqueue.reset_attempts, false) then 0 else j.attempts end,
+    window_started_at = case when excluded.key_mode = 'debounce' and j.key_mode <> 'debounce' then excluded.window_started_at
+                             else j.window_started_at end,
+    run_at = case
+      when excluded.key_mode = 'keep' then j.run_at
+      when excluded.key_mode = 'replace' or j.key_mode <> 'debounce' then greatest(j.not_before, excluded.run_at)
+      else greatest(j.not_before, j.run_at,
+                    least(excluded.window_started_at + make_interval(secs => enqueue.delay),
+                          j.window_started_at + make_interval(secs => enqueue.max_wait)))
+    end
+  -- xmax = 0 tells an inserted row from an updated one.
+  returning j.id, j.xmax = 0;
+end`
+
 export default defineMigration([
   createFunction(
     "check_enqueue",
@@ -57,52 +107,5 @@ begin
 end
 $$`,
   ),
-  // A copy of the statement of `insertOne` and `mergeIntoPendingJob` of `sql/enqueue.ts` at this migration, whose test compares the two; an argument that is NULL takes its default, except `task` and `scope`, which `check_enqueue` rejects.
-  // Arguments are qualified by the name of the function, since a column of the statement of the same name would take their place.
-  createFunction(
-    "enqueue",
-    {
-      task: "text",
-      payload: { type: "jsonb", default: "null" },
-      scope: { type: "text", default: "''" },
-      key: { type: "text", default: "null" },
-      queue: { type: "text", default: "null" },
-      key_mode: { type: "text", default: "null" },
-      run_at: { type: "timestamptz", default: "null" },
-      delay: { type: "float8", default: "null" },
-      max_wait: { type: "float8", default: "null" },
-      max_attempts: { type: "int", default: "null" },
-      reset_attempts: { type: "boolean", default: "null" },
-      id: { mode: "out", type: "bigint" },
-      created: { mode: "out", type: "boolean" },
-    },
-    `language sql
-begin atomic
-  select check_enqueue(enqueue.task, enqueue.scope, enqueue.key_mode, enqueue.run_at, enqueue.delay, enqueue.max_wait, enqueue.max_attempts);
-  insert into job as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
-  select enqueue.task, enqueue.scope, enqueue.queue, enqueue.key, n.mode, enqueue.payload,
-         case when n.mode = 'debounce' then n.t + make_interval(secs => least(enqueue.delay, enqueue.max_wait))
-              else coalesce(enqueue.run_at, n.t + make_interval(secs => coalesce(enqueue.delay, 0))) end,
-         n.t, n.t, coalesce(enqueue.max_attempts, 25)
-  from (select statement_timestamp() as t, coalesce(enqueue.key_mode, 'replace') as mode) n
-  on conflict (scope, task, key) where state = 'pending' and key is not null
-  do update set
-    key_mode     = excluded.key_mode,
-    payload      = case when excluded.key_mode = 'keep' then j.payload else excluded.payload end,
-    queue        = case when excluded.key_mode = 'keep' then j.queue else excluded.queue end,
-    max_attempts = case when excluded.key_mode = 'keep' then j.max_attempts else excluded.max_attempts end,
-    attempts     = case when excluded.key_mode <> 'keep' and coalesce(enqueue.reset_attempts, false) then 0 else j.attempts end,
-    window_started_at = case when excluded.key_mode = 'debounce' and j.key_mode <> 'debounce' then excluded.window_started_at
-                             else j.window_started_at end,
-    run_at = case
-      when excluded.key_mode = 'keep' then j.run_at
-      when excluded.key_mode = 'replace' or j.key_mode <> 'debounce' then greatest(j.not_before, excluded.run_at)
-      else greatest(j.not_before, j.run_at,
-                    least(excluded.window_started_at + make_interval(secs => enqueue.delay),
-                          j.window_started_at + make_interval(secs => enqueue.max_wait)))
-    end
-  -- xmax = 0 tells an inserted row from an updated one.
-  returning j.id, j.xmax = 0;
-end`,
-  ),
+  createFunction("enqueue", enqueueParameters, enqueueDefinition),
 ])

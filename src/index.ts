@@ -24,8 +24,18 @@ export {
   fixedBackoff,
 } from "./task/backoff"
 export type { FailureReason, JobFailure } from "./task/failure"
-export type { EnqueueOptions, EnqueueOverrides } from "./task/options"
+export type {
+  BatchEnqueueOverrides,
+  CommonEnqueueOptions,
+  EnqueueOptions,
+  EnqueueOverrides,
+  StaticEnqueueOptions,
+} from "./task/options"
 export {
+  type AnyTask,
+  type BatchOptions,
+  type BatchTask,
+  type BatchTaskBuilder,
   defineTask,
   type FailureHandler,
   type FailureImplementation,
@@ -33,7 +43,9 @@ export {
   type HandlerContext,
   type ImplementOptions,
   type JobInfo,
+  type KeyedTaskBuilder,
   type Task,
+  type TaskBase,
   type TaskBuilder,
   type TaskImplementation,
   type TaskOptions,

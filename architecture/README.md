@@ -5,11 +5,11 @@ Jobs live in one table, and producers enqueue them with the connection of the ap
 
 Its core promises:
 
-- A key keeps at most one pending job per scope and task, and no event of the key is lost unless the application deletes the pending job that carries it: an event either merges into the pending job by the mode of the key, and that job runs after the event commits, or becomes the next pending job, also while a job of the key runs.
+- A key keeps at most one pending job that takes its events per scope and task, and no event of the key is lost unless the application deletes the pending job that carries it: an event either merges into the pending job by the mode of the key, and that job runs after the event commits, or becomes the next pending job, also while a job of the key runs; the items of a batch append to the open batch of the key, and those that do not fit go to new jobs of at most its capacity.
 - A queue runs at most one job at a time per scope and starts the earliest of its ready jobs of the tasks of the claiming worker in the snapshot of each claim.
 - A worker owns a job through a claim, which every heartbeat and settlement proves; a job whose lease expires, or whose worker has ended when a worker of its id starts, returns to pending, or fails on its last attempt, and a stale claim can neither extend nor settle it.
 - A terminal failure of a claim whose implementation has `onFailure` inserts exactly one job that runs it, of the failure task of its task, in the statement that records the failure, also when the reaper records it.
-- Deadlines are computed in SQL from the committed row, so concurrent producers and workers never move a lease or the debounce deadline of a window backwards, and no enqueue moves a retry before the end of its backoff.
+- Deadlines are computed in SQL from the committed row, so concurrent producers and workers never move a lease or the debounce deadline of a window backwards, other than a batch that fills, which is due at once, and no enqueue moves a retry before the end of its backoff.
 
 The public API is not settled before 1.0 and may change in any release.
 This directory specifies the SQL core, the producer API, and the worker runtime: the data model, operations, invariants, and accepted limitations.
@@ -60,12 +60,12 @@ Modules of `sql/` other than tests must not import kern-db or kern-orm, not even
 
 Module paths are relative to `src/`.
 
-- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `sql/job-table.ts`, `sql/job.ts`, `migration/migrations/0003_job_summary.ts`, and `migration/migrations/0004_failure_jobs.ts`.
+- [Data model](data-model.md): the table, its states, indexes, and invariants, and the summary view; `sql/job-table.ts`, `sql/job.ts`, `migration/migrations/0003_job_summary.ts`, `migration/migrations/0004_failure_jobs.ts`, and `migration/migrations/0007_batches.ts`.
 - [Migrations](migrations.md): the history of the migrations of the schema, `migrateJobs`, and the check of a schema by a worker; `migration/`.
-- [Enqueue](enqueue.md): key modes, debounce, and the SQL function `enqueue`; `sql/enqueue.ts` and `migration/migrations/0005_enqueue_function.ts`.
+- [Enqueue](enqueue.md): key modes, debounce, batches, and the SQL functions `enqueue` and `enqueue_items`; `sql/enqueue.ts`, `migration/migrations/0005_enqueue_function.ts`, and `migration/migrations/0007_batches.ts`.
 - [Producer](producer.md): task definitions, enqueue options, and the database client of the application; `task/task.ts`, `task/options.ts`, `task/delay.ts`, `limits.ts`, and `producer/`.
 - [Schedules](schedules.md): UTC calendars, persistent cursors, and atomic enqueue; `schedule/` and `worker/db/schedule.ts`.
-- [Administration](administration.md): retry of failed jobs, also by the SQL function `retry`, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts` and `migration/migrations/0006_retry_function.ts`.
+- [Administration](administration.md): retry of failed jobs, also by the SQL function `retry`, and delete of pending or failed jobs by id or by a filter, by the application; `producer/administration.ts`, `migration/migrations/0006_retry_function.ts`, and `migration/migrations/0007_batches.ts`.
 - [Claiming](claiming.md): claiming jobs with and without queues, and the claim cycle; `worker/db/claim.ts`.
 - [Settlement](settlement.md): complete, fail, and connection loss in a transaction; `worker/db/settlement.ts`.
 - [Failure jobs](failure-jobs.md): the failure task that `implement` makes of `onFailure`, the stamp of each claim, and the failure job that a terminal failure inserts with its `JobFailure`; `worker/db/failure.ts`, `task/failure.ts`, `createFailureImplementation` and `resolveFailure` of `task/task.ts`, and `toManifestTasks` of `task/manifest.ts`.

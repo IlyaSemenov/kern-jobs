@@ -155,7 +155,7 @@ describe.each(["node", "bun"])("%s", runtime => {
       created: [true, false],
       sameJob: true,
       manifest: ["search.indexProduct", "sessions.purgeExpired"],
-      unimplementedTasks: ["reminders.send"],
+      unimplementedTasks: ["posts.publish", "reminders.send"],
       duplicateRejected: true,
       retryDelay: 10,
     })

@@ -5,7 +5,7 @@
 ```ts
 export const indexProductTask = defineTask("search.indexProduct", { lease: 120, delay: 5 })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withOptions(({ productId }) => ({ queue: `product:${productId}` }))
 ```
 
 The common task with static options needs no chain.
@@ -19,7 +19,7 @@ One object in `defineTask` with the payload type given by a value removes `withP
 export const indexProductTask = defineTask("search.indexProduct", {
   payload: payloadOf<{ productId: string }>(),
   lease: 120,
-  options: ({ productId }) => ({ key: `product:${productId}`, delay: 5 }),
+  options: ({ productId }) => ({ queue: `product:${productId}`, delay: 5 }),
 })
 ```
 

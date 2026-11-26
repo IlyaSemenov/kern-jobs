@@ -2,7 +2,7 @@ import { param, sql } from "kern-orm"
 
 import { hasOccurrence } from "../../schedule/cron"
 import type { WorkerSchedule } from "../../schedule/schedule"
-import { enqueue } from "../../sql/enqueue"
+import { enqueue, enqueueItems } from "../../sql/enqueue"
 import type { JobTable } from "../../sql/job-table"
 import { toStatementLabel } from "../../sql/statement"
 import { getTaskEnqueueParams } from "../../task/options"
@@ -67,7 +67,10 @@ export async function evaluateSchedule(
         const earliest = Math.max(cursor + 60000, Math.min(minute, time - schedule.within * 1000))
         if (hasOccurrence(schedule.calendar, earliest, minute)) {
           const params = getTaskEnqueueParams(schedule.task, schedule.payload, schedule.enqueue)
-          await enqueue(db.$database, table, { ...params, now: new Date(time) })
+          const { maxItems, ...enqueueParams } = { ...params, now: new Date(time) }
+          // The payload of a schedule of a batch task is its array of items.
+          if (maxItems === undefined) await enqueue(db.$database, table, enqueueParams)
+          else await enqueueItems(db.$database, table, { ...enqueueParams, maxItems })
         }
       }
       await db.schedule

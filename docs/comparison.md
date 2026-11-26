@@ -30,7 +30,7 @@ kern-jobs is in early development, and its API changes between minor versions.
 | [One pending job per entity](#one-pending-job-per-entity)                | Keys                                                                      | Job keys                                                                      | Queue policies, with other rules                               |
 | [Debounce with a bound on postponing](#debounce)                         | Built in                                                                  | Without a bound                                                               | Time slots of a fixed length                                   |
 | [Jobs of an entity one at a time](#jobs-of-an-entity-one-at-a-time)      | Queues                                                                    | Named queues                                                                  | `key_strict_fifo`, which also blocks on a failed job           |
-| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one job within a recovery window                            | UTC crontab, backfill of each eligible occurrence                             | Cron or RRULE in a time zone, one catch-up job                 |
+| [Recurring jobs](#recurring-jobs)                                        | UTC calendar, one enqueue within a recovery window                        | UTC crontab, backfill of each eligible occurrence                             | Cron or RRULE in a time zone, one catch-up job                 |
 | [Jobs of a worker that dies](#jobs-of-a-worker-that-dies)                | After a lease, 60 s by default, or when a worker of its id starts         | Locked for at least 4 hours                                                   | Released after a heartbeat timeout or their expiration         |
 | [Stopping a worker](#stopping-a-worker)                                  | Can return an interrupted job without spending its attempt                | A job that throws after the abort spends its attempt                          | Jobs still running at the timeout fail                         |
 | [Work after a job fails for good](#work-after-a-job-fails-for-good)      | A handler in a job of its own, added with the failure, also by the reaper | A local event before the failure is recorded, none for a job of a dead worker | A dead letter copy, added with the failure, also at expiration |
@@ -53,7 +53,7 @@ With kern-jobs, the definition of a task, which the application imports without 
 
 ## One pending job per entity
 
-With kern-jobs, a key keeps at most one pending job, also one that waits for a retry, and an event while the job of the key runs adds the next pending job, which can start while the first one still runs; see [Deduplication and Debouncing](./tasks/keys).
+With kern-jobs, a key of a task that is not a [batch task](./tasks/keys#batches) keeps at most one pending job, also one that waits for a retry, and an event while the job of the key runs adds the next pending job, which can start while the first one still runs; see [Deduplication and Debouncing](./tasks/keys).
 To run the jobs of a key one at a time, also give them a [queue](#jobs-of-an-entity-one-at-a-time).
 
 - Graphile Worker: a [job key](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode) keeps at most one pending job, including one waiting for a retry, and an event while its job runs adds a new job; but a key is unique across tasks, and the event sets the attempts of the running job to its maximum, so it does not run again after a failure.
@@ -76,7 +76,7 @@ With kern-jobs, a [queue](./tasks/queues) runs one of its jobs at a time.
 
 ## Recurring jobs
 
-kern-jobs [schedules](./tasks/schedules) use UTC calendars and can enqueue one job for all occurrences missed within a configured window.
+kern-jobs [schedules](./tasks/schedules) use UTC calendars and can enqueue once for all occurrences missed within a configured window.
 
 - Graphile Worker: a [crontab](https://github.com/graphile/worker/blob/v0.18.0/website/docs/cron.md#distributed-crontab) in UTC, which several workers share, with a backfill of missed moments.
 - pg-boss: cron or RRULE schedules in a chosen time zone can recover [one missed job alongside the current one](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/scheduling.md#catch-up-after-an-outage).

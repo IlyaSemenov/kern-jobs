@@ -25,6 +25,8 @@ Every statement names the table and the sequence qualified by their schema, so t
 - `last_error`: the error of the latest failure, `lease expired`, or `worker restarted`; a requeue and a retry keep it.
 - `failed_at`: the time when the job became failed, by which the application deletes old failed jobs.
 - `failure_max_attempts`: the stamp of the claim of an active row for a failure job, the attempt budget of that job, or null for a claim without one; inactive rows keep the stamp of their last claim, which nothing reads ([Failure jobs](failure-jobs.md)).
+- `max_items`: the capacity of a batch job, whose payload is an array of at most that many items, or null for a job that is not a batch ([Batches](enqueue.md#batches)).
+- `sealed`: whether a batch job takes no more items: an enqueue that fills it seals it, and so do an enqueue of another `max_items` and its first claim; the open batch of a key is its pending batch job that is not sealed ([decision](../decisions/enqueue/sealed-column.md)).
 
 Check constraints enforce these invariants for every write:
 
@@ -32,6 +34,7 @@ Check constraints enforce these invariants for every write:
 - A row has `failed_at` exactly while it is failed.
 - `attempts` is at least 0, and `max_attempts` at least 1.
 - `run_at` is not below `not_before`, the end of the backoff.
+- `max_items` is null or at least 1, and only a batch job is sealed; both constraints are `NOT VALID`, since the rows before their migration pass them, and they check every write.
 - `failure_max_attempts` is null or at least 1, and set only for a task whose name is at most 120 bytes, so that the name of its failure task fits the limit of `task`; the constraint is `NOT VALID`, since the rows before its migration have null stamps, and it checks every write.
 - `task`, `scope`, `queue`, and `key` are within their limits, which count bytes, since a character takes 1 to 4 bytes: they keep an entry of an index within the 2704 bytes of a B-tree entry also for names that do not compress.
 
@@ -44,11 +47,13 @@ Check constraints enforce these invariants for every write:
 - Requeue makes an active job pending again or deletes it as superseded, as fail does, but never makes it failed ([Settlement](settlement.md#requeue)).
 - The reaper makes an active job whose lease expired pending again, or failed on its last attempt, and so does a worker at its start with the active jobs of its id.
 - No worker or enqueue changes a `failed` row: it stays as a dead letter, outside the uniqueness of keys.
-- A retry of the application makes a failed job pending again, unless a pending job of its key exists; a delete of the application deletes pending or failed jobs by id or by a filter ([Administration](administration.md)).
+- A pending batch job is open until an enqueue fills it, an enqueue of another `max_items` seals it, or a claim seals it; every return of it to pending, by fail, requeue, the reaper, or a retry, keeps it sealed, with its id, payload, and key, so it never takes items again and never merges or detaches.
+- A retry of the application makes a failed job pending again, unless it is not a batch job and a pending job of its key that is not sealed exists; a delete of the application deletes pending or failed jobs by id or by a filter ([Administration](administration.md)).
 
 ## Indexes
 
-- `job_pending_key_idx`, unique on `(scope, task, key)` of pending rows with a key, enforces the uniqueness of pending keys.
+- `job_open_key_idx`, unique on `(scope, task, key)` of pending rows with a key that are not sealed, enforces the uniqueness of pending keys, beside which the sealed batch jobs of a key wait for a worker.
+- `job_sealed_key_idx` on `(scope, task, key)` of pending sealed rows serves, beside it, the deletes of the pending jobs of a key.
 - `job_active_queue_idx`, unique on `(scope, queue)` of active rows with a queue, enforces the queue mutex.
 - `job_plain_ready_idx` on `run_at` of pending rows without a queue serves claiming them.
 - `job_queue_ready_idx` on `(scope, queue, run_at, id)` of pending rows with a queue serves the queue scan and the queue head.
@@ -81,9 +86,10 @@ The view `job_summary`, which the migrations create beside the table, summarizes
 
 Keys:
 
-- Among pending rows, `(scope, task, key)` is unique; active and failed rows do not take part.
+- Among pending rows that are not sealed, `(scope, task, key)` is unique; sealed, active, and failed rows do not take part.
+- A batch job never has more than `max_items` items, and a key has at most one open batch.
 - An enqueue while a job of the key is active creates the next pending row, and the active job keeps its key.
-- No transition of a worker, an enqueue, or a retry drops a job silently: either the surviving row of its key absorbs it by the key mode, or the job loses its key and runs; a delete of the application drops the job that it names.
+- No transition of a worker, an enqueue, or a retry drops a job silently: either the surviving row of its key absorbs it by the key mode, or the job loses its key and runs, or a sealed batch job returns with its own items; a delete of the application drops the job that it names.
 - `attempts` of a row never decreases, except by an explicit reset in an enqueue, by a requeue, which gives back the attempt of its own claim, and by a retry, which resets it, and never moves to another row.
 - No recomputation of `run_at` moves it below `not_before`.
 

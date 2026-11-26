@@ -8,12 +8,12 @@ A shared cursor records the minutes already checked, so workers cannot enqueue t
   It must be [storable text](README.md#terms).
 - `defineSchedule` returns the definition as given, with defaults filled.
   `toWorkerSchedule` checks the definition and compiles the calendar; `defineSchedule`, `defineManifest`, and `startWorker` each run it, since any object of the shape of a schedule passes the types, and a manifest rejects a reused schedule ID.
-  For a task without `withOptions`, it checks the merged enqueue options.
+  For a task without `withOptions`, it checks the merged enqueue options, calling `withKey` for the static payload unless the overrides of the schedule give a key.
   For a task with it, it checks the enqueue overrides without calling the function, for errors that no option of the task can correct; each enqueue checks the merged options.
   The evaluator takes only the compiled schedule, so the public type does not carry the representation of the calendar.
 - The application must not mutate a schedule or its nested options after `startWorker`: the worker compiles the calendar at start but reads the payload and the enqueue overrides at each enqueue.
 - Each enqueue uses the schedule's static payload, resolves the task options for that payload, and applies the schedule's enqueue overrides.
-  Only an explicit task or schedule option gives the job a key.
+  Only the task, by its options or `withKey`, or the schedule gives the job a key.
 - The handler may run on another worker in the same schema.
 
 ## Calendar
@@ -42,9 +42,9 @@ Let M be the UTC minute containing that instant.
 2. It locks the row with `FOR UPDATE SKIP LOCKED`.
    If another transaction holds the lock, it skips this schedule.
 3. It returns if M is at or before `evaluated_through`, the last minute checked, inclusive.
-4. For an enabled schedule, it enqueues one job if M matches or if a matching minute after the cursor is at most `catchUp.within` seconds old.
+4. For an enabled schedule, it enqueues once if M matches or if a matching minute after the cursor is at most `catchUp.within` seconds old.
    Without `catchUp`, only M is eligible.
-   One job covers all eligible minutes so that a reconciliation runs once after downtime ([decision](../decisions/schedules/one-job-per-recovery-window.md)).
+   One enqueue covers all eligible minutes so that a reconciliation runs once after downtime ([decision](../decisions/schedules/one-job-per-recovery-window.md)).
 5. It sets `evaluated_through` to M, including when the schedule is disabled or no minute matched.
 
 - The transaction bounds each of its lock waits to one second, including registration and enqueue.

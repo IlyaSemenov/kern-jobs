@@ -37,7 +37,12 @@ declare const jobs: Jobs
 describe("emitted declarations of the worker", () => {
   test("keep the task and the payload of each implementation, the manifest, a schedule, and the metadata of a job", () => {
     expectTypeOf(indexProduct).toEqualTypeOf<
-      TaskImplementation<"search.indexProduct", { productId: string }> & {
+      TaskImplementation<
+        "search.indexProduct",
+        { productId: string },
+        string | null,
+        typeof indexProductTask
+      > & {
         readonly failure: FailureImplementation<"search.indexProduct", { productId: string }>
       }
     >()
@@ -46,7 +51,12 @@ describe("emitted declarations of the worker", () => {
       .parameter(0)
       .toEqualTypeOf<JobFailure<{ productId: string }>>()
     expectTypeOf(purgeExpiredSessions).toEqualTypeOf<
-      TaskImplementation<"sessions.purgeExpired", void>
+      TaskImplementation<
+        "sessions.purgeExpired",
+        void,
+        string | null,
+        typeof purgeExpiredSessionsTask
+      >
     >()
     expectTypeOf(manifest).toEqualTypeOf<Manifest>()
     expectTypeOf(weeklyCleanup).toEqualTypeOf<Schedule<void>>()

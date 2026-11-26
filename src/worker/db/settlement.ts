@@ -35,7 +35,7 @@ export interface FailOptions {
   backoff: number
   /** Time of the statements; `statement_timestamp()` when omitted. */
   now?: Date | null
-  /** Retries of the transaction after a `23505` on the pending-key index. */
+  /** Retries of the transaction after a `23505` on the unique index of the open keys. */
   maxRetries?: number
   /**
    * Pause points between the statements of the transaction for deterministic tests; they get the database, whose statements in them run in the transaction.
@@ -48,7 +48,7 @@ export interface FailOptions {
 }
 
 /**
- * Settles an active job after an error: `failed` on a terminal error or the last attempt, with its failure job, if its claim stamped one, inserted by the same statement, otherwise back to pending with a backoff, or merged with the pending job of its key by the key mode of that job.
+ * Settles an active job after an error: `failed` on a terminal error or the last attempt, with its failure job, if its claim stamped one, inserted by the same statement, otherwise back to pending with a backoff, or merged with the pending job of its key by the key mode of that job; a batch job returns to pending sealed and never merges, and a job that is not a batch returns without its key beside an open batch of its key.
  * Runs one `READ COMMITTED` transaction of the database, which reserves a connection for it, so statements of other handlers never run inside it.
  * A lost connection throws `TransactionConnectionError` and is never retried on.
  */
@@ -90,7 +90,7 @@ interface ReturnOptions extends Omit<FailOptions, "error"> {
   refund: boolean
 }
 
-/** Runs the transaction of fail or requeue, and retries it after a `23505` on the pending-key index. */
+/** Runs the transaction of fail or requeue, and retries it after a `23505` on the unique index of the open keys. */
 async function returnClaim(
   db: WorkerDb,
   c: ClaimRef,
@@ -110,7 +110,7 @@ async function returnClaim(
       )
     } catch (e) {
       // A producer inserted a pending job of the key after the competitor check: retry, now with a competitor.
-      if (isUniqueViolation(e, "job_pending_key_idx") && attempt < (o.maxRetries ?? 5)) {
+      if (isUniqueViolation(e, "job_open_key_idx") && attempt < (o.maxRetries ?? 5)) {
         stats.uniqueViolations++
         continue
       }
@@ -126,7 +126,7 @@ async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<
   const now = nowSql(o.now)
   const a = await db.job
     .where({ id: c.id, claimId: c.claimId, state: "active" })
-    .select("id", "scope", "task", "key", "attempts", "maxAttempts")
+    .select("id", "scope", "task", "key", "attempts", "maxAttempts", "maxItems")
     .forUpdate()
     .take()
     .optional()
@@ -150,22 +150,24 @@ async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<
   }
   // A null error keeps the error of the latest failure, since a requeue records none.
   const backoff = param(t.doublePrecision, o.backoff)
-  const toPending = () =>
+  const toPending = (detach = false) =>
     db.$query`
       update ${schema.job} set state = 'pending', attempts = attempts - ${o.refund ? 1 : 0},
+        key = case when ${param(t.boolean, detach)} then null else key end,
         run_at = n.t + make_interval(secs => ${backoff}), not_before = n.t + make_interval(secs => ${backoff}),
         window_started_at = n.t, claim_id = null, locked_by = null, lease_until = null,
         last_error = coalesce(${param(t.text.nullable(), o.error)}, last_error)
       from (select ${now} as t) n
       where id = ${c.id}`.comment(toStatementLabel("settle:to-pending"))
-  if (a.key === null) {
+  // A batch job carries its own items, which no other job of its key has, so it never merges, and its sealed row never conflicts.
+  if (a.key === null || a.maxItems !== null) {
     await toPending()
     return "retry"
   }
-  // The pending-key index allows at most one competitor.
+  // The unique index of the open keys allows at most one competitor.
   const b = await db.job
-    .where({ state: "pending", scope: a.scope, task: a.task, key: a.key })
-    .select("id", "keyMode")
+    .where({ state: "pending", scope: a.scope, task: a.task, key: a.key, sealed: false })
+    .select("id", "keyMode", "maxItems")
     .forUpdate()
     .take()
     .optional()
@@ -173,6 +175,11 @@ async function returnOnce(db: WorkerDb, c: ClaimRef, o: ReturnOptions): Promise<
   await o.pause?.afterCompetitorCheck?.(tx)
   if (!b) {
     await toPending()
+    return "retry"
+  }
+  // An open batch has none of the payload of the row, which merges into no batch, so the row runs on its own without its key, as the reaper returns it.
+  if (b.maxItems !== null) {
+    await toPending(true)
     return "retry"
   }
   // The pending row carries the mode of the latest enqueue, which is the newest producer code during a rolling deploy.

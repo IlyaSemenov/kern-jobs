@@ -31,7 +31,7 @@ const drivers: [string, () => Driver][] = [
 
 const indexProduct = defineTask("search.indexProduct", { maxAttempts: 3 })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withKey(({ productId }) => `product:${productId}`)
 const renderPreview = defineTask("documents.renderPreview", {
   backoff: fixedBackoff(100),
 }).withPayload<{ documentId: string }>()

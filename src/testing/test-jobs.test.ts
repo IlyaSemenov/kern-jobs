@@ -17,14 +17,12 @@ const indexProductTask = defineTask("search.indexProduct", {
 const reportTask = defineTask("reports.build", { scoped: true }).withPayload<{ id: number }>()
 
 describe("enqueue", () => {
-  test("records the task, the scope, the payload as passed, and the options of defineTask, withOptions, and the overrides as an enqueue merges them", async () => {
+  test("records the task, the scope, the payload as passed, and the options of defineTask, withKey, withOptions, and the overrides as an enqueue merges them", async () => {
     const date = new Date("2030-01-01T00:00:00Z")
-    const optionsFor = mock((payload: { at: Date }) => ({
-      delay: 5,
-      key: `k:${payload.at.getTime()}`,
-    }))
+    const optionsFor = mock((_payload: { at: Date }) => ({ delay: 5 }))
     const task = defineTask("t", { maxAttempts: 3, queue: "q" })
       .withPayload<{ at: Date }>()
+      .withKey(payload => `k:${payload.at.getTime()}`)
       .withOptions(optionsFor)
     const jobs = createTestJobs()
     await jobs.enqueue(task, { at: date }, { runAt: date, queue: null })
@@ -130,7 +128,7 @@ describe("enqueueMany", () => {
   test("records an enqueue of each payload in their order, and resolves to the id of the pending job of a key and to new ids in that order", async () => {
     const task = defineTask("t")
       .withPayload<string | null>()
-      .withOptions(key => ({ key }))
+      .withKey(key => key)
     const jobs = createTestJobs()
     const existing = await jobs.enqueue(task, "a")
     const captured = await jobs.capture(() => jobs.enqueueMany(task, [null, "a", "b"]))
@@ -154,6 +152,74 @@ describe("enqueueMany", () => {
     })
     expect([captured.calls, jobs.calls]).toEqual([[], []])
     expect(await jobs.enqueue(task, "a", { key: true })).toEqual({ id: "1", created: true })
+  })
+})
+
+describe("enqueueItems", () => {
+  const publishPosts = defineTask("posts.publish", { key: true }).withBatchPayload<number>({
+    maxItems: 3,
+  })
+
+  test("records one enqueue of the items, also of none, and resolves to the jobs that they fill one enqueue after another, in the order of the items", async () => {
+    const jobs = createTestJobs()
+    expect(await jobs.enqueueItems(publishPosts, [1, 2])).toEqual([{ id: "1", created: true }])
+    expect(await jobs.enqueueItems(publishPosts, [3, 4, 5, 6, 7])).toEqual([
+      { id: "1", created: false },
+      { id: "2", created: true },
+      { id: "3", created: true },
+    ])
+    expect(await jobs.enqueueItems(publishPosts, [])).toEqual([])
+    expect(await jobs.enqueueItems(publishPosts, [8])).toEqual([{ id: "3", created: false }])
+    expect(jobs.calls.map(call => call.payload)).toEqual([[1, 2], [3, 4, 5, 6, 7], [], [8]])
+  })
+
+  test("records the key that withKey gives the items, and rejects items of several keys, recording nothing", async () => {
+    const keyed = defineTask("posts.publish")
+      .withBatchPayload<{ siteId: string; postId: number }>({ maxItems: 3 })
+      .withKey(post => `site:${post.siteId}`)
+    const jobs = createTestJobs()
+    await jobs.enqueueItems(keyed, [{ siteId: "a", postId: 1 }])
+    await expect(
+      jobs.enqueueItems(keyed, [
+        { siteId: "a", postId: 2 },
+        { siteId: "b", postId: 3 },
+      ]),
+    ).rejects.toThrow(TypeError)
+    expect(jobs.calls.map(call => call.options.key)).toEqual(["site:a"])
+  })
+
+  test("seals the pending job of the key with another maxItems and appends to new jobs", async () => {
+    const jobs = createTestJobs()
+    await jobs.enqueueItems(publishPosts, [1, 2])
+    const resized = defineTask("posts.publish", { key: true }).withBatchPayload<number>({
+      maxItems: 2,
+    })
+    expect(await jobs.enqueueItems(resized, [3, 4, 5])).toEqual([
+      { id: "2", created: true },
+      { id: "3", created: true },
+    ])
+    expect(await jobs.enqueueItems(publishPosts, [6])).toEqual([{ id: "4", created: true }])
+  })
+
+  test("rejects a merge of the two kinds with the message and code of the database, and records and adds nothing, also for a late conflict in enqueueMany", async () => {
+    const ordinary = defineTask("posts.publish")
+      .withPayload<number>()
+      .withKey(n => `k\\${n}`)
+    const jobs = createTestJobs()
+    await jobs.enqueue(ordinary, 1)
+    await expect(jobs.enqueueItems(publishPosts, [2], { key: "k\\1" })).rejects.toMatchObject({
+      message:
+        "The pending job of key E'k\\\\1' of task posts.publish is not a batch, so items cannot append to it",
+      code: "55000",
+    })
+    await jobs.enqueueItems(publishPosts, [3], { key: "k\\3" })
+    await expect(jobs.enqueueMany(ordinary, [1, 2, 3])).rejects.toMatchObject({
+      message:
+        "The pending job of key E'k\\\\3' of task posts.publish is a batch, so a job that is not a batch cannot merge into it",
+      code: "55000",
+    })
+    expect(jobs.calls.map(call => call.payload)).toEqual([1, [3]])
+    expect(await jobs.enqueue(ordinary, 2)).toEqual({ id: "3", created: true })
   })
 })
 

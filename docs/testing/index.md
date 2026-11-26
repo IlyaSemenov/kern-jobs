@@ -33,12 +33,14 @@ test("enqueues a welcome email for the new user", async () => {
   Finish the setup of fixtures before you start `capture`, and await it before the next step, so that their jobs stay out.
 - `captured.result` is the value that the action returns, such as the user that `signUp` creates.
 - `captured.callsFor(task)` gives the scope, the payload, and the options of each enqueue of the task.
-  The options are those of `defineTask`, of `withOptions`, and of the enqueue, merged as an enqueue merges them, so check a key or a delay there; `key: true` is recorded as the empty key, `""`.
+  The options are those of `defineTask`, of `withKey` and `withOptions`, and of the enqueue, merged as an enqueue merges them, so check a key or a delay there; `key: true` is recorded as the empty key, `""`.
 - `testJobs.calls` lists every recorded enqueue, and `testJobs.clear()` forgets them, such as before each test.
   `enqueueMany` records an enqueue of each of its payloads.
 
 An enqueue through `testJobs` rejects invalid options, a payload that `JSON.stringify` throws for, such as a bigint, and a scoped task without a scope as `createJobs` does, and records nothing then; `enqueueMany` also rejects two payloads of one key, and records none of its payloads when it rejects.
-If a pending job has the same task name, scope, and key, `enqueue` resolves to `{ id, created: false }` with its id, and `enqueueMany` gives such an object for the payload.
+If a pending job of the same task name, scope, and key takes new enqueues, `enqueue` resolves to `{ id, created: false }` with its id, and `enqueueMany` gives such an object for the payload; if that job is a batch, they reject as `createJobs` does.
+`enqueueItems` of a [batch task](../tasks/keys#batches) is recorded once with its array of items, also an empty one, as its `payload`, and with its key in its options, such as of `withKey`, and resolves to the jobs that its items fill by their count: the pending job of the key until it has `maxItems`, then new ones.
+If the items would append to a pending job that is not a batch, `enqueueItems` rejects as it does with `createJobs`.
 Its jobs stay pending, since no worker runs them: `deletePending` and `delete` delete them, and nothing fails, so `retry` resolves to `null`.
 Each `createTestJobs()` keeps its own jobs, so another one, also with `ALL_SCOPES`, does not reach them.
 

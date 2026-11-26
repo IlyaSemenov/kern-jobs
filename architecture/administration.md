@@ -5,7 +5,7 @@ None of them changes an active row, since the database cannot stop the handler o
 A failure job is an ordinary job of its failure task, which they reach as any job of that task, the `failure.task` of the implementation, and none of them changes a failure job by the job whose failure inserted it ([Failure jobs](failure-jobs.md#consequences-of-ordinary-jobs)).
 
 The application inspects failed jobs by reading the table ([Data model](data-model.md#columns)).
-It deletes pending and failed jobs through `jobs` or by a statement of its own ([Delete from SQL](#delete-from-sql)), and must change the table otherwise only through `jobs` and the SQL functions [`enqueue`](enqueue.md#sql-function) and [`retry`](#sql-function), since workers and enqueues rely on the rows that they write.
+It deletes pending and failed jobs through `jobs` or by a statement of its own ([Delete from SQL](#delete-from-sql)), and must change the table otherwise only through `jobs` and the SQL functions [`enqueue` and `enqueue_items`](enqueue.md#sql-function) and [`retry`](#sql-function), since workers and enqueues rely on the rows that they write.
 
 ## Retry
 
@@ -14,7 +14,8 @@ Retry returns a `failed` job to pending in place, and returns `null` for an id o
 - The job keeps every column but those of a new cycle of attempts: its id, task, scope, key, key mode, queue, payload, `max_attempts`, `created_at`, `locked_at`, and `last_error`, which tells why it failed until it runs again.
 - `attempts` becomes 0, a full budget, so that a retry after a fix of its cause survives transient errors again ([decision](../decisions/administration/retry-resets-attempts.md)).
 - `run_at` and `window_started_at` become now, `not_before` and `failed_at` null, as a new enqueue sets them: a retry has no backoff.
-- When a pending job of its `(scope, task, key)` exists, it changes neither job and returns the id of the pending one, in every key mode, so that the operator decides which of them runs ([decision](../decisions/administration/retry-keeps-both-jobs.md)).
+- When a pending job of its `(scope, task, key)` that is not sealed exists, it changes neither job and returns the id of the pending one, in every key mode, so that the operator decides which of them runs ([decision](../decisions/administration/retry-keeps-both-jobs.md)).
+- A batch job returns sealed whatever the jobs of its key, since its items are in no other job.
 
 The statement locks the failed row and the pending job of its key, and updates the failed row only without such a job ([decision](../decisions/administration/retry-updates-the-row.md)):
 
@@ -32,7 +33,7 @@ The function `retry` of the schema retries a failed job from SQL, such as from p
 - It takes the id of a job and no scope, and acts on a failed job of any scope, as `jobs` with `ALL_SCOPES` does.
 - It returns a row of `retried` true, or false with the id of the pending job of the key as `pending_id`, and no row when no failed job has the id.
 - Its time is `statement_timestamp()`, the start of the statement of the caller.
-- Each call runs its statement in the transaction of the caller, so the calls of one statement for the failed jobs of a query retry one after another, in an order that the plan of the query decides: of the failed jobs of a key, at most one returns to pending, and a call that finds a pending job of the key returns its id as `pending_id`.
+- Each call runs its statement in the transaction of the caller, so the calls of one statement for the failed jobs of a query retry one after another, in an order that the plan of the query decides: of the failed jobs of a key that are not batch jobs, at most one returns to pending, and a call that finds a pending job of the key that is not sealed returns its id as `pending_id`.
 - Its body is a SQL-standard body, bound to the table at its creation, as that of [`enqueue`](enqueue.md#sql-function) is, so a call depends neither on the `search_path` of the caller nor on the name of the schema; it is `SECURITY INVOKER`, so it runs with the privileges of its caller.
 - The statement of the core and the function are two copies, which a test compares on the same jobs ([decision](../decisions/enqueue/sql-function-copies-the-statement.md)): a change of retry must come with a migration that replaces the function.
 
@@ -50,8 +51,8 @@ Delete deletes a `pending` or `failed` job, and returns whether it deleted it.
 - With a scoped task, the scope is that of `jobs`, with the checks and errors of an [enqueue](producer.md#scope), or every scope with `ALL_SCOPES`, which an enqueue rejects, also with a key; with another task, it is the empty scope, also when `jobs` has a scope.
 - Without a filter, the scope is that of [retry and delete](#scope).
 - Only a call without an argument deletes the jobs of every task, and a filter must be an object of a task and, optionally, a key that is a string or `true`, the empty key of an [enqueue](producer.md#options), without other own properties, so that a mistaken argument, such as `undefined`, a promise of a filter, a task, a misspelled field, or a key that is `undefined`, is rejected rather than widen the delete.
-- It deletes only pending rows, and with a key at most one in each scope, which the unique index of pending keys keeps single per scope, task, and key; active and failed jobs stay.
-- The statement has a condition only for each given column, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
+- It deletes only pending rows, and with a key at most one in each scope, which the unique index of the open keys keeps single per scope, task, and key, besides the sealed batch jobs of the key; active and failed jobs stay.
+- The statement has a condition only for each given column, and with a key the condition `not sealed or sealed`, so that a filter by key can use `job_open_key_idx` and `job_sealed_key_idx` also in a generic plan of a prepared statement.
 - A pending job that a claim holds is deleted only if it is still pending after the claim ends, as with [delete](#delete), so a job that starts first is not deleted.
 - A pending job that a producer adds after the snapshot of the statement stays, as an enqueue after the delete does, and so does the job that a fail transaction returns to pending in place of the pending job of mode `keep` that it deletes while the statement waits for it ([Settlement](settlement.md#fail)): the count tells only the rows that the statement deleted.
 - It reads the task, its name, and the key once and checks the name and the key as an enqueue does, before the client is called, so the statement gets the checked name also from a task whose `name` is a getter.

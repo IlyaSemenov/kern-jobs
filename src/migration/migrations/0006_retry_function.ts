@@ -3,17 +3,18 @@
 
 import { createFunction, defineMigration } from "kern-migrations"
 
-export default defineMigration([
-  // A copy of the statement of `retryFailedJob` at this migration, without a scope and with the time of the statement, whose test compares the two; it returns no row when no failed job has the id.
-  // The argument is qualified by the name of the function, since the column `id` would take its place.
-  createFunction(
-    "retry",
-    {
-      id: "bigint",
-      retried: { mode: "out", type: "boolean" },
-      pending_id: { mode: "out", type: "bigint" },
-    },
-    `returns setof record language sql
+/** Parameters of the function `retry`, which a later migration that replaces it names. */
+export const retryParameters = {
+  id: "bigint",
+  retried: { mode: "out", type: "boolean" },
+  pending_id: { mode: "out", type: "bigint" },
+} as const
+
+/**
+ * Definition of the function `retry`: a copy of the statement of `retryFailedJob` at this migration, without a scope and with the time of the statement, whose test compares the two; it returns no row when no failed job has the id.
+ * The argument is qualified by the name of the function, since the column `id` would take its place.
+ */
+export const retryDefinition = `returns setof record language sql
 begin atomic
   with f as (
     select j.id, j.scope, j.task, j.key from job j
@@ -31,6 +32,6 @@ begin atomic
     returning j.id
   )
   select exists (select from u), (select c.id from c) from f;
-end`,
-  ),
-])
+end`
+
+export default defineMigration([createFunction("retry", retryParameters, retryDefinition)])

@@ -33,7 +33,8 @@ The reaper returns expired jobs in batches, by one statement per batch:
 - Any other row returns to pending with `run_at`, `not_before`, and `window_started_at` now.
 - Every returned row gets `last_error` `lease expired`.
 - A row that becomes failed with the stamp of a failure job inserts it in the same statement, with the reason `lease-expired` ([Failure jobs](failure-jobs.md#insert)).
-- The reaper never merges: a row that returns to pending loses its key when a pending row of its key exists, or when the batch returns several rows of its `(scope, task, key)` to pending, of which the newest keeps the key ([decision](../decisions/leases/reaper-detaches.md)).
+- The reaper never merges: a row that returns to pending loses its key when a pending row of its key that is not sealed exists, or when the batch returns several rows of its `(scope, task, key)` to pending, of which the newest keeps the key ([decision](../decisions/leases/reaper-detaches.md)).
+- A batch job returns sealed with its key, outside the uniqueness of keys, so it is never detached, and the ranking of the rows of a key leaves it out.
 
 A producer can insert a pending row of a key after the snapshot of the statement; the statement then fails with `23505`, and the reaper redoes the batch row by row.
 A row that still conflicts after three attempts loses its key unconditionally, so a hot key cannot stop the recovery of other rows.

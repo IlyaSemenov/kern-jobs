@@ -3,12 +3,16 @@ import { describe, expectTypeOf, test } from "bun:test"
 import { exponentialBackoff } from "./backoff"
 import type { JobFailure } from "./failure"
 import {
+  type AnyTask,
+  type BatchTask,
+  type BatchTaskBuilder,
   defineTask,
   type FailureImplementation,
   type FailureOptions,
   type HandlerContext,
   type ImplementOptions,
   type JobInfo,
+  type KeyedTaskBuilder,
   type Task,
   type TaskImplementation,
 } from "./task"
@@ -35,21 +39,35 @@ describe("defineTask", () => {
     defineTask("t", { backoff: 5 })
   })
 
-  test("gives withOptions the payload", () => {
-    defineTask("search.indexProduct")
+  test("gives withKey and withOptions the payload, withKey before withOptions", () => {
+    const keyed = defineTask("search.indexProduct")
       .withPayload<{ productId: string }>()
-      .withOptions(payload => {
+      .withKey(payload => {
         expectTypeOf(payload).toEqualTypeOf<{ productId: string }>()
-        return { key: `product:${payload.productId}` }
+        return `product:${payload.productId}`
       })
+    expectTypeOf(keyed).toEqualTypeOf<
+      KeyedTaskBuilder<"search.indexProduct", { productId: string }>
+    >()
+    keyed.withOptions(payload => {
+      expectTypeOf(payload).toEqualTypeOf<{ productId: string }>()
+      return { queue: payload.productId }
+    })
+    // @ts-expect-error A key is a string.
+    defineTask("t").withKey(() => true)
+    const withOptions = defineTask("t").withOptions(() => ({}))
+    // @ts-expect-error withKey comes before withOptions.
+    withOptions.withKey(() => "k")
   })
 
-  test("takes only a function in withOptions, which returns no settings", () => {
+  test("takes only a function in withOptions, which returns no key and no settings", () => {
     const task = defineTask("t").withPayload<{ seconds: number }>()
     // @ts-expect-error Static options belong to defineTask.
     task.withOptions({ delay: 60 })
+    // @ts-expect-error The key belongs to withKey.
+    task.withOptions(p => ({ key: `k:${p.seconds}` }))
     // @ts-expect-error The lease belongs to defineTask, since a worker needs it before it reads a payload.
-    task.withOptions(p => ({ lease: p.seconds, key: "k" }))
+    task.withOptions(p => ({ lease: p.seconds }))
     // @ts-expect-error The backoff belongs to defineTask.
     task.withOptions(() => ({ backoff: () => 1, delay: 0 }))
     // @ts-expect-error Whether the task is scoped belongs to defineTask.
@@ -62,11 +80,46 @@ describe("defineTask", () => {
     task.withPayload<{ id: string }>()
   })
 
-  test("gives a task of any payload as a Task<string, unknown>", () => {
+  test("makes a batch task of the items of withBatchPayload, whose handler takes an array of them", () => {
+    const task = defineTask("posts.publish", {
+      key: true,
+      keyMode: "debounce",
+      delay: 2,
+      maxWait: 10,
+    }).withBatchPayload<number>({ maxItems: 100 })
+    expectTypeOf(task).toEqualTypeOf<BatchTaskBuilder<"posts.publish", number>>()
+    expectTypeOf(task).toExtend<BatchTask<"posts.publish", number>>()
+    expectTypeOf(task.withKey(id => `post:${id}`)).toEqualTypeOf<
+      BatchTask<"posts.publish", number>
+    >()
+    // @ts-expect-error A key is a string.
+    task.withKey(id => id)
+    // @ts-expect-error The items append to a key.
+    task.withKey(() => null)
+    expectTypeOf(task).toExtend<AnyTask<"posts.publish", number[]>>()
+    expectTypeOf(task).not.toExtend<Task<"posts.publish", number[]>>()
+    expectTypeOf(defineTask("t").withPayload<number[]>()).not.toExtend<BatchTask<"t", number>>()
+    task.implement((ids, { job }) => {
+      expectTypeOf(ids).toEqualTypeOf<number[]>()
+      expectTypeOf(job.scope).toEqualTypeOf<string | null>()
+    })
+    defineTask("t", { scoped: true })
+      .withBatchPayload<string>({ maxItems: 2 })
+      .implement((_, { job }) => expectTypeOf(job.scope).toEqualTypeOf<string>())
+    // @ts-expect-error A batch task takes its options other than the key from defineTask.
+    task.withOptions(() => ({}))
+    // @ts-expect-error A batch task takes maxItems.
+    defineTask("t").withBatchPayload<number>({})
+  })
+
+  test("gives a task of any payload as a Task<string, unknown>, and one of any kind as an AnyTask<string, unknown>", () => {
     const task = defineTask("t")
       .withPayload<{ id: string }>()
-      .withOptions(({ id }) => ({ key: id }))
+      .withKey(({ id }) => id)
     expectTypeOf(task).toExtend<Task<string, unknown>>()
+    expectTypeOf(defineTask("b").withBatchPayload<number>({ maxItems: 2 })).toExtend<
+      AnyTask<string, unknown>
+    >()
   })
 })
 
@@ -81,14 +134,22 @@ describe("implement", () => {
       expectTypeOf(context.job).toEqualTypeOf<JobInfo>()
     })
     expectTypeOf(implementation).toEqualTypeOf<
-      TaskImplementation<"search.indexProduct", { productId: string }>
+      TaskImplementation<"search.indexProduct", { productId: string }, string | null, typeof task>
     >()
+    expectTypeOf(implementation).toExtend<TaskImplementation<string, unknown>>()
+  })
+
+  test("gives the implementation the task of the method, also apart from the task", () => {
+    const { implement } = task
+    expectTypeOf(implement(() => {}).task).toEqualTypeOf<typeof task>()
+    const holder = { implement: task.implement, flag: 7 }
+    expectTypeOf(holder.implement(() => {}).task).toEqualTypeOf<typeof task>()
   })
 
   test("gives the handler of a scoped task the scope as a string, through withPayload and withOptions", () => {
     defineTask("search.indexProduct", { scoped: true })
       .withPayload<{ productId: string }>()
-      .withOptions(({ productId }) => ({ key: productId }))
+      .withKey(({ productId }) => productId)
       .implement((_, { job }) => {
         expectTypeOf(job.scope).toEqualTypeOf<string>()
       })
@@ -199,13 +260,13 @@ describe("implement with onFailure", () => {
     const options: ImplementOptions<{ orderId: string }> = { onFailure: () => {} }
     const implementation = charge.implement(() => {}, options)
     expectTypeOf(implementation).toEqualTypeOf<
-      TaskImplementation<"orders.charge", { orderId: string }>
+      TaskImplementation<"orders.charge", { orderId: string }, string | null, typeof charge>
     >()
     expectTypeOf(implementation.failure).toEqualTypeOf<
       FailureImplementation<"orders.charge", { orderId: string }> | undefined
     >()
     expectTypeOf(charge.implement(() => {})).toEqualTypeOf<
-      TaskImplementation<"orders.charge", { orderId: string }>
+      TaskImplementation<"orders.charge", { orderId: string }, string | null, typeof charge>
     >()
   })
 

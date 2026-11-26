@@ -53,17 +53,16 @@ Use `enqueue` on the schedule to [override the task options](./enqueue#overridin
 A schedule can enqueue a job while its previous job is pending or running.
 Give it a [key](./keys) to merge it into a pending job, or a [queue](./queues) to run one job at a time.
 
-If the task uses `withOptions`, the worker calls it for each scheduled enqueue, possibly more than once, and reports any error it throws as a [`schedule` error](../operations/monitoring#report-errors).
-Keep that function fast and free of side effects.
+Keep the functions of `withKey` and `withOptions` of the task fast and free of side effects; the worker reports an error they throw as a [`schedule` error](../operations/monitoring#report-errors).
 
 ## Recover missed occurrences
 
 Workers check their schedules about every 15 seconds, also while their handlers are busy.
-Several workers may check the same minute, but only one check commits the decision whether to enqueue a job for it, so the schedule enqueues at most one job per minute, also after its previous job completes.
+Several workers may check the same minute, but only one check commits the decision whether to enqueue a job for it, so the schedule enqueues at most once per minute, also after its previous job completes.
 
 If no check of the schedule commits during the minute of an occurrence, such as during downtime or after a database error, the occurrence is skipped.
 Pass `catchUp: { within: 3600 }` to enqueue it if a worker checks the schedule within the next hour.
-A check enqueues at most one job however many occurrences it recovers, so write the task to process everything that is due rather than a single occurrence.
+A check enqueues at most once however many occurrences it recovers, so write the task to process everything that is due rather than a single occurrence.
 A new schedule starts at the minute of its first committed check and recovers nothing before it, also when an earlier check failed.
 
 ## Pause a schedule
@@ -82,5 +81,5 @@ To change a schedule without this race, do one of the following:
 - Stop every worker that lists its `id`, then start the workers with the new definition.
   With `catchUp`, the new definition recovers the occurrences of its own calendar that the stop missed within the window.
 - Give the changed schedule a new `id`.
-  Until the old workers stop, both schedules enqueue, so a minute that matches both gets two jobs.
+  Until the old workers stop, both schedules enqueue, so a minute that matches both gets two enqueues.
   The new `id` starts at the minute of its first committed check, without recovering what the old one missed.

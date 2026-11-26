@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, mock, test } from "bun:test"
 
 import { defineTask } from "../task/task"
 
@@ -18,9 +18,9 @@ test("rejects an ID with a lone surrogate, which would share its row with anothe
 
 test("checks the overrides of a schedule without calling the withOptions function of its task", () => {
   let calls = 0
-  const debounced = defineTask("search.indexProduct").withOptions(() => {
+  const debounced = defineTask("search.indexProduct", { key: "product" }).withOptions(() => {
     calls++
-    return { key: "product", keyMode: "debounce", delay: 1, maxWait: 5 }
+    return { keyMode: "debounce", delay: 1, maxWait: 5 }
   })
   for (const [enqueue, message] of [
     [{ maxAttempts: 0 }, "maxAttempts must be"],
@@ -47,4 +47,13 @@ test("checks the overrides of a schedule without calling the withOptions functio
     ).not.toThrow()
   }
   expect(calls).toBe(0)
+})
+
+test("rejects a schedule of a batch task with items of different keys of withKey", () => {
+  const keyFor = mock((item: string) => item)
+  const mixed = defineTask("digest").withBatchPayload<string>({ maxItems: 10 }).withKey(keyFor)
+  expect(() => defineSchedule(mixed, { cron: { minute: 0 }, payload: ["a", "b"] })).toThrow(
+    TypeError,
+  )
+  expect(keyFor).toHaveBeenCalled()
 })

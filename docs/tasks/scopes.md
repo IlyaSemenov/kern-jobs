@@ -6,7 +6,7 @@ Define the tasks of such jobs with `scoped: true`:
 ```ts [src/tasks.ts]
 export const indexProductTask = defineTask("search.indexProduct", { scoped: true })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withKey(({ productId }) => `product:${productId}`)
 ```
 
 Pass `createJobs` the scope of their jobs as a function that returns it, such as the tenant of the current request:

@@ -13,7 +13,7 @@ describe("failure", () => {
     const onFailure = mock((_failure: JobFailure<{ id: number }>, _context: HandlerContext) => {})
     const task = defineTask("t", { queue: "q", maxAttempts: 3 })
       .withPayload<{ id: number }>()
-      .withOptions(payload => ({ key: `k:${payload.id}` }))
+      .withKey(payload => `k:${payload.id}`)
     const before = Date.now()
     await runFailure(
       task.implement(() => {}, { onFailure }),
@@ -77,6 +77,15 @@ describe("failure", () => {
       reason: "handler-error",
       job: { attempt: 4, maxAttempts: 4 },
     })
+  })
+
+  test("gives the failed job of a batch task without a key of its own the key of options.job, as runJob does", async () => {
+    const onFailure = mock((_failure: JobFailure<number[]>, _context: HandlerContext) => {})
+    const implementation = defineTask("t")
+      .withBatchPayload<number>({ maxItems: 3 })
+      .implement(() => {}, { onFailure })
+    await runFailure(implementation, [1], { job: { key: "" } })
+    expect(onFailure.mock.calls[0]![0]).toMatchObject({ job: { key: "" }, payload: [1] })
   })
 
   test("gives the error message that the worker records for a reason, or job failed for an error of the handler, and the message of options.error, also of an Error", async () => {

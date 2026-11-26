@@ -10,7 +10,7 @@ The SQL function `retry` copies the statement of retry in the same way, and its 
 The jobs API could enqueue one job by `select * from enqueue(…)`, so that one implementation serves both.
 Graphile Worker does so: its `addJob` calls the SQL function `add_job` ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/sql-add-job.md)).
 
-- `enqueueMany` would keep a statement of its own, one insert of the whole batch, so the merge of a job would still have two copies; calling the function for each item instead would run an insert per item and merge repeated keys, which the batch rejects.
+- `enqueueMany` would keep a statement of its own, one insert of all its jobs, so the merge of a job would still have two copies; calling the function for each item instead would run an insert per item and merge repeated keys, which the batch rejects.
 - The tests of the core pass virtual time as the `$1` parameter of each statement, so the function would take the time as an argument, which every caller of SQL would see.
 
 ## The migration builds the function from the builders of the core

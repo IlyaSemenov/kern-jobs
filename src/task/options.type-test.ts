@@ -1,12 +1,20 @@
 import { describe, test } from "bun:test"
 
-import type { EnqueueOptions, EnqueueOverrides } from "./options"
+import type { EnqueueOptions, EnqueueOverrides, StaticEnqueueOptions } from "./options"
 
 declare const date: Date
 
 describe("EnqueueOptions", () => {
+  test("rejects a key, which withKey gives", () => {
+    // @ts-expect-error The key belongs to withKey.
+    const options: EnqueueOptions = { key: "k", queue: "q" }
+    void options
+  })
+})
+
+describe("StaticEnqueueOptions", () => {
   test("takes the options of each key mode", () => {
-    const options: EnqueueOptions[] = [
+    const options: StaticEnqueueOptions[] = [
       { key: "k", queue: "q", maxAttempts: 3, delay: 5, resetAttempts: true },
       { key: "k", keyMode: "replace", runAt: date },
       { key: "k", keyMode: "keep", runAt: date },
@@ -19,12 +27,12 @@ describe("EnqueueOptions", () => {
 
   test("rejects both delay and runAt", () => {
     // @ts-expect-error delay and runAt exclude each other.
-    const options: EnqueueOptions = { delay: 1, runAt: date }
+    const options: StaticEnqueueOptions = { delay: 1, runAt: date }
     void options
   })
 
   test("rejects debounce without delay or maxWait, or with runAt", () => {
-    const options: EnqueueOptions[] = [
+    const options: StaticEnqueueOptions[] = [
       // @ts-expect-error debounce needs maxWait.
       { key: "k", keyMode: "debounce", delay: 2 },
       // @ts-expect-error debounce needs delay.
@@ -36,7 +44,7 @@ describe("EnqueueOptions", () => {
   })
 
   test("rejects maxWait outside debounce", () => {
-    const options: EnqueueOptions[] = [
+    const options: StaticEnqueueOptions[] = [
       // @ts-expect-error maxWait belongs to debounce.
       { key: "k", maxWait: 10 },
       // @ts-expect-error maxWait belongs to debounce.
@@ -47,7 +55,7 @@ describe("EnqueueOptions", () => {
 
   test("rejects resetAttempts with keep", () => {
     // @ts-expect-error keep does not change the pending job.
-    const options: EnqueueOptions = { key: "k", keyMode: "keep", resetAttempts: true }
+    const options: StaticEnqueueOptions = { key: "k", keyMode: "keep", resetAttempts: true }
     void options
   })
 })

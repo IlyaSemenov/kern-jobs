@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
-import { enqueue, type EnqueueParams } from "../sql/enqueue"
+import { enqueue, enqueueItems, type EnqueueParams } from "../sql/enqueue"
 import type { KeyMode } from "../sql/job"
 import { toStatementLabel } from "../sql/statement"
 import {
@@ -43,13 +43,15 @@ const modeOptions = (mode: KeyMode): Partial<EnqueueParams> =>
  * Enqueues a job, of task `t` unless `o` gives another, 11 seconds before `failedAt`, claims it a second before `failedAt`, fails it for good at `failedAt`, and returns its id.
  * With the default `failedAt`, the job is enqueued at T(0), claimed at T(10), and fails at T(11).
  */
-async function createFailedJob(o: Partial<EnqueueParams> = {}, failedAt = 11): Promise<string> {
-  const { id } = await enqueue(testSchema.conn, testSchema.table, {
-    task: "t",
-    payload: "failed",
-    now: T(failedAt - 11),
-    ...o,
-  })
+async function createFailedJob(
+  o: Partial<EnqueueParams> & { maxItems?: number } = {},
+  failedAt = 11,
+): Promise<string> {
+  const { maxItems, ...params } = { task: "t", payload: "failed", now: T(failedAt - 11), ...o }
+  const { id } =
+    maxItems === undefined
+      ? await enqueue(testSchema.conn, testSchema.table, params)
+      : only(await enqueueItems(testSchema.conn, testSchema.table, { ...params, maxItems }))
   const tasks = [o.task ?? "t"]
   const claim = only(
     await claimCycle(testSchema.conn.query, { ...W, tasks, slots: 1, now: T(failedAt - 1) }),
@@ -252,6 +254,40 @@ describe("retry", () => {
     ])
   })
 
+  test("returns a failed batch to pending sealed with its payload beside the open batch of its key, which takes the later items", async () => {
+    const batch = { key: "", maxItems: 3 }
+    const failed = await createFailedJob({ ...batch, payload: [1] })
+    const { id: open } = only(
+      await enqueueItems(testSchema.conn, testSchema.table, {
+        task: "t",
+        ...batch,
+        payload: [2],
+        now: T(12),
+      }),
+    )
+    expect(await retry(failed)).toEqual({ retried: true })
+    expect(
+      await enqueueItems(testSchema.conn, testSchema.table, {
+        task: "t",
+        ...batch,
+        payload: [3],
+        now: T(21),
+      }),
+    ).toEqual([{ id: open, created: false }])
+    expect(
+      (await jobs(testSchema.conn.query)).map(r => [
+        r.id,
+        r.state,
+        r.payload,
+        r.sealed,
+        r.attempts,
+      ]),
+    ).toEqual([
+      [failed, "pending", [1], true, 0],
+      [open, "pending", [2, 3], false, 0],
+    ])
+  })
+
   test("acts only on a failed job of the scope that it is given", async () => {
     const failed = await createFailedJob({ scope: "a" })
     expect(await retry(failed, { scope: "b" })).toBeNull()
@@ -290,7 +326,7 @@ describe("retry", () => {
       await (end === "commit" ? producer.query`commit` : producer.query`rollback`)
       if (end === "commit") {
         // The snapshot of the retry missed the pending job, so the unique index rejects the update, which changes nothing.
-        expect(isUniqueViolation(await getRejection(retried), "job_pending_key_idx")).toBe(true)
+        expect(isUniqueViolation(await getRejection(retried), "job_open_key_idx")).toBe(true)
         expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state])).toEqual([
           [failed, "failed"],
           [pending, "pending"],
@@ -316,7 +352,7 @@ describe("retry", () => {
       now: T(12),
     })
     await resume()
-    expect(isUniqueViolation(await getRejection(retried), "job_pending_key_idx")).toBe(true)
+    expect(isUniqueViolation(await getRejection(retried), "job_open_key_idx")).toBe(true)
     expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state])).toEqual([
       [failed, "failed"],
       [pending, "pending"],
@@ -521,6 +557,18 @@ describe("delete pending", () => {
     expect(await deletePending(filter)).toBe(1)
     expect(await jobs(testSchema.conn.query)).toEqual(others)
     expect(await deletePending(filter)).toBe(0)
+  })
+
+  test("deletes the sealed and the open batches of a key", async () => {
+    const results = await enqueueItems(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      maxItems: 2,
+      payload: [1, 2, 3, 4, 5],
+    })
+    expect(results).toHaveLength(3)
+    expect(await deletePending({ scope: "", task: "t", key: "k" })).toBe(3)
+    expect(await jobs(testSchema.conn.query)).toEqual([])
   })
 
   test("deletes the pending jobs of a scope, of a task, or of every scope, with and without a key, and leaves active and failed jobs", async () => {

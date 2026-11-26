@@ -5,12 +5,12 @@ It locks the keys in that order too, so two transactions that enqueue overlappin
 
 ## Keys in a sorted order
 
-Inserting the rows by `(scope, task, key)` makes concurrent batches lock their keys in one order, so they do not deadlock with each other, though they still can with a transaction that holds a key from an earlier statement.
+Inserting the rows by `(scope, task, key)` makes concurrent calls of `enqueueMany` lock their keys in one order, so they do not deadlock with each other, though they still can with a transaction that holds a key from an earlier statement.
 The identity then gives the new rows with a key ids in the order of their keys, so a queue starts them in that order rather than in the order of the payloads.
 
 ## Advisory locks of the keys in a sorted order
 
-Taking a transaction-level advisory lock of a hash of each key in a sorted order before the insert, as BullMQ does for the deduplication ids of `addBulk` on PostgreSQL ([source](https://github.com/taskforcesh/bullmq/blob/v6.7.5/src/postgres/migrations/0008_bulk_dedup_lock_order.sql#L39-L50)), keeps the ids in the order of the items and serializes two batches of the same keys.
+Taking a transaction-level advisory lock of a hash of each key in a sorted order before the insert, as BullMQ does for the deduplication ids of `addBulk` on PostgreSQL ([source](https://github.com/taskforcesh/bullmq/blob/v6.7.5/src/postgres/migrations/0008_bulk_dedup_lock_order.sql#L39-L50)), keeps the ids in the order of the items and serializes two calls with the same keys.
 But each advisory lock takes an entry of the shared lock table until the transaction ends, which `max_locks_per_transaction` sizes: with its default of 64 and 100 connections, a transaction took 10,000 advisory locks and failed with `out of shared memory` at 20,000.
 Like the sorted keys, the locks do not prevent a deadlock with a transaction that holds a key from an earlier statement.
 

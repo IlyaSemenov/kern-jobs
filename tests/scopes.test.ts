@@ -17,18 +17,17 @@ import pg from "pg"
 
 import { createTestSchema, databaseUrl, type TestSchema } from "../testing/database"
 
-/** Options of the jobs of a product: one pending job and one running job per product. */
-const productOptions = ({ productId }: { productId: string }) => ({
-  key: `product:${productId}`,
-  queue: `product:${productId}`,
-})
+/** Key of the jobs of a product, which is also their queue: one pending job and one running job per product. */
+const productKey = ({ productId }: { productId: string }) => `product:${productId}`
 
 const indexProduct = defineTask("search.indexProduct", { scoped: true })
   .withPayload<{ productId: string; version: number }>()
-  .withOptions(productOptions)
+  .withKey(productKey)
+  .withOptions(payload => ({ queue: productKey(payload) }))
 const exportProduct = defineTask("catalog.exportProduct")
   .withPayload<{ productId: string; version: number }>()
-  .withOptions(productOptions)
+  .withKey(productKey)
+  .withOptions(payload => ({ queue: productKey(payload) }))
 
 /** Tenant of the current request, as the application keeps it. */
 const currentTenant = new AsyncLocalStorage<string>()

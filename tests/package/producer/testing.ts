@@ -5,7 +5,7 @@ import { createTestJobs, runFailure, runJob } from "kern-jobs/testing"
 
 const indexProductTask = defineTask("search.indexProduct", { scoped: true })
   .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withKey(({ productId }) => `product:${productId}`)
 const testJobs = createTestJobs({ scope: "tenant" })
 const captured = await testJobs.capture(() =>
   testJobs.enqueue(indexProductTask, { productId: "1" }),

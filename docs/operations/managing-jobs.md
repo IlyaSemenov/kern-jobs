@@ -36,8 +36,9 @@ await jobs.retry(id)
 The job returns to pending with its payload and options and the full budget of its `maxAttempts`, and runs as soon as a worker is free, from its first attempt; `retry` resolves to `{ retried: true }`.
 A job of a [queue](../tasks/queues) waits behind the jobs of its queue that are due.
 
-When a pending job of its [key](../tasks/keys) exists, such as one that an enqueue added after the failure, `retry` changes neither job and resolves to `{ retried: false, pendingId }`.
+When its [key](../tasks/keys) has a pending job that takes new enqueues, such as one that an enqueue added after the failure, `retry` changes neither job and resolves to `{ retried: false, pendingId }`.
 Then delete the failed job if the pending job does its work, or delete the pending job and retry the failed one again.
+A job of a [batch task](../tasks/keys#batches) never meets one: it returns with its own items beside the pending batches of its key.
 
 `retry` resolves to `null` when no failed job has the id, such as one that a retry has already returned to pending.
 
@@ -70,7 +71,7 @@ cross join lateral kern_jobs.retry(j.id) r
 where j.state = 'failed' and j.task = 'email.send'
 ```
 
-The calls retry the jobs one after another, so of the failed jobs of one key, at most one returns to pending, and a call that finds a pending job of the key returns its id as `pending_id`.
+The calls retry the jobs one after another, so of the failed jobs of one key of a task that is not a batch task, at most one returns to pending, and a call that finds a pending job of the key that takes new enqueues returns its id as `pending_id`.
 
 ## Delete a job
 
@@ -108,7 +109,7 @@ await sql.begin(async tx => {
 
 Through `jobs` with [`ALL_SCOPES`](#jobs-of-a-scope), it deletes the pending jobs of every scope, and through `jobs` without a scope, only unscoped jobs.
 
-To delete the pending job of a key, pass the task and the key, as in [Cancel a pending job](../tasks/keys#cancel-a-pending-job).
+To delete the pending jobs of a key, pass the task and the key, as in [Cancel a pending job](../tasks/keys#cancel-a-pending-job).
 
 `deletePending` resolves to the number of the jobs it deleted, and leaves the jobs that run or failed.
 It cancels every enqueue that merged into the jobs it deletes.

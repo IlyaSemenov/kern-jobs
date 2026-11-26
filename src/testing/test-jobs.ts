@@ -9,7 +9,7 @@ import {
 } from "../producer/jobs"
 import type { EnqueueJob, EnqueueResult } from "../sql/enqueue"
 import { encodePayload } from "../sql/job"
-import type { FailureImplementation, Task, TaskImplementation } from "../task/task"
+import type { FailureImplementation, TaskBase, TaskImplementation } from "../task/task"
 
 import { type RunFailureArgs, type RunFailureOptions, runFailureWithScope } from "./run-failure"
 import { type RunJobArgs, type RunJobOptions, runJobWithScope } from "./run-job"
@@ -21,7 +21,7 @@ export interface TestJobsOptions {
 }
 
 /**
- * Options of a recorded enqueue: those of `defineTask`, of `withOptions`, and the overrides, merged as an enqueue merges them.
+ * Options of a recorded enqueue: those of `defineTask`, of `withKey` and `withOptions`, and the overrides, merged as an enqueue merges them.
  * An option that no layer gave is absent, and so are `maxWait` outside `keyMode: "debounce"` and `resetAttempts` with `keyMode: "keep"`, which the enqueue ignores.
  * `key: true` is recorded as the empty key, `""`, which the enqueue stores.
  */
@@ -42,7 +42,7 @@ export interface TestJobCall<P = unknown> {
   task: string
   /** Scope of the job, or `null` for a job without a scope, as a handler gets it in `job.scope`. */
   scope: string | null
-  /** Payload as the code passed it to `enqueue`. */
+  /** Payload as the code passed it to `enqueue`, or the array of items of `enqueueItems`. */
   payload: P
   options: TestEnqueueOptions
 }
@@ -57,9 +57,9 @@ export interface TestJobQueries<R = unknown> {
    * Returns the enqueues of a task, as `deletePending({ task })` selects its pending jobs: of a task defined with `scoped: true`, those of its name in the scope of `createTestJobs` at the call, or in every scope with `ALL_SCOPES`, such as those of an unscoped definition of the name; of another task, those of its name without a scope.
    * It throws `TypeError` for a scoped task when `createTestJobs` has no scope.
    */
-  callsFor<P>(task: Task<string, P>): TestJobCall<P>[]
+  callsFor<P>(task: TaskBase<string, P>): TestJobCall<P>[]
   /** Returns the payloads of the enqueues that `callsFor` returns. */
-  payloadsFor<P>(task: Task<string, P>): P[]
+  payloadsFor<P>(task: TaskBase<string, P>): P[]
 }
 
 /** Jobs API of tests, which `createTestJobs` returns. */
@@ -105,13 +105,18 @@ interface PendingJob {
   /** Scope as the table stores it: empty for a job without a scope. */
   scope: string
   key: string | null
+  /** Items of a job of a batch task, and its capacity; absent for another job. */
+  batch?: { items: number; maxItems: number }
+  /** Whether the job takes no more enqueues of its key: a job of a batch task that is full or of a capacity that a later enqueue changed. */
+  sealed: boolean
 }
 
 /**
  * Creates the jobs API of tests: it records each enqueue rather than writing it to a database, and keeps its jobs pending, since no worker runs them.
  * It merges and checks the options of an enqueue, serializes its payload, resolves its scope, and checks the arguments of administration as `createJobs` does, and rejects with the same errors before it records anything, also with the error of `JSON.stringify` for a payload, such as a bigint; it does not check the constraints of the table, such as the length of a key.
  * `enqueueMany` records an enqueue of each payload in their order, and none of them when it rejects.
- * An enqueue with the key of a pending job of its task and scope resolves to the id of that job and `created: false`, in every key mode.
+ * An enqueue with the key of a pending job of its task and scope that takes new enqueues resolves to the id of that job and `created: false`, in every key mode; it rejects with an `Error` of the message and the `code` of the error of the database when it would merge a batch job and a job that is not a batch.
+ * `enqueueItems` records one enqueue of its array, also of an empty one, and resolves to the jobs that its items fill by their count: the pending job of its key until it has `maxItems`, then new ones; a pending job of another `maxItems` takes no more items.
  * `delete` and `deletePending` delete the pending jobs that they reach by the scope of `createTestJobs`, `retry` resolves to `null` and `deleteFailed` to 0, since no job fails.
  * Each call of `createTestJobs` has its own enqueues and pending jobs: another instance, also with `ALL_SCOPES`, does not reach them.
  * It ignores transactions: an enqueue in a transaction that rolls back stays recorded.
@@ -124,25 +129,85 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
   let lastId = 0
 
   /**
-   * Returns the function that finds the id of the pending job of a key of the task and scope of an enqueue, among the pending jobs before it: by a map for several jobs with a key, built once per call, and by a search for one, so that an enqueue of one job does not index every pending job.
+   * Returns the function that finds the pending job of a key of the task and scope of an enqueue that takes its enqueues, among the pending jobs before it: by a map for several jobs with a key, built once per call, and by a search for one, so that an enqueue of one job does not index every pending job.
    * The jobs of one call have distinct keys, so none merges into another of the call.
    */
-  const createPendingIdLookup = (
+  const createPendingJobLookup = (
     task: string,
     jobScope: string,
     jobs: readonly { key?: string | null }[],
-  ): ((key: string) => string | undefined) => {
-    const isOfCall = (j: PendingJob) => j.task === task && j.scope === jobScope
+  ): ((key: string) => PendingJob | undefined) => {
+    const isOfCall = (j: PendingJob) => j.task === task && j.scope === jobScope && !j.sealed
     if (jobs.filter(params => params.key != null).length < 2) {
-      return key => pending.find(j => isOfCall(j) && j.key === key)?.id
+      return key => pending.find(j => isOfCall(j) && j.key === key)
     }
-    const ids = new Map<string, string>()
-    for (const j of pending) if (isOfCall(j) && j.key !== null) ids.set(j.key, j.id)
-    return key => ids.get(key)
+    const found = new Map<string, PendingJob>()
+    for (const j of pending) if (isOfCall(j) && j.key !== null) found.set(j.key, j)
+    return key => found.get(key)
+  }
+
+  /** Adds a pending job, and returns its result. */
+  const addPending = (job: Omit<PendingJob, "id">): EnqueueResult => {
+    const id = String(++lastId)
+    pending.push({ id, ...job })
+    return { id, created: true }
+  }
+
+  /**
+   * Fills the jobs of `count` items of a key, at most `maxItems` in each, and returns their results: the pending job of the key that takes its enqueues, if any, and then new ones, as many full ones as needed and at most one partial one.
+   */
+  const fillBatch = (
+    task: string,
+    jobScope: string,
+    key: string,
+    count: number,
+    maxItems: number,
+    open: PendingJob | undefined,
+  ): EnqueueResult[] => {
+    const results: EnqueueResult[] = []
+    let left = count
+    if (left > 0 && open?.batch) {
+      if (open.batch.maxItems === maxItems) {
+        const fill = Math.min(maxItems - open.batch.items, left)
+        open.batch.items += fill
+        open.sealed = open.batch.items >= maxItems
+        left -= fill
+        results.push({ id: open.id, created: false })
+      } else {
+        // An open batch of another capacity, as after a deploy that changes `maxItems`, takes no more items.
+        open.sealed = true
+      }
+    }
+    while (left > 0) {
+      const items = Math.min(maxItems, left)
+      left -= items
+      results.push(
+        addPending({
+          task,
+          scope: jobScope,
+          key,
+          batch: { items, maxItems },
+          sealed: items === maxItems,
+        }),
+      )
+    }
+    return results
+  }
+
+  /** Records an enqueue of a task in a scope. */
+  const record = (task: string, jobScope: string, params: EnqueueJob) => {
+    const call: TestJobCall = {
+      task,
+      scope: toJobScope(jobScope),
+      payload: params.payload,
+      options: toTestEnqueueOptions(params),
+    }
+    calls.push(call)
+    for (const captured of captures) captured.push(call)
   }
 
   /** Returns the scope that `runJob` and `runFailure` give a job of a task without `options.job.scope`: the scope of `createTestJobs` at the call for a scoped task, as an enqueue gives it, and `null` for another task. */
-  const getRunScope = (task: Task<string, unknown>) => toJobScope(getEnqueueScope(task, scope))
+  const getRunScope = (task: TaskBase<string, unknown>) => toJobScope(getEnqueueScope(task, scope))
 
   /** Removes the pending jobs that match a filter, and returns their count. */
   const removePending = (filter: (job: PendingJob) => boolean) => {
@@ -161,23 +226,28 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
       async enqueueMany({ task, scope: jobScope, jobs }): Promise<EnqueueResult[]> {
         // The payloads of a real enqueue are serialized, which fails for such values as a bigint before anything is recorded, also for the jobs before it.
         for (const params of jobs) encodePayload(params.payload)
-        const findPendingId = createPendingIdLookup(task, jobScope, jobs)
-        return jobs.map(params => {
-          const call: TestJobCall = {
-            task,
-            scope: toJobScope(jobScope),
-            payload: params.payload,
-            options: toTestEnqueueOptions(params),
-          }
-          calls.push(call)
-          for (const captured of captures) captured.push(call)
-          const key = params.key ?? null
-          const pendingId = key === null ? undefined : findPendingId(key)
-          if (pendingId !== undefined) return { id: pendingId, created: false }
-          const id = String(++lastId)
-          pending.push({ id, task, scope: jobScope, key })
-          return { id, created: true }
+        const findPendingJob = createPendingJobLookup(task, jobScope, jobs)
+        const opens = jobs.map(params =>
+          params.key == null ? undefined : findPendingJob(params.key),
+        )
+        for (const open of opens) if (open?.batch) throw createMergeError(open)
+        return jobs.map((params, i) => {
+          record(task, jobScope, params)
+          const open = opens[i]
+          if (open !== undefined) return { id: open.id, created: false }
+          return addPending({ task, scope: jobScope, key: params.key ?? null, sealed: false })
         })
+      },
+      async enqueueItems(params): Promise<EnqueueResult[]> {
+        const { task, scope: jobScope } = params
+        encodePayload(params.payload)
+        // The jobs API passes items only as an array, and with a key unless it is empty, which changes nothing.
+        const key = params.key!
+        const count = (params.payload as unknown[]).length
+        const open = count > 0 ? createPendingJobLookup(task, jobScope, [params])(key) : undefined
+        if (open !== undefined && !open.batch) throw createMergeError(open)
+        record(task, jobScope, params)
+        return fillBatch(task, jobScope, key, count, params.maxItems, open)
       },
       async retry() {
         return null
@@ -240,6 +310,24 @@ export function createTestJobs(options: TestJobsOptions = {}): TestJobs {
   }
 }
 
+/**
+ * Returns an error with the message and the SQLSTATE `code` of the error of the database for an enqueue that would merge into a pending job of the other kind: a job that is not a batch into a batch, or items into a job that is not a batch.
+ * It is an `Error` rather than the `QueryError` of kern-db, since `kern-jobs/testing` loads no database package.
+ */
+function createMergeError(open: PendingJob): Error & { code: string } {
+  const key = quoteLiteral(open.key!)
+  const message = open.batch
+    ? `The pending job of key ${key} of task ${open.task} is a batch, so a job that is not a batch cannot merge into it`
+    : `The pending job of key ${key} of task ${open.task} is not a batch, so items cannot append to it`
+  return Object.assign(new Error(message), { code: "55000" })
+}
+
+/** Quotes text as `quote_literal` of PostgreSQL does: in `E'…'` with doubled backslashes when it has a backslash. */
+function quoteLiteral(text: string): string {
+  const quoted = `'${text.replaceAll("'", "''").replaceAll("\\", "\\\\")}'`
+  return text.includes("\\") ? `E${quoted}` : quoted
+}
+
 /** Returns the scope of a job as `job.scope` gives it from the scope that the table stores: `null` for the empty scope of a job without one. */
 function toJobScope(scope: string): string | null {
   return scope === "" ? null : scope
@@ -260,7 +348,7 @@ function createTestJobQueries<R>(
   result: R,
   scope: JobsOptions["scope"],
 ): TestJobQueries<R> {
-  const callsFor = <P>(task: Task<string, P>): TestJobCall<P>[] => {
+  const callsFor = <P>(task: TaskBase<string, P>): TestJobCall<P>[] => {
     // The scope that `deletePending` of the task reaches: the empty one for an unscoped task, also of a name that a scoped definition used before.
     const taskScope = getTaskScope(task, scope)
     return calls.filter(

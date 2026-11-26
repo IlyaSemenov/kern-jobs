@@ -11,7 +11,9 @@
 - Each enqueue, and each payload of `enqueueMany` in their order, is recorded as a call of its task, its scope (`null` for the empty scope), its payload as the code passed it, and its options.
   The options come from the parameters of the core: those that a layer gave, with `key: null` and `queue: null`, and without `maxWait` outside `debounce` and `resetAttempts` with `keep`, which `toEnqueueParams` drops; `toEnqueueParams` keeps the key mode absent when no layer gives it, so that the call tells it from an explicit `replace`.
 - The store keeps the id, task, scope, and key of each pending job, and no payload or run time.
-  An enqueue of the key of a pending job of its task and scope resolves to its id and `created: false` in every key mode; other enqueues add a pending job with the next id.
+  An enqueue of the key of a pending job of its task and scope that takes new enqueues resolves to its id and `created: false` in every key mode; other enqueues add a pending job with the next id.
+  `enqueueItems` is recorded as one call of its array, also an empty one, and resolves to the jobs that its items fill as a database fills them one enqueue after another, by the counts of the items of its pending jobs: the open batch of its key until it has `maxItems`, then new jobs, and an open batch of another `maxItems` is sealed; the double does not store the items.
+  An enqueue that would merge into such a job of the other kind, a job that is not a batch into a batch or items into a job that is not a batch, rejects with an `Error` of the message and the `code` of the error of the database, rather than its `QueryError`, since the entry loads no database package; it rejects before anything is recorded, also for the payloads of `enqueueMany` before it.
   `delete` and `deletePending` remove the pending jobs of the scope that the jobs API resolved, of every scope for `null`; no job runs or fails, so `retry` resolves to `null` and `deleteFailed` to 0.
 - Each call of `createTestJobs` has its own calls and pending jobs, so an instance with `ALL_SCOPES` does not reach those of another instance.
 - `capture` adds a list to a set of captures for the time of its action, and each enqueue appends its call to every list in the set, so nested and concurrent captures each get every enqueue made while they run, and `clear` keeps the calls that a running capture holds.
@@ -24,7 +26,7 @@
 - A scoped task takes a scope, which the types require and `runJob` rejects with `TypeError` without, since the worker does not run such a job; a scope that `job` gives, of any task, passes `checkScope` of `producer/jobs.ts`.
 - The arguments of a task that is not scoped are a union whose first member, with a payload, is not conditional on the payload type, so that a wrapper generic over the payload passes a payload and options.
 - `runJob` reads each field of `options` and `options.job` at most once, since a getter may return another value on each read.
-  It checks the scope and resolves the options of the task before it reads the other fields of `job`.
+  It checks the scope and resolves the options of the task before it reads the other fields of `job`, except the key, which it reads before the options, whose checks take it as the key of an enqueue, so that the key of `job` replaces that of `withKey` without calling `withKey`, as an override of an enqueue does.
 - `job.id` must have the form and the range of an id of the table, a decimal integer from 1 to 2^63 − 1 without leading zeros, though no row of it needs to exist: `resolveJobInfo` rejects another one by `checkJobId` of `producer/jobs.ts`, which `delete` and `retry` also run.
 - `runJob` runs the handler by `runTaskHandler` of `task/run-handler.ts`, as the worker does, through `options.runHandler` when it is given, with the name of the task and the payload through JSON: it resolves or rejects as `runHandler` does, or as the handler does without it.
   It does not turn `RetryError` and `TerminalError` into a settlement.
@@ -46,4 +48,4 @@
   The scope of the failed job follows the rules of the scope of `runJob` and `testJobs.runJob`, and the failure job takes it.
 - The other fields of the failure are the id `"1"`, the reason `handler-error`, and the current time as `failedAt` in the format of the SQL failure, by `toISOString`.
 - The error is `{ message }` of `options.error`, since JSON drops the message of an `Error`, which is not enumerable, and by default the message that the worker or the reaper records for the reason, `FAILURE_MESSAGES` of `task/failure.ts`, which they share, or `job failed` for a reason that a thrown error causes.
-- A field of `options` or `options.job` other than `undefined` replaces its default, and `runFailure` reads each of them at most once, the fields of `job` other than `scope` after the checks of the scope and the options of the task, as `runJob` does.
+- A field of `options` or `options.job` other than `undefined` replaces its default, and `runFailure` reads each of them at most once, the fields of `job` other than `scope` after the checks of the scope and the options of the task, but the key before the options, as `runJob` does.

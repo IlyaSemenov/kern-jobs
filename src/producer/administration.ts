@@ -24,9 +24,9 @@ export interface RetryParams {
 
 /**
  * Returns a failed job to pending in place, with a full budget of attempts, to run at once.
- * When a pending job of its key exists, it changes neither job and returns the id of the pending one.
+ * When a pending job of its key that takes new enqueues exists, it changes neither job and returns the id of the pending one; a batch job returns sealed whatever the jobs of its key.
  * Returns `null` when no failed job of the scope has the id.
- * A pending job of the key that a producer inserts after the snapshot of the statement makes it fail with the unique violation of `job_pending_key_idx`.
+ * A pending job of the key that a producer inserts after the snapshot of the statement makes it fail with the unique violation of `job_open_key_idx`.
  */
 export async function retryFailedJob(
   db: ValuesTarget,
@@ -39,15 +39,16 @@ export async function retryFailedJob(
     // The SQL function `retry` of the schema copies this statement, which `retry-function.test.ts` compares with it: a change of it needs a new migration that replaces the function.
     // The pending job of the key is locked, so that a claim that holds it is waited for and, once it commits, no longer conflicts; the unique index of pending keys still rejects one that the snapshot misses.
     // The run time, the window, and the absent backoff are those of a new enqueue; the other columns stay.
+    // A batch job returns sealed with its own items, so no pending job of its key keeps it from returning.
     labelSql(
       "admin:retry-failed",
       `with f as (
-       select id, scope, task, key from ${table.name}
+       select id, scope, task, key, max_items from ${table.name}
        where id = $2::text::bigint and state = 'failed' and ($3::text is null or scope = $3::text) and ${pauseCondition("retry")}
        for update
      ), c as (
        select p.id from ${table.name} p, f
-       where p.state = 'pending' and p.scope = f.scope and p.task = f.task and p.key = f.key
+       where f.max_items is null and p.state = 'pending' and not p.sealed and p.scope = f.scope and p.task = f.task and p.key = f.key
        for update of p
      ), u as (
        update ${table.name} j set state = 'pending', attempts = 0, run_at = n.t, not_before = null, window_started_at = n.t,
@@ -108,6 +109,8 @@ export async function deletePendingJobs(
   const values: Param[] = []
   const conditions = ["state = 'pending'"]
   addEqualityConditions(conditions, values, filter)
+  // A key splits into the conditions of the unique index of the open keys and of the index of the sealed batch jobs, so that a plan takes both.
+  if (filter.key != null) conditions.push("(not sealed or sealed)")
   return deleteJobsWhere(db, table, "admin:delete-pending", conditions, values)
 }
 
@@ -145,7 +148,7 @@ export async function deleteFailedJobs(
 
 /**
  * Adds a condition that a column equals its value for each of `scope`, `task`, and `key` that a filter gives, binding the values after those already in `values`.
- * Only the given columns get a condition, so that a filter by key can use the unique index of pending keys also in a generic plan of a prepared statement.
+ * Only the given columns get a condition, so that a filter by key can use the indexes of pending keys also in a generic plan of a prepared statement.
  */
 function addEqualityConditions(
   conditions: string[],

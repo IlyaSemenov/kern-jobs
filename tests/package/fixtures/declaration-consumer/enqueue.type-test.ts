@@ -1,10 +1,20 @@
 import { describe, expectTypeOf, test } from "bun:test"
 
-import type { EnqueueResult, Jobs, Task, TaskBuilder } from "kern-jobs"
+import type {
+  BatchTaskBuilder,
+  EnqueueResult,
+  Jobs,
+  KeyedTaskBuilder,
+  StaticEnqueueOptions,
+  Task,
+  TaskBuilder,
+} from "kern-jobs"
 
 import { createPgJobs, createPostgresJobs, enqueueIndex } from "../declarations/jobs.js"
 import {
   indexProductTask,
+  publishPostsOptions,
+  publishPostsTask,
   purgeExpiredSessionsTask,
   sendReminderTask,
 } from "../declarations/tasks.js"
@@ -14,7 +24,7 @@ declare const jobs: Jobs
 describe("emitted declarations of tasks", () => {
   test("keep the name and the payload of each task", () => {
     expectTypeOf(indexProductTask).toEqualTypeOf<
-      Task<"search.indexProduct", { productId: string }>
+      KeyedTaskBuilder<"search.indexProduct", { productId: string }>
     >()
     expectTypeOf(sendReminderTask).toEqualTypeOf<
       Task<"reminders.send", { reminderId: string; at?: string }>
@@ -22,6 +32,8 @@ describe("emitted declarations of tasks", () => {
     expectTypeOf(purgeExpiredSessionsTask).toEqualTypeOf<
       TaskBuilder<"sessions.purgeExpired", void>
     >()
+    expectTypeOf(publishPostsTask).toEqualTypeOf<BatchTaskBuilder<"posts.publish", number>>()
+    expectTypeOf(publishPostsOptions).toEqualTypeOf<StaticEnqueueOptions | undefined>()
   })
 
   // Each call stays on one line, where every version of TypeScript reports its error.

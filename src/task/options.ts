@@ -4,9 +4,10 @@ import { checkCount, checkStorableText, isStorableText, storableTextRule } from 
 import type { EnqueueParams } from "../sql/enqueue"
 
 import { delayRange, isDelay } from "./delay"
-import type { Task } from "./task"
+import type { TaskBase } from "./task"
 
-interface CommonOptions {
+/** Options of the key, the queue, and the attempts of a job, which the options of `defineTask` and the overrides of `jobs.enqueue` take. */
+export interface CommonEnqueueOptions {
   /**
    * Key of the pending job within its task, such as `product:42`; `true` is the empty key, `""`, and `null` enqueues the job without a key.
    */
@@ -75,28 +76,116 @@ interface NoSettings {
 }
 
 /** Options of the enqueues of a task that `defineTask` takes beside its settings. */
-export type StaticEnqueueOptions = CommonOptions & TimeOptions & KeyModeOptions
+export type StaticEnqueueOptions = CommonEnqueueOptions & TimeOptions & KeyModeOptions
 
-/** Options of the enqueues of a task, which the function of `withOptions` returns. */
-export type EnqueueOptions = StaticEnqueueOptions & NoSettings
+/** Options of an enqueue of a payload, which the function of `withOptions` returns: those of `defineTask` other than the key, which `withKey` gives. */
+export type EnqueueOptions = StaticEnqueueOptions &
+  NoSettings & {
+    /** Given by `withKey`, `defineTask`, or the enqueue. */
+    key?: undefined
+  }
 
 /**
  * Options of one enqueue that replace those of its task: a field given as `undefined` keeps the field of the task, and giving `delay` or `runAt` drops the other.
  */
-export type EnqueueOverrides = CommonOptions & TimeOptions & KeyModeOverrides & NoSettings
+export type EnqueueOverrides = CommonEnqueueOptions & TimeOptions & KeyModeOverrides & NoSettings
 
-/** Resolves the enqueue parameters shared by producers and schedules, with overrides applied last. */
+/**
+ * Overrides of an enqueue of a batch task, which `jobs.enqueueItems` takes: only its key, since the other options apply to the whole batch, which holds the items of other enqueues too, and come from `defineTask`.
+ */
+export type BatchEnqueueOverrides = {
+  /** Key of the pending job that the items append to, within its task, such as `site:42`; `true` is the empty key, `""`. */
+  key?: string | true | undefined
+} & {
+  // The other overrides are rejected in an object of any type too, such as one shared with the enqueues of a task that is not a batch task.
+  [Name in Exclude<keyof EnqueueOverrides, "key">]?: undefined
+}
+
+/**
+ * Resolves the enqueue parameters shared by producers and schedules, with overrides applied last; for a batch task, the payload is its array of items.
+ * A key of the overrides replaces that of `withKey`, which is then not called.
+ */
 export function getTaskEnqueueParams<P>(
-  task: Task<string, P>,
+  task: TaskBase<string, P>,
   payload: P,
   overrides?: EnqueueOverrides,
-): EnqueueParams {
-  return toEnqueueParams(
-    task.name,
-    payload,
-    mergeOptions(task.options, task.optionsFor?.(payload), overrides),
-  )
+): TaskEnqueueParams {
+  const { maxItems } = task
+  const { keyFor } = task as KeyFunction
+  const ownKey = keyFor === undefined || overrides?.key !== undefined ? undefined : keyFor
+  if (maxItems === undefined) {
+    const key = ownKey && { key: getPayloadKey(task.name, ownKey(payload)) }
+    const options = task.optionsFor?.(payload)
+    if (options?.key !== undefined) {
+      throw new TypeError(`withOptions of task ${task.name} cannot return a key; use withKey`)
+    }
+    return toEnqueueParams(task.name, payload, mergeOptions(task.options, key, options, overrides))
+  }
+  checkBatchOverrides(task.name, overrides)
+  const key =
+    ownKey && Array.isArray(payload) ? { key: getItemsKey(task.name, payload, ownKey) } : undefined
+  return toEnqueueParams(task.name, payload, mergeOptions(task.options, key, overrides), maxItems)
 }
+
+/** Function of `withKey` of a task of either kind, which takes a payload or an item. */
+interface KeyFunction {
+  keyFor?: ((unit: unknown) => unknown) | undefined
+}
+
+/**
+ * Checks the overrides of an enqueue of a batch task: throws `TypeError` for an override other than `key`, since the other options apply to the whole batch.
+ */
+function checkBatchOverrides(
+  task: string,
+  overrides: EnqueueOverrides | BatchEnqueueOverrides | undefined,
+): void {
+  if (overrides == null) return
+  for (const [name, value] of Object.entries(overrides)) {
+    if (value !== undefined && name !== "key") {
+      throw new TypeError(
+        `An enqueue of batch task ${task} takes only a key, got ${name}; its other options come from defineTask`,
+      )
+    }
+  }
+}
+
+/** Returns the key that `withKey` of a task that is not a batch task returned for a payload, `null` for none, and throws `TypeError` for another value that is not storable text. */
+function getPayloadKey(task: string, key: unknown): string | null {
+  if (key === null) return null
+  checkComputedKey(task, key)
+  return key
+}
+
+/** Checks a key that `withKey` of a task returned: throws `TypeError` unless it is storable text. */
+function checkComputedKey(task: string, key: unknown): asserts key is string {
+  checkStorableText(`The key of withKey of task ${task}`, key)
+}
+
+/**
+ * Returns the key of the items of an enqueue of a batch task by its function of `withKey`, called once for each item, or `undefined` for no items.
+ * It throws `TypeError` for a key that is not storable text, and for items whose keys differ, since one enqueue appends to one key.
+ */
+function getItemsKey(
+  task: string,
+  items: readonly unknown[],
+  keyFor: (item: unknown) => unknown,
+): string | undefined {
+  let first: string | undefined
+  for (const item of items) {
+    const key: unknown = keyFor(item)
+    checkComputedKey(task, key)
+    if (first === undefined) first = key
+    else if (key !== first) {
+      throw new TypeError(
+        `The items of an enqueue of batch task ${task} must have one key, got ${JSON.stringify(first)} and ${JSON.stringify(key)}`,
+      )
+    }
+  }
+  return first
+}
+
+/** Parameters of an enqueue of a task: with `maxItems` for a batch task, whose payload is its array of items. */
+export type TaskEnqueueParams = EnqueueParams & { maxItems?: number | undefined }
 
 /** Options after merging one or more layers. */
 interface MergedOptions {
@@ -118,7 +207,7 @@ interface MergedOptions {
  * Merges layers of options, each replacing the fields of the layers before it, such as the options that a task gives to `defineTask`, those of its `withOptions`, and the overrides of an enqueue: a layer replaces the fields it gives other than `undefined`, and `delay` and `runAt` exclude each other, so a layer that gives one drops the other.
  */
 export function mergeOptions(
-  ...layers: (EnqueueOptions | EnqueueOverrides | undefined)[]
+  ...layers: (StaticEnqueueOptions | EnqueueOptions | EnqueueOverrides | undefined)[]
 ): MergedOptions {
   const merged: Record<string, unknown> = {}
   for (const layer of layers) {
@@ -202,12 +291,18 @@ export function toStoredKey(key: string | true): string {
 }
 
 /**
- * Checks the name of the task and the merged options, and turns them into the parameters of an enqueue of the core.
+ * Checks the name of the task and the merged options, and turns them into the parameters of an enqueue of the core, of a batch with `maxItems`.
  * It checks the name again since a task defined by an older version of kern-jobs may carry a name that `defineTask` now rejects.
  */
-export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions): EnqueueParams {
+export function toEnqueueParams(
+  task: string,
+  payload: unknown,
+  o: MergedOptions,
+  maxItems?: number,
+): TaskEnqueueParams {
   checkStorableText("The name of a task", task)
   checkOptions(o, false)
+  if (maxItems !== undefined) checkBatch(task, payload, o, maxItems)
   const keyMode = o.keyMode ?? "replace"
   const maxWait = keyMode === "debounce" ? o.maxWait : null
   return {
@@ -222,5 +317,28 @@ export function toEnqueueParams(task: string, payload: unknown, o: MergedOptions
     maxWait,
     maxAttempts: o.maxAttempts,
     resetAttempts: keyMode === "keep" ? undefined : o.resetAttempts,
+    maxItems,
+  }
+}
+
+/**
+ * Checks an enqueue of a batch task: throws `RangeError` for a `maxItems` that is not a count, and `TypeError` for a payload that is not an array, merged options without a key for items, which identifies the batch that they append to, and `keyMode: "keep"`, which `withBatchPayload` rejects too but a task of the shape of a batch task can give.
+ */
+function checkBatch(task: string, payload: unknown, o: MergedOptions, maxItems: number): void {
+  checkCount(`maxItems of task ${task}`, maxItems)
+  if (!Array.isArray(payload)) {
+    throw new TypeError(`The items of batch task ${task} must be an array`)
+  }
+  // An enqueue without items appends to no key.
+  if (o.key == null && payload.length > 0) {
+    throw new TypeError(`Batch task ${task} requires a key, such as key: true or withKey`)
+  }
+  checkBatchKeyMode(task, o.keyMode)
+}
+
+/** Throws `TypeError` for `keyMode: "keep"` of a batch task, which would drop the items of the enqueues after the first. */
+export function checkBatchKeyMode(task: string, keyMode: string | undefined): void {
+  if (keyMode === "keep") {
+    throw new TypeError(`keyMode "keep" does not apply to batch task ${task}`)
   }
 }

@@ -1,27 +1,32 @@
 import { isStorableText, storableTextRule, utf8Length } from "../limits"
-import { checkEnqueueOverrides, type EnqueueOverrides, getTaskEnqueueParams } from "../task/options"
-import { checkTaskName, isTask, type Task } from "../task/task"
+import {
+  type BatchEnqueueOverrides,
+  checkEnqueueOverrides,
+  type EnqueueOverrides,
+  getTaskEnqueueParams,
+} from "../task/options"
+import { type BatchTask, checkTaskName, isTask, type Task, type TaskBase } from "../task/task"
 
 import { compileCron, type CronDefinition } from "./cron"
 
-/** Options of `defineSchedule`, including the static payload required by the task. */
-export type ScheduleOptions<P> = {
+/** Options of `defineSchedule`, including the static payload required by the task, and the overrides `O` of its enqueue. */
+export type ScheduleOptions<P, O = EnqueueOverrides> = {
   /** Schedule ID, which identifies the schedule among the workers of one schema and defaults to the task name. */
   id?: string | undefined
   /** Structured UTC calendar or five-field UTC cron string. */
   cron: string | CronDefinition
   /** Overrides applied to the task options at each scheduled enqueue. */
-  enqueue?: EnqueueOverrides | undefined
+  enqueue?: O | undefined
   /** Set to false to skip occurrences during an intentional pause. */
   enabled?: boolean | undefined
-  /** Enqueue one job if a missed occurrence falls within this many seconds of the check. */
+  /** Enqueue once if a missed occurrence falls within this many seconds of the check. */
   catchUp?: { within: number } | undefined
 } & (undefined extends P ? { payload?: P } : { payload: P })
 
 /** Schedule returned by `defineSchedule` for the `schedules` of a worker manifest. */
 export interface Schedule<P = unknown> {
   readonly id: string
-  readonly task: Task<string, P>
+  readonly task: TaskBase<string, P>
   readonly cron: string | CronDefinition
   readonly payload: P
   readonly enqueue?: EnqueueOverrides | undefined
@@ -32,7 +37,7 @@ export interface Schedule<P = unknown> {
 /** Schedule of a worker, checked and with its calendar compiled for evaluation. */
 export interface WorkerSchedule {
   readonly id: string
-  readonly task: Task<string, unknown>
+  readonly task: TaskBase<string, unknown>
   readonly payload: unknown
   readonly enqueue: EnqueueOverrides | undefined
   readonly enabled: boolean
@@ -42,10 +47,18 @@ export interface WorkerSchedule {
   readonly calendar: number[][]
 }
 
-/** Defines a UTC schedule for an unscoped task with its payload and enqueue overrides. */
+/** Defines a UTC schedule for an unscoped task with its payload and enqueue overrides; the payload of a batch task is its array of items. */
 export function defineSchedule<P>(
   task: Task<string, P>,
   options: NoInfer<ScheduleOptions<P>>,
+): Schedule<P>
+export function defineSchedule<I>(
+  task: BatchTask<string, I>,
+  options: NoInfer<ScheduleOptions<I[], BatchEnqueueOverrides>>,
+): Schedule<I[]>
+export function defineSchedule<P>(
+  task: TaskBase<string, P>,
+  options: ScheduleOptions<P>,
 ): Schedule<P> {
   const schedule: Schedule<P> = {
     id: options.id ?? task.name,
@@ -100,7 +113,7 @@ export function toWorkerSchedule(schedule: Schedule): WorkerSchedule {
   }
   const calendar = compileCron(schedule.cron)
   if (task.optionsFor) {
-    // The function of `withOptions` runs only at an enqueue.
+    // The function of `withOptions` runs only at an enqueue, which checks the merged options; a task without it is checked here, calling `withKey` for the static payload.
     checkEnqueueOverrides(enqueue)
   } else {
     getTaskEnqueueParams(task, payload, enqueue)

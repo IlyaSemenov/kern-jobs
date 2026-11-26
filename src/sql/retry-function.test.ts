@@ -22,7 +22,7 @@ import { fail } from "../worker/db/settlement"
 import * as t from "../worker/db/types"
 import { isUniqueViolation } from "../worker/db/violation"
 
-import { enqueue, type EnqueueParams } from "./enqueue"
+import { enqueue, enqueueItems, type EnqueueParams } from "./enqueue"
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -69,14 +69,15 @@ async function claimAt(seconds: number) {
  * Enqueues a job of task `t` in a scope at T(0), claims it at T(1), fails it for good at T(2), and returns its id.
  * A claim takes the earliest ready job of task `t` of any scope, so no other job of the task may be ready.
  */
-async function createFailedJob(scope: string, o: Partial<EnqueueParams> = {}): Promise<string> {
-  const { id } = await enqueue(testSchema.conn, testSchema.table, {
-    task: "t",
-    scope,
-    payload: "failed",
-    now: T(0),
-    ...o,
-  })
+async function createFailedJob(
+  scope: string,
+  o: Partial<EnqueueParams> & { maxItems?: number } = {},
+): Promise<string> {
+  const { maxItems, ...params } = { task: "t", scope, payload: "failed", now: T(0), ...o }
+  const { id } =
+    maxItems === undefined
+      ? await enqueue(testSchema.conn, testSchema.table, params)
+      : only(await enqueueItems(testSchema.conn, testSchema.table, { ...params, maxItems }))
   const failed = await fail(testSchema.db, await claimAt(1), {
     error: "boom",
     reason: "terminal-error",
@@ -96,7 +97,7 @@ async function rowsOf(scope: string) {
     select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
            window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state,
            claim_id is not null as claimed, lease_until::text as lease_until, locked_by, locked_at::text as locked_at,
-           last_error, failed_at::text as failed_at, failure_max_attempts
+           last_error, failed_at::text as failed_at, failure_max_attempts, max_items, sealed
     from ${schema.job} where scope = ${scope} order by id`.select({
     task: t.text,
     queue: t.text.nullable(),
@@ -117,6 +118,8 @@ async function rowsOf(scope: string) {
     last_error: t.text.nullable(),
     failed_at: t.text.nullable(),
     failure_max_attempts: t.integer.nullable(),
+    max_items: t.integer.nullable(),
+    sealed: t.boolean,
   })
 }
 
@@ -183,6 +186,19 @@ describe("the same jobs and results as the retry of the core", () => {
     expect((await rowsOf("sql")).map(r => r.state)).toEqual(["failed", "pending"])
   })
 
+  test("returns a failed batch to pending sealed beside the open batch of its key", async () => {
+    await setupBoth(async scope => {
+      const batch = { task: "t", scope, key: "", maxItems: 3 }
+      await createFailedJob(scope, { ...batch, payload: [1] })
+      await enqueueItems(testSchema.conn, testSchema.table, { ...batch, payload: [2], now: T(3) })
+    })
+    expect(await compareRetry(0)).toMatchObject({ retried: true, pendingId: null })
+    expect((await rowsOf("sql")).map(r => [r.state, r.payload, r.sealed])).toEqual([
+      ["pending", "[1]", true],
+      ["pending", "[2]", false],
+    ])
+  })
+
   test("returns no row and changes nothing for an active or pending id", async () => {
     await setupBoth(async scope => {
       await enqueue(testSchema.conn, testSchema.table, { task: "t", scope, now: T(0) })
@@ -223,7 +239,7 @@ describe("concurrent transactions", () => {
       const outcome = await retried
       if (end === "commit") {
         // The snapshot of the retry missed the pending job, so the unique index rejects the update, which changes nothing.
-        expect("error" in outcome && isUniqueViolation(outcome.error, "job_pending_key_idx")).toBe(
+        expect("error" in outcome && isUniqueViolation(outcome.error, "job_open_key_idx")).toBe(
           true,
         )
         expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state])).toEqual([

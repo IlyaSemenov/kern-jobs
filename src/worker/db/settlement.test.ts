@@ -1,11 +1,11 @@
-// Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
+// Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, batches that return sealed beside their successors, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { type Driver, literal, queryOn, sql, TransactionConnectionError } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
-import { enqueue } from "../../sql/enqueue"
+import { enqueue, enqueueItems } from "../../sql/enqueue"
 import type { KeyMode } from "../../sql/job"
 import {
   createTestDriver,
@@ -149,7 +149,12 @@ describe("last attempt and terminal error", () => {
   })
 
   test("a pending job of the key in another scope is no competitor: A retries with its key, B unchanged", async () => {
-    await enqueue(testSchema.conn, testSchema.table, { task: "t", scope: "a", key: "k", now: T(0) })
+    await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      scope: "a",
+      key: "k",
+      now: T(0),
+    })
     const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
     const b = await enqueue(testSchema.conn, testSchema.table, {
       task: "t",
@@ -455,6 +460,116 @@ describe("requeue", () => {
       ["active", 1],
     ])
   })
+})
+
+describe("batches", () => {
+  /** A claimed batch [1] of the empty key, of up to `maxAttempts` attempts, and its successor [2, 3], which an enqueue during the claim opened. */
+  async function claimedWithSuccessor(
+    o: { maxAttempts?: number; failureMaxAttempts?: number } = {},
+  ) {
+    const append = (payload: number[], now: Date) =>
+      enqueueItems(testSchema.conn, testSchema.table, {
+        task: "t",
+        key: "",
+        maxItems: 100,
+        payload,
+        maxAttempts: o.maxAttempts ?? 5,
+        now,
+      })
+    await append([1], T(0))
+    const failureMaxAttempts: Record<string, number> =
+      o.failureMaxAttempts === undefined ? {} : { t: o.failureMaxAttempts }
+    const a = only(
+      await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0), failureMaxAttempts }),
+    )
+    const [b] = await append([2, 3], T(1))
+    return { a, b: b!, append }
+  }
+
+  /** Returns the id, state, payload, whether it is sealed, attempts, and the run time in seconds of each job of task `t`. */
+  const batchRows = async () =>
+    (await jobs(testSchema.conn.query, sql`j.task = 't'`)).map(row => ({
+      id: row.id,
+      state: row.state,
+      key: row.key,
+      payload: row.payload,
+      sealed: row.sealed,
+      attempts: row.attempts,
+      runAt: secondsOf(row.runAt),
+    }))
+
+  test("fail before the last attempt returns the batch to pending sealed with its id, payload, and backoff, beside its successor", async () => {
+    const { a, b, append } = await claimedWithSuccessor()
+    expect(b.created).toBe(true)
+    expect(await failA(a, { backoff: 30, now: T(2) })).toBe("retry")
+    const after = { key: "", sealed: false, attempts: 0, runAt: 1 }
+    expect(await batchRows()).toEqual([
+      { id: a.id, state: "pending", key: "", payload: [1], sealed: true, attempts: 1, runAt: 32 },
+      { id: b.id, state: "pending", payload: [2, 3], ...after },
+    ])
+    expect(secondsOf(only(await jobs(testSchema.conn.query, sql`j.id = ${a.id}`)).notBefore!)).toBe(
+      32,
+    )
+    // A later enqueue appends to the successor, and the retried batch runs again with its own items.
+    expect(await append([4], T(3))).toEqual([{ id: b.id, created: false }])
+    const claims = await claimPlain(testSchema.conn.query, { ...W, limit: 2, now: T(32) })
+    expect(claims.map(claim => [claim.id, claim.job.payload, claim.job.attempts])).toEqual([
+      [b.id, [2, 3, 4], 1],
+      [a.id, [1], 2],
+    ])
+  })
+
+  test("requeue returns the batch to pending sealed with the attempt given back, beside its successor", async () => {
+    const { a, b } = await claimedWithSuccessor()
+    expect(await requeue(testSchema.db, a, { now: T(2) })).toBe("requeued")
+    expect(
+      (await batchRows()).map(row => [row.id, row.payload, row.sealed, row.attempts, row.runAt]),
+    ).toEqual([
+      [a.id, [1], true, 0, 2],
+      [b.id, [2, 3], false, 0, 1],
+    ])
+  })
+
+  test("fail on the last attempt makes the batch failed, and its failure job records its payload, beside its successor", async () => {
+    const { a, b } = await claimedWithSuccessor({ maxAttempts: 1, failureMaxAttempts: 3 })
+    expect(await failA(a)).toBe("failed")
+    expect((await batchRows()).map(row => [row.id, row.state, row.payload, row.sealed])).toEqual([
+      [a.id, "failed", [1], true],
+      [b.id, "pending", [2, 3], false],
+    ])
+    const failure = only(await jobs(testSchema.conn.query, sql`j.task = 't:failure'`))
+    expect(failure.payload).toMatchObject({ job: { id: a.id, key: "" }, payload: [1] })
+  })
+
+  test.each(["fail", "requeue"] as const)(
+    "%s of a job that is not a batch, beside an open batch of its key, returns it to pending without its key, and both keep their payloads",
+    async settle => {
+      // A deploy that makes the task a batch task opens a batch while the job of the previous definition runs.
+      const { id } = await enqueue(testSchema.conn, testSchema.table, {
+        task: "t",
+        key: "",
+        payload: "a",
+        now: T(0),
+      })
+      const a = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0) }))
+      const [b] = await enqueueItems(testSchema.conn, testSchema.table, {
+        task: "t",
+        key: "",
+        maxItems: 100,
+        payload: [1],
+        now: T(1),
+      })
+      const outcome =
+        settle === "fail"
+          ? await failA(a, { now: T(2) })
+          : await requeue(testSchema.db, a, { now: T(2) })
+      expect(outcome).toBe(settle === "fail" ? "retry" : "requeued")
+      expect((await batchRows()).map(row => [row.id, row.state, row.key, row.payload])).toEqual([
+        [id, "pending", null, "a"],
+        [b!.id, "pending", "", [1]],
+      ])
+    },
+  )
 })
 
 describe("races of the return to pending with enqueues", () => {

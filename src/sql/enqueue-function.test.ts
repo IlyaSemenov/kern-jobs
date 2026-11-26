@@ -13,6 +13,7 @@ import {
   idsOf,
   isPending,
   jobs,
+  only,
   type TestSchema,
 } from "../test-harness/database"
 import { createRandom } from "../test-harness/random"
@@ -20,7 +21,7 @@ import { claimPlain } from "../worker/db/claim"
 import { bindWorkerDb, schema } from "../worker/db/db"
 import * as t from "../worker/db/types"
 
-import { enqueue, type EnqueueParams } from "./enqueue"
+import { enqueue, enqueueItems, type EnqueueParams } from "./enqueue"
 import type { JobTable } from "./job-table"
 import { encodeParam } from "./statement"
 
@@ -45,23 +46,26 @@ type SqlArgName =
   | "max_wait"
   | "max_attempts"
   | "reset_attempts"
+  | "items"
+  | "max_items"
 
 /** Arguments of the SQL function by their names, a payload as its JSON text; an absent one is omitted from the call. */
 type SqlArgs = Partial<Record<SqlArgName, string | number | boolean | null>>
 
-/** Result of a call of the SQL function, with the time of its statement as text. */
+/** Row of a call of the SQL function, a job that it inserted or updated, with the time of its statement as text. */
 interface SqlResult {
   id: string
   created: boolean
   now: string
 }
 
-/** Calls the SQL function of a job table with the given arguments in named notation, each passed as text of the type of the argument, and returns the id of the job, whether it created the job, and the time of the statement as text. */
-async function callEnqueue(
+/** Calls a SQL function of a job table, `enqueue` or `enqueue_items`, with the given arguments in named notation, each passed as text of the type of the argument, and returns its rows in their order: the id of each job, whether it created the job, and the time of the statement as text. */
+async function callFunction(
   conn: Conn,
+  name: "enqueue" | "enqueue_items",
   args: SqlArgs,
   table: JobTable = testSchema.table,
-): Promise<SqlResult> {
+): Promise<SqlResult[]> {
   const names = Object.keys(args) as SqlArgName[]
   const list = joinSql(
     // A parameter without a type takes the type of its argument, which PostgreSQL parses from the text.
@@ -69,16 +73,34 @@ async function callEnqueue(
   )
   return await conn.query`
     select e.id, e.created, statement_timestamp()::text as now
-    from ${identifier(table.schemaName, "enqueue")}(${list}) e`
-    .select({ id: t.bigintText, created: t.boolean, now: t.text })
-    .take()
+    from ${identifier(table.schemaName, name)}(${list}) with ordinality e(id, created, ord)
+    order by e.ord`.select({ id: t.bigintText, created: t.boolean, now: t.text })
+}
+
+/** Calls the SQL function `enqueue` as `callFunction` does, and returns its row. */
+async function callEnqueue(
+  conn: Conn,
+  args: SqlArgs,
+  table: JobTable = testSchema.table,
+): Promise<SqlResult> {
+  return only(await callFunction(conn, "enqueue", args, table))
+}
+
+/** Calls the SQL function `enqueue_items` as `callFunction` does, and returns its rows. */
+async function callEnqueueItems(
+  conn: Conn,
+  args: SqlArgs,
+  table: JobTable = testSchema.table,
+): Promise<SqlResult[]> {
+  return callFunction(conn, "enqueue_items", args, table)
 }
 
 /** Returns the rows of a scope in the order of their ids, with every column that an enqueue sets other than the id and the scope, and its JSON and times as text to compare them exactly. */
 async function rowsOf(scope: string) {
   return testSchema.conn.query`
     select task, queue, key, key_mode, payload::text as payload, run_at::text as run_at, not_before::text as not_before,
-           window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state
+           window_started_at::text as window_started_at, created_at::text as created_at, attempts, max_attempts, state,
+           max_items, sealed
     from ${schema.job} where scope = ${scope} order by id`.select({
     task: t.text,
     queue: t.text.nullable(),
@@ -92,18 +114,20 @@ async function rowsOf(scope: string) {
     attempts: t.integer,
     max_attempts: t.integer,
     state: t.text,
+    max_items: t.integer.nullable(),
+    sealed: t.boolean,
   })
 }
 
 describe("the same jobs as the enqueue of the core", () => {
-  /** Options of an enqueue in a step, those of the core without the task, the scope, and the time. */
-  type Options = Omit<EnqueueParams, "task" | "scope" | "now">
+  /** Options of an enqueue in a step, those of the core without the task, the scope, and the time; with `maxItems`, an enqueue of the payload as items. */
+  type Options = Omit<EnqueueParams, "task" | "scope" | "now"> & { maxItems?: number }
 
   /**
    * Step of a sequence that both scopes take:
    * - `enqueue`: an enqueue of task `t`, by the SQL function in scope `sql` and by the core in scope `core` at the time of the statement of the function;
    * - `wait`: moves every time of the rows back by its seconds, as the passing of that time;
-   * - `claim`, `fail`, and `complete`: what a worker does to the job of a key, without a worker: a claim of its pending job, a return of its earliest active job to pending with `not_before` after its seconds, unless a pending job of the key exists, and a completion of its active job.
+   * - `claim`, `fail`, and `complete`: what a worker does to the jobs of a key, without a worker: a claim of its pending jobs, which seals a batch, a return of its earliest active job to pending with `not_before` after its seconds, unless it is not a batch and a pending job of the key exists, and a completion of its active jobs.
    */
   type Step =
     | { enqueue: Options }
@@ -113,10 +137,11 @@ describe("the same jobs as the enqueue of the core", () => {
     | { complete: string }
 
   /** Returns the arguments of the SQL function for the options of the core, NULL for an absent option. */
-  function toSqlArgs(o: Options): SqlArgs {
+  function toSqlArgs({ payload, maxItems, ...o }: Options): SqlArgs {
+    const json = payload === undefined ? null : JSON.stringify(payload)
     return {
       task: "t",
-      payload: o.payload === undefined ? null : JSON.stringify(o.payload),
+      ...(maxItems === undefined ? { payload: json } : { items: json, max_items: maxItems }),
       scope: "sql",
       key: o.key ?? null,
       queue: o.queue ?? null,
@@ -132,17 +157,31 @@ describe("the same jobs as the enqueue of the core", () => {
   /** Runs a step in both scopes and checks that they give the same result and the same rows. */
   async function runStep(step: Step): Promise<void> {
     if ("enqueue" in step) {
-      const called = await callEnqueue(testSchema.conn, toSqlArgs(step.enqueue))
-      const core = await enqueue(atTime(testSchema.conn, called.now), testSchema.table, {
-        task: "t",
-        scope: "core",
-        ...step.enqueue,
-      })
-      expect(called.created).toBe(core.created)
+      const { maxItems, ...options } = step.enqueue
+      const args = toSqlArgs(step.enqueue)
+      const called =
+        maxItems === undefined
+          ? [await callEnqueue(testSchema.conn, args)]
+          : await callEnqueueItems(testSchema.conn, args)
+      // No items return no row, so the time of an empty call is that of a statement of its own.
+      const now =
+        called[0]?.now ??
+        (await testSchema.conn.query`select statement_timestamp()::text`.get(t.text))
+      const params = { task: "t", scope: "core", ...options }
+      const core =
+        maxItems === undefined
+          ? [await enqueue(atTime(testSchema.conn, now), testSchema.table, params)]
+          : await enqueueItems(atTime(testSchema.conn, now), testSchema.table, {
+              ...params,
+              maxItems,
+            })
+      expect(called.map(r => r.created)).toEqual(core.map(r => r.created))
       // The rows of the two scopes match by their order, so each result is the row of the same position.
-      expect((await idsOf(testSchema.conn.query, "sql")).indexOf(called.id)).toBe(
-        (await idsOf(testSchema.conn.query, "core")).indexOf(core.id),
-      )
+      const [sqlIds, coreIds] = [
+        await idsOf(testSchema.conn.query, "sql"),
+        await idsOf(testSchema.conn.query, "core"),
+      ]
+      expect(called.map(r => sqlIds.indexOf(r.id))).toEqual(core.map(r => coreIds.indexOf(r.id)))
     } else if ("wait" in step) {
       const wait = param(t.doublePrecision, step.wait)
       await testSchema.conn.query`
@@ -152,7 +191,8 @@ describe("the same jobs as the enqueue of the core", () => {
           created_at = created_at - make_interval(secs => ${wait})`
     } else if ("claim" in step) {
       await testSchema.conn.query`
-        update ${schema.job} j set state = 'active', attempts = attempts + 1, claim_id = ${schema.claimSeq.nextval()},
+        update ${schema.job} j set state = 'active', attempts = attempts + 1, sealed = j.max_items is not null,
+          claim_id = ${schema.claimSeq.nextval()},
           lease_until = statement_timestamp() + interval '1 hour', locked_by = 'w', locked_at = statement_timestamp()
         where key = ${step.claim} and state = 'pending'
           and not exists (select from ${schema.job} a where a.scope = j.scope and a.queue = j.queue and a.state = 'active')`
@@ -163,7 +203,9 @@ describe("the same jobs as the enqueue of the core", () => {
           not_before = statement_timestamp() + make_interval(secs => ${backoff}),
           run_at = statement_timestamp() + make_interval(secs => ${backoff}), window_started_at = statement_timestamp()
         where j.id = (select min(a.id) from ${schema.job} a where a.scope = j.scope and a.key = ${step.fail} and a.state = 'active')
-          and not exists (select from ${schema.job} p where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending')`
+          and (j.max_items is not null
+               or not exists (select from ${schema.job} p
+                              where p.scope = j.scope and p.task = j.task and p.key = j.key and p.state = 'pending' and not p.sealed))`
     } else {
       await testSchema.conn
         .query`delete from ${schema.job} where key = ${step.complete} and state = 'active'`
@@ -289,6 +331,59 @@ describe("the same jobs as the enqueue of the core", () => {
       }
     })
   }
+
+  test("enqueue_items appends items, seals and splits batches, and returns a row of each job, as the core does", async () => {
+    const batch = { key: "p", maxItems: 3 }
+    await runSteps([
+      { enqueue: { ...batch, payload: [1], ...debounce } },
+      { wait: 1 },
+      { enqueue: { ...batch, payload: [2, 3, 3, 4, 5, 6, 7], ...debounce } },
+      { enqueue: { ...batch, payload: [] } },
+      { enqueue: { ...batch, payload: [1, 2] } },
+      { enqueue: { ...batch, key: "q", payload: [1, 2, 3, 4, 5, 6], queue: "q", maxAttempts: 2 } },
+      { claim: "p" },
+      { enqueue: { ...batch, payload: [7], delay: 5 } },
+      { fail: "p", seconds: 30 },
+      { enqueue: { ...batch, payload: [8, 9], resetAttempts: true } },
+      { enqueue: { ...batch, maxItems: 2, payload: [10, 11, 12] } },
+      { complete: "p" },
+    ])
+  })
+
+  for (const seed of [1, 2, 3]) {
+    test(`random sequences of batches and of the steps of a worker, seed ${seed}`, async () => {
+      const random = createRandom(seed)
+      const pick = <T>(items: readonly T[]): T => items[random.int(0, items.length - 1)]!
+      for (let i = 0; i < 80; i++) {
+        const kind = random.float()
+        const key = pick(["a", "b"])
+        if (kind < 0.08) await runStep({ wait: pick([0.5, 1, 2.5, 8]) })
+        else if (kind < 0.16) await runStep({ claim: key })
+        else if (kind < 0.24) await runStep({ fail: key, seconds: pick([0, 3, 15]) })
+        else if (kind < 0.3) await runStep({ complete: key })
+        else {
+          const mode = pick(["replace", "debounce", undefined] as const)
+          const time =
+            mode === "debounce"
+              ? { delay: pick([0, 0.5, 2, 10]), maxWait: pick([0, 1, 5, 10]) }
+              : pick([{}, { delay: pick([0, 1, 5]) }, { runAt: fromNow(pick([-5, 0, 3, 20])) }])
+          await runStep({
+            enqueue: {
+              key,
+              maxItems: 3,
+              mode,
+              ...time,
+              payload: Array.from({ length: random.int(0, 7) }, () => i),
+              // The step of a claim claims every pending job of a key, which one queue would not allow.
+              queue: pick([undefined, null]),
+              maxAttempts: pick([undefined, 1, 4]),
+              resetAttempts: pick([undefined, false, true]),
+            },
+          })
+        }
+      }
+    })
+  }
 })
 
 describe("arguments", () => {
@@ -355,6 +450,12 @@ describe("arguments", () => {
     expect(
       await testSchema.conn.query`select count(*)::int from ${schema.job}`.get(t.integer),
     ).toBe(5)
+  })
+
+  test("enqueue_items of an empty array needs no key and returns no row", async () => {
+    expect(
+      await callEnqueueItems(testSchema.conn, { task: "t", items: "[]", max_items: 3 }),
+    ).toEqual([])
   })
 
   test("rejects a wrong argument with its error, and the table rejects a value over its limit", async () => {
@@ -439,6 +540,66 @@ describe("arguments", () => {
     expect(
       await testSchema.conn.query`select count(*)::int from ${schema.job}`.get(t.integer),
     ).toBe(0)
+  })
+
+  test("enqueue_items rejects invalid common and batch arguments", async () => {
+    const base = { task: "t", key: "k", items: "[1]", max_items: 3 }
+    const cases: [SqlArgs, string, string][] = [
+      [{ ...base, task: null }, "22004", "task must not be null"],
+      [{ ...base, delay: -1 }, "22023", "delay must be a number of seconds from 0 to 1e12, got -1"],
+      [
+        { ...base, max_items: 0 },
+        "22023",
+        "max_items must be an integer from 1 to 2147483647, got 0",
+      ],
+      [{ ...base, max_items: null }, "22023", "max_items must be an integer from 1 to 2147483647"],
+      [
+        { ...base, items: "[]", max_items: null },
+        "22023",
+        "max_items must be an integer from 1 to 2147483647",
+      ],
+      [{ ...base, key: null }, "22023", "A batch requires a key"],
+      [{ ...base, key_mode: "keep" }, "22023", "key_mode keep does not apply to a batch"],
+      [{ ...base, items: '{"a":1}' }, "22023", "items must be a JSON array"],
+      [{ ...base, items: null }, "22023", "items must be a JSON array"],
+      [{ ...base, key: "k".repeat(1025) }, "23514", 'violates check constraint "job_key_check"'],
+    ]
+    for (const [args, code, message] of cases) {
+      const outcome = callEnqueueItems(testSchema.conn, args)
+      await expect(outcome).rejects.toMatchObject({ code })
+      await expect(outcome).rejects.toThrow(message)
+    }
+    expect(
+      await testSchema.conn.query`select count(*)::int from ${schema.job}`.get(t.integer),
+    ).toBe(0)
+  })
+
+  test("rejects a merge into a pending job of another kind and changes nothing", async () => {
+    await callEnqueue(testSchema.conn, { task: "t", key: "plain", payload: "[1]" })
+    await callEnqueueItems(testSchema.conn, { task: "t", key: "batch", items: "[1]", max_items: 3 })
+    const before = await jobs(testSchema.conn.query)
+    const cases: [() => Promise<unknown>, string][] = [
+      [
+        () =>
+          callEnqueueItems(testSchema.conn, {
+            task: "t",
+            key: "plain",
+            items: "[2]",
+            max_items: 3,
+          }),
+        "is not a batch",
+      ],
+      [
+        () => callEnqueue(testSchema.conn, { task: "t", key: "batch", payload: "[2]" }),
+        "is a batch",
+      ],
+    ]
+    for (const [call, message] of cases) {
+      const outcome = call()
+      await expect(outcome).rejects.toMatchObject({ code: "55000" })
+      await expect(outcome).rejects.toThrow(message)
+    }
+    expect(await jobs(testSchema.conn.query)).toEqual(before)
   })
 })
 

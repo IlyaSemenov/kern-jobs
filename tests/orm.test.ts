@@ -48,9 +48,9 @@ const orms: [string, () => Orm][] = [
   ],
 ]
 
-const indexProduct = defineTask("search.indexProduct")
+const indexProduct = defineTask("search.indexProduct", { keyMode: "keep" })
   .withPayload<{ productId: string; version: number }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}`, keyMode: "keep" }))
+  .withKey(({ productId }) => `product:${productId}`)
 
 let testSchema: TestSchema
 beforeEach(async () => {

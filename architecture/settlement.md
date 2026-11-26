@@ -13,9 +13,10 @@ Fail runs one transaction on a connection that the driver reserves for it ([Driv
 
 1. It locks the active row of the claim; without one, the claim is lost, and nothing changes.
 2. On a terminal error or on the last attempt, the row becomes `failed` with `failed_at` now and keeps its key, and the same statement inserts the failure job of a row that its claim stamped for one, with the reason that the worker passes, or `handler-error` without one ([Failure jobs](failure-jobs.md#insert)).
-3. A row without a key returns to pending with `run_at` and `not_before` at now plus the backoff, and a new debounce window.
-4. A row with a key locks the pending row of its `(scope, task, key)`, the competitor, and then:
+3. A row without a key, or a batch job, returns to pending with `run_at` and `not_before` at now plus the backoff, and a new debounce window; a batch job returns sealed, with its id and payload, beside the open batch of its key, since its items are in no other job.
+4. Another row with a key locks the pending row of its `(scope, task, key)` that is not sealed, the competitor, and then:
    - without a competitor, it returns to pending as in step 3;
+   - with a competitor that is a batch job, the row returns to pending as in step 3 without its key, as the [reaper](leases.md) returns it, since it merges into no batch;
    - with a competitor of key mode `keep`, the competitor is deleted, and the row returns to pending with its own attempts and backoff, so the first event still wins;
    - with a competitor of key mode `replace` or `debounce`, the row is deleted as superseded, since the competitor carries a newer event, and the competitor does not change.
 
@@ -34,7 +35,8 @@ It runs the transaction of fail with these differences:
 
 - It never makes the row `failed`, also on its last attempt.
 - The row returns to pending with `attempts` less one, `run_at`, `not_before`, and `window_started_at` at now, and its `last_error` kept.
-- A competitor of its key merges as in fail: `keep` deletes the competitor, and `replace` or `debounce` deletes the row as superseded; a `23505` retries the transaction as in fail.
+- A competitor of its key merges as in fail: `keep` deletes the competitor, `replace` or `debounce` deletes the row as superseded, and a batch job makes the row lose its key; a `23505` retries the transaction as in fail.
+- A batch job returns sealed with its id and payload, as in fail.
 
 ## Connection loss
 

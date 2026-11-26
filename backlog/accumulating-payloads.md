@@ -1,10 +1,6 @@
 # Accumulating payloads
 
-A key mode `append` that appends the payload of each event to the array of the pending job.
+Batch tasks of `withBatchPayload`, which append the items of each enqueue to the open batch of their key, lack:
 
-- While the job of the key is active, the items go to the next pending job.
-- An option `distinct` skips an item that the array has, and `maxItems` runs a full job at once and starts the next one with the later items; both work with `debounce`.
-- Each append rewrites the whole payload, a new row version with its TOAST, so `maxItems` is required, and thousands of items need a table of items instead.
-- The check constraint of `key_mode` and the enqueue statement must accept the new mode.
-
-Graphile Worker concatenates array payloads when an enqueue updates the pending job of its key ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode)).
+- An option `distinct` that skips an item that the batch has, also of an earlier enqueue, which `maxItems` would then count once; the batch keeps duplicates.
+- A table of items for batches of thousands of items: each append rewrites the whole payload, a new row version with its TOAST, which `maxItems` bounds.

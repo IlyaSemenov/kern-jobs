@@ -2,21 +2,24 @@
 
 import { checkStorableText, utf8Length } from "../limits"
 import {
-  type EnqueueBatch,
+  type EnqueueItemsParams,
   type EnqueueJob,
+  type EnqueueManyParams,
   type EnqueueResult,
+  prepareEnqueueItems,
   prepareEnqueueMany,
 } from "../sql/enqueue"
 import { createJobTable, DEFAULT_SCHEMA_NAME } from "../sql/job-table"
 import { delayRange, isDelay } from "../task/delay"
 import {
+  type BatchEnqueueOverrides,
   checkEnqueueOverrides,
   checkKey,
   type EnqueueOverrides,
   getTaskEnqueueParams,
   toStoredKey,
 } from "../task/options"
-import type { Task } from "../task/task"
+import type { BatchTask, Task, TaskBase } from "../task/task"
 
 import {
   deleteFailedJobs,
@@ -49,9 +52,9 @@ export interface JobsOptions {
   scope?: string | (() => string) | typeof ALL_SCOPES | null | undefined
 }
 
-/** Pending jobs of a task that `deletePending` deletes: all of them, or those of a key, at most one in each scope. */
+/** Pending jobs of a task that `deletePending` deletes: all of them, or those of a key. */
 export interface DeletePendingFilter {
-  task: Task<string, unknown>
+  task: TaskBase<string, unknown>
   /** Key of the pending jobs; `true` is the empty key, as in an enqueue. */
   key?: string | true
 }
@@ -60,13 +63,15 @@ export interface DeletePendingFilter {
  * Filter of the failed jobs that `deleteFailed` deletes, by task, by age, or both: with `olderThan`, it deletes only the jobs that failed more than that many seconds ago by the clock of the database.
  */
 export type DeleteFailedFilter =
-  | { task: Task<string, unknown>; olderThan?: number }
-  | { task?: Task<string, unknown>; olderThan: number }
+  | { task: TaskBase<string, unknown>; olderThan?: number }
+  | { task?: TaskBase<string, unknown>; olderThan: number }
 
 /** Jobs API of an application, created with `createJobs`. */
 export interface Jobs {
   /**
    * Enqueues a job of a task with the options of the task and the overrides, in the transaction of the executor, so that workers see the job once the transaction commits.
+   * Resolves to `{ id, created }` of the job that it inserted, or of the pending job of its key that it merged into.
+   * It rejects with `TypeError` for a batch task, whose items `enqueueItems` enqueues.
    */
   enqueue<P>(
     task: Task<string, P>,
@@ -77,11 +82,12 @@ export interface Jobs {
     >
   ): Promise<EnqueueResult>
   /**
-   * Enqueues a job of a task for each payload, as `enqueue` does with the same overrides, in one statement: all of them or none, in the transaction of the executor.
+   * Enqueues each payload of a task as `enqueue` does with the same overrides, in one statement: all of them or none, in the transaction of the executor.
    * Resolves to the result of each payload in their order; the new jobs get ids in that order, so a queue starts them in that order when they are due at the same time.
    * Without payloads, it resolves to `[]` without calling the client.
    * It takes each key of the task at most once, and rejects with `RangeError` for two payloads whose options give the same key, before it calls the client.
    * It locks the pending jobs of the keys in the order of the payloads, so two transactions that enqueue the same keys in different orders can deadlock, and PostgreSQL then aborts one of them.
+   * It rejects with `TypeError` for a batch task, as `enqueue` does.
    */
   enqueueMany<P>(
     task: Task<string, P>,
@@ -89,8 +95,20 @@ export interface Jobs {
     overrides?: EnqueueOverrides,
   ): Promise<EnqueueResult[]>
   /**
+   * Appends items to the pending job of a batch task of their key, in the transaction of the executor, with the options of the task.
+   * The key comes from `overrides.key`, `withKey` of the task, or the options of `defineTask`.
+   * The job takes items until a worker claims it or it has `maxItems`; the items that do not fit go to new jobs, full ones due at once and at most one partial one, which takes the items of later enqueues.
+   * Resolves to `{ id, created }` of each job that took items, in the order of the items: the pending job of the key first, with `created: false`, if it took items, then the new jobs; `[]` for no items, without calling the client.
+   * It rejects with `TypeError` for a task that is not a batch task, for items without a key or whose keys of `withKey` differ, for an override other than `key`, and for `keyMode: "keep"` of the task.
+   */
+  enqueueItems<I>(
+    task: BatchTask<string, I>,
+    items: readonly NoInfer<I>[],
+    overrides?: BatchEnqueueOverrides,
+  ): Promise<EnqueueResult[]>
+  /**
    * Returns a failed job to pending with its payload and options and a full budget of attempts, to run as soon as a worker is free, and resolves to `{ retried: true }`.
-   * When a pending job of its key exists, it changes neither job and resolves to `{ retried: false, pendingId }`.
+   * When its key has a pending job that takes new enqueues, it changes neither job and resolves to `{ retried: false, pendingId }`; a job of a batch task returns with its own items whatever the pending jobs of its key.
    * Resolves to `null` when no failed job of the scope of `createJobs` has the id.
    * It can reject with the unique violation of the client, and change nothing, when an enqueue adds a new pending job of the key at the same time; the error aborts the transaction of the client.
    */
@@ -106,7 +124,7 @@ export interface Jobs {
    */
   deletePending(): Promise<number>
   /**
-   * Deletes the pending jobs of a task, or those of its key, at most one in each scope, each with the events that the enqueues of its key merged into it, and resolves to their count.
+   * Deletes the pending jobs of a task, or those of its key, each with the events that the enqueues of its key merged into it, and resolves to their count.
    * The jobs of a task are those of the scope of `createJobs` for a scoped task, or of every scope with `ALL_SCOPES`, and those without a scope for another task.
    * Jobs that run or failed stay, and so does a pending job that becomes visible after the statement of the delete takes its snapshot, such as from an enqueue or a failed attempt of a running job.
    */
@@ -134,8 +152,8 @@ export interface Jobs {
  * - a `Database` of kern-db or a `Db` of kern-orm, whose calls of the jobs API join its current transaction.
  * It throws `TypeError` for a client of another kind, and a call of the jobs API rejects with it for a function that returns one.
  * It throws `TypeError` for a scope other than a string, a function, `ALL_SCOPES`, `null`, or `undefined`, or with U+0000 or a lone surrogate, and `RangeError` for an empty one or one longer than 128 bytes in UTF-8.
- * `enqueue`, `enqueueMany`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and `enqueue` and `enqueueMany` of a scoped task also with `ALL_SCOPES`.
- * Each call that calls the function of the scope, `enqueue`, `enqueueMany`, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
+ * `enqueue`, `enqueueMany`, `enqueueItems`, `deletePending`, and `deleteFailed` of a scoped task reject with `TypeError` without a scope, and the enqueues of a scoped task also with `ALL_SCOPES`.
+ * Each call that calls the function of the scope, the enqueues, `deletePending`, and `deleteFailed` of a scoped task, `deletePending` and `deleteFailed` without a task, `retry`, and `delete`, rejects with the errors of `createJobs` for a scope that it returns.
  * A retry and a delete reject with `TypeError` for an id that is not a string, and `RangeError` for one that is not a decimal integer from 1 to 2^63 − 1, before they call the client.
  * `deletePending` rejects with `TypeError` for an argument that is not an object of a task and, optionally, its key, for a task name that is not a string, for a key that is neither `true` nor a string, and for a name or a key string that has U+0000 or a lone surrogate, before it calls the client.
  * `deleteFailed` rejects with `TypeError` for an argument that is not an object of a task, `olderThan`, or both, and for a task name that is not storable text, and with `RangeError` for `olderThan` that is not a number of seconds from 0 to 1e12, before it calls the client.
@@ -146,11 +164,9 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
   const table = createJobTable(schemaName)
   return createJobsApi(
     {
-      enqueueMany: batch => {
-        // Serialize every payload before calling the client factory.
-        const run = prepareEnqueueMany(table, batch)
-        return run(target())
-      },
+      // Each payload is serialized before the client factory is called, which an enqueue without a statement never calls.
+      enqueueMany: params => prepareEnqueueMany(table, params)(target),
+      enqueueItems: params => prepareEnqueueItems(table, params)(target),
       retry: params => retryFailedJob(target(), table, params),
       delete: params => deleteJob(target(), table, params),
       deletePending: filter => deletePendingJobs(target(), table, filter),
@@ -166,7 +182,11 @@ export function createJobs(client: JobsClient, options: JobsOptions = {}): Jobs 
  */
 export interface JobStore {
   /** Enqueues jobs of one task and scope, at least one, whose keys are distinct, all or none, and resolves to the result of each in their order. */
-  enqueueMany(batch: Omit<EnqueueBatch, "now"> & { scope: string }): Promise<EnqueueResult[]>
+  enqueueMany(params: Omit<EnqueueManyParams, "now"> & { scope: string }): Promise<EnqueueResult[]>
+  /** Appends the items of an enqueue of a batch task, the array of its payload, and resolves to the result of each job that took items, in their order. */
+  enqueueItems(
+    params: Omit<EnqueueItemsParams, "now"> & { scope: string },
+  ): Promise<EnqueueResult[]>
   retry(params: { id: string; scope: string | null }): Promise<RetryResult | null>
   delete(params: { id: string; scope: string | null }): Promise<boolean>
   deletePending(filter: PendingJobsFilter & { scope: string | null }): Promise<number>
@@ -188,6 +208,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       payload?: unknown,
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult> {
+      checkNotBatchTask(task)
       const params = getTaskEnqueueParams(task, payload, overrides)
       const [result] = await store.enqueueMany({
         task: params.task,
@@ -201,6 +222,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       payloads: readonly unknown[],
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult[]> {
+      checkNotBatchTask(task)
       if (!Array.isArray(payloads)) throw new TypeError("enqueueMany takes an array of payloads")
       // `Array.from` visits the holes of a sparse array too, as a loop of enqueues does, which `map` skips.
       const jobs = Array.from(payloads, payload => getTaskEnqueueParams(task, payload, overrides))
@@ -213,6 +235,19 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       }
       checkDistinctKeys(jobs)
       return store.enqueueMany({ task: jobs[0]!.task, scope: getEnqueueScope(task, scope), jobs })
+    },
+    async enqueueItems(
+      task: BatchTask<string, unknown>,
+      items: readonly unknown[],
+      overrides?: BatchEnqueueOverrides,
+    ): Promise<EnqueueResult[]> {
+      // The kind is checked first, so that a task of another kind runs no function of its options.
+      const { maxItems } = task
+      if (maxItems === undefined) {
+        throw new TypeError(`Task ${task.name} is not a batch task: enqueue it with enqueue`)
+      }
+      const params = getTaskEnqueueParams(task, items, overrides as EnqueueOverrides)
+      return store.enqueueItems({ ...params, maxItems, scope: getEnqueueScope(task, scope) })
     },
     async retry(id: string): Promise<RetryResult | null> {
       checkJobId(id)
@@ -243,7 +278,10 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
 /**
  * Returns the scope of the jobs that an enqueue of a task adds, as `getTaskScope` gives it, and throws `TypeError` for `ALL_SCOPES` with a scoped task, since a job belongs to one scope.
  */
-export function getEnqueueScope(task: Task<string, unknown>, scope: JobsOptions["scope"]): string {
+export function getEnqueueScope(
+  task: TaskBase<string, unknown>,
+  scope: JobsOptions["scope"],
+): string {
   const taskScope = getTaskScope(task, scope)
   if (taskScope === null) {
     throw new TypeError(
@@ -251,6 +289,13 @@ export function getEnqueueScope(task: Task<string, unknown>, scope: JobsOptions[
     )
   }
   return taskScope
+}
+
+/** Throws `TypeError` for a batch task, whose items only `enqueueItems` enqueues. */
+function checkNotBatchTask(task: TaskBase<string, unknown>): void {
+  if (task.maxItems !== undefined) {
+    throw new TypeError(`Task ${task.name} is a batch task: enqueue its items with enqueueItems`)
+  }
 }
 
 /**
@@ -311,7 +356,7 @@ function checkFilterFields(
  */
 function toFilterTask(task: unknown, error: TypeError): FilterTask {
   if (typeof task !== "object" || task === null) throw error
-  const { name, scoped } = task as Task<string, unknown>
+  const { name, scoped } = task as TaskBase<string, unknown>
   checkStorableText("The name of a task", name)
   return { name, scoped }
 }

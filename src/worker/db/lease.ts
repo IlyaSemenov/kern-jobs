@@ -143,6 +143,7 @@ interface ReapStatementOptions {
  * The lock timeout is set by the statement itself, local to its transaction, so that it holds on any connection of a pool and leaves no setting on it; the join makes the `candidates` select, which precedes the waits of the update, read it first; the locks of the table that the statement takes before it runs are not bounded.
  * Several returning rows of one key are possible: an event during `active` creates a pending row, which is claimed too, and their worker dies.
  * Ranking them in the batch keeps the key on the newest only, so that the statement does not conflict with itself; rows that end as failed are ranked apart, since failed rows are outside key uniqueness.
+ * A batch job returns sealed with its key, outside the uniqueness of keys, so it is never detached and ranked apart.
  * A row that becomes failed with the stamp of a failure job inserts it in the same statement, from the claim id that the update clears, so the batch applies both or neither.
  */
 function reapStatement(
@@ -156,7 +157,7 @@ function reapStatement(
     with timeout as materialized (
       select set_config('lock_timeout', ${String(o.lockTimeoutMs)}, true)
     ), candidates as (
-      select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.claim_id from ${schema.job} j, timeout
+      select j.id, j.scope, j.task, j.key, j.attempts, j.max_attempts, j.max_items, j.claim_id from ${schema.job} j, timeout
       where j.state = 'active' and ${target.condition} and (${onlyId} is null or j.id = ${onlyId})
       order by j.id
       limit ${o.limit}
@@ -164,14 +165,15 @@ function reapStatement(
     ), ranked as (
       select e.*,
         ${pauseSql("reap")} as paused,
-        row_number() over (partition by scope, task, key, attempts >= max_attempts order by id desc) as rn,
+        row_number() over (partition by scope, task, key, attempts >= max_attempts, max_items is null order by id desc) as rn,
         exists (select 1 from ${schema.job} p
-                where p.state = 'pending' and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
+                where p.state = 'pending' and not p.sealed and p.scope = e.scope and p.task = e.task and p.key = e.key) as has_pending
       from candidates e
     ), returned as (
       update ${schema.job} j set
         state = case when r.attempts >= r.max_attempts then 'failed' else 'pending' end,
-        key = case when r.attempts < r.max_attempts and r.key is not null and (${param(t.boolean, o.forceDetach)} or r.has_pending or r.rn > 1)
+        key = case when r.attempts < r.max_attempts and r.key is not null and r.max_items is null
+                        and (${param(t.boolean, o.forceDetach)} or r.has_pending or r.rn > 1)
                    then null else j.key end,
         run_at = ${now}, not_before = ${now}, window_started_at = ${now},
         failed_at = case when r.attempts >= r.max_attempts then ${now} end,
@@ -189,7 +191,7 @@ function reapStatement(
 /**
  * Returns expired active jobs, or the active jobs of `o.worker`, by statements of `query`, a template of a `Db` of the worker ORM schema: `failed` on the last attempt, otherwise `pending`.
  * A job that becomes failed with the stamp of a failure job inserts it in the statement that fails it.
- * The reaper never merges: a returning job loses its key when a pending job of the key exists or the batch returns several jobs of the key.
+ * The reaper never merges: a returning job loses its key when a pending job of the key that takes new enqueues exists or the batch returns several jobs of the key; a batch job returns sealed and keeps its key.
  * The batch runs as one statement, which holds the rows of the whole batch while it waits for the transaction of a producer that inserts a pending job of a returning key; each such wait lasts at most `lockTimeout`.
  * After a `23505` or such a timeout the batch is redone row by row, so a hot or blocked key affects only its own row:
  * a row that still conflicts after `maxRetries` attempts loses its key unconditionally, and a row that times out stays active for the next round.
@@ -217,7 +219,7 @@ export async function reap(
     return await run(null, false)
   } catch (e) {
     if (isQueryError(e, "lock_not_available")) countLockTimeout()
-    else if (isUniqueViolation(e, "job_pending_key_idx")) stats.uniqueViolations++
+    else if (isUniqueViolation(e, "job_open_key_idx")) stats.uniqueViolations++
     else throw e
   }
   const candidates = await query`
@@ -243,7 +245,7 @@ export async function reap(
           countLockTimeout()
           break
         }
-        if (!isUniqueViolation(e, "job_pending_key_idx") || force) throw e
+        if (!isUniqueViolation(e, "job_open_key_idx") || force) throw e
         stats.uniqueViolations++
       }
     }

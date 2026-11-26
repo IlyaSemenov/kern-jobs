@@ -13,7 +13,7 @@ describe("job", () => {
     const handler = mock((_payload: { id: number }, _context: HandlerContext) => {})
     const task = defineTask("t", { queue: "q", maxAttempts: 3 })
       .withPayload<{ id: number }>()
-      .withOptions(payload => ({ key: `k:${payload.id}` }))
+      .withKey(payload => `k:${payload.id}`)
     await runJob(task.implement(handler), { id: 7 })
     expect(handler.mock.calls[0]![1].job).toEqual({
       id: "1",
@@ -29,7 +29,7 @@ describe("job", () => {
     const onFailure = mock((_failure: JobFailure<{ id: number }>, _context: HandlerContext) => {})
     const task = defineTask("t", { queue: "q", maxAttempts: 3, scoped: true })
       .withPayload<{ id: number }>()
-      .withOptions(payload => ({ key: `k:${payload.id}` }))
+      .withKey(payload => `k:${payload.id}`)
     const failure: JobFailure<{ id: number }> = {
       id: "5",
       reason: "handler-error",
@@ -80,6 +80,37 @@ describe("job", () => {
       key: null,
       queue: "q",
     })
+  })
+
+  test("gives a batch task the key of options.job, which its enqueue would take, and rejects it without one, also with a key of its own and a key of null", async () => {
+    const handler = mock((_payload: number[], _context: HandlerContext) => {})
+    const implementation = defineTask("t")
+      .withBatchPayload<number>({ maxItems: 3 })
+      .implement(handler)
+    await runJob(implementation, [1], { job: { key: "p" } })
+    expect(handler.mock.calls[0]![1].job).toMatchObject({ key: "p" })
+    const keyed = defineTask("t", { key: true }).withBatchPayload<number>({ maxItems: 3 })
+    for (const run of [
+      () => runJob(implementation, [1]),
+      () => runJob(keyed.implement(handler), [1], { job: { key: null } }),
+    ]) {
+      await expect(run()).rejects.toThrow(
+        new TypeError("Batch task t requires a key, such as key: true or withKey"),
+      )
+    }
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  test("gives a batch task with withKey the key of options.job without calling withKey, or else the key of its items", async () => {
+    const handler = mock((_payload: string[], _context: HandlerContext) => {})
+    const implementation = defineTask("t")
+      .withBatchPayload<string>({ maxItems: 3 })
+      .withKey(item => `k:${item}`)
+      .implement(handler)
+    await runJob(implementation, ["a", "a"])
+    await runJob(implementation, ["a", "b"], { job: { key: "other" } })
+    expect(handler.mock.calls.map(([, context]) => context.job.key)).toEqual(["k:a", "other"])
+    await expect(runJob(implementation, ["a", "b"])).rejects.toThrow(TypeError)
   })
 
   test("reads each field of options and options.job once, also of a getter of a class", async () => {
@@ -140,17 +171,17 @@ describe("job", () => {
 
   test("rejects with the errors of an enqueue for invalid options of the task, before it reads the other fields of options.job and runs the handler", async () => {
     const handler = mock(() => {})
-    const getKey = mock(() => "k")
+    const getQueue = mock(() => "q")
     const task = defineTask("t")
       .withPayload<number>()
       .withOptions(() => ({ delay: -1 }))
     const job = {
-      get key() {
-        return getKey()
+      get queue() {
+        return getQueue()
       },
     }
     await expect(runJob(task.implement(handler), 1, { job })).rejects.toThrow(RangeError)
-    expect(getKey).not.toHaveBeenCalled()
+    expect(getQueue).not.toHaveBeenCalled()
     expect(handler).not.toHaveBeenCalled()
   })
 })

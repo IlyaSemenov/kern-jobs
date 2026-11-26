@@ -66,11 +66,12 @@ export interface ClaimOptions {
 
 /**
  * Returns SQL of the assignments that claim the row `j` for the worker at `now`: a new claim id, the next attempt, and the lease end, now plus the lease of its task or the default lease.
+ * A claim seals a batch job, so it never takes items again, also when it returns to pending.
  * Every claim stamps the attempt budget of the failure job of its task, or clears it for a task without one, so the claim that a terminal failure ends decides whether it inserts a failure job, and a stamp of an earlier claim never counts.
  */
 function claimSetSql(o: ClaimOptions, now: SqlFragment): UntypedExpression {
   return sql`state = 'active', claim_id = ${schema.claimSeq.nextval()}, locked_by = ${o.worker}, locked_at = ${now},
-    attempts = j.attempts + 1,
+    attempts = j.attempts + 1, sealed = j.max_items is not null,
     lease_until = ${now} + make_interval(secs => coalesce((${param(t.jsonb, o.leases ?? {})} ->> j.task)::float8, ${param(t.doublePrecision, o.defaultLease ?? 60)})),
     failure_max_attempts = (${param(t.jsonb, o.failureMaxAttempts ?? {})} ->> j.task)::int`
 }

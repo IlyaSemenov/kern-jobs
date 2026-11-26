@@ -1,7 +1,7 @@
 # A key at most once per `enqueueMany`
 
 `jobs.enqueueMany` rejects with `RangeError`, before it calls the client, two payloads whose options give the same stored key.
-One `INSERT … ON CONFLICT DO UPDATE` cannot update a row twice, and PostgreSQL rejects such a statement with `21000`, so a batch with a repeated key needs a rule of its own, and each rule below departs from the enqueues of the payloads one after another, which the call of an application means.
+One `INSERT … ON CONFLICT DO UPDATE` cannot update a row twice, and PostgreSQL rejects such a statement with `21000`, so a call with a repeated key needs a rule of its own, and each rule below departs from the enqueues of the payloads one after another, which the call of an application means.
 
 ## The last item of a key wins
 

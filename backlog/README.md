@@ -21,7 +21,7 @@ Within Next and Later, items run roughly from the most important; the order is a
 - [Wakeup without polling](wakeup-without-polling.md): LISTEN/NOTIFY and a timer at the nearest `run_at`.
 - [Transactional handlers](transactional-handlers.md): writes of a handler commit with the completion of its job.
 - [Strict FIFO queues](strict-fifo-queues.md): a failed head blocks its queue.
-- [Accumulating payloads](accumulating-payloads.md): a key mode that appends payloads to the pending job.
+- [Accumulating payloads](accumulating-payloads.md): items that a batch keeps once, and batches of thousands of items.
 - [Payload validation](payload-validation.md): by a Standard Schema of the task.
 - [Retention](retention.md): deleting failed jobs after a configured time, and keeping completed jobs for a configured time.
 - [Published benchmarks](published-benchmarks.md): throughput and latency on stated hardware, against pg-boss and Graphile Worker on the same workload.

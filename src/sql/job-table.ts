@@ -13,6 +13,8 @@ export interface JobTable {
   readonly schemaName: string
   /** Qualified name of the table in SQL. */
   readonly name: string
+  /** Quoted name of the schema in SQL, which qualifies the functions of the schema, such as `enqueue_items`. */
+  readonly schema: string
 }
 
 /** Name of the PostgreSQL schema of the job table when the application gives none. */
@@ -43,5 +45,6 @@ export function checkSchemaName(schemaName: unknown): asserts schemaName is stri
  */
 export function createJobTable(schemaName: string): JobTable {
   checkSchemaName(schemaName)
-  return { schemaName, name: `${quoteIdentifier(schemaName)}.job` }
+  const schema = quoteIdentifier(schemaName)
+  return { schemaName, name: `${schema}.job`, schema }
 }

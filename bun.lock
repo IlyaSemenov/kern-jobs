@@ -5,8 +5,8 @@
     "": {
       "name": "kern-jobs",
       "dependencies": {
-        "kern-migrations": "^0.8.7",
-        "kern-orm": "^0.32.0",
+        "kern-migrations": "^0.9.0",
+        "kern-orm": "^0.32.1",
       },
       "devDependencies": {
         "@arethetypeswrong/core": "^0.18.5",
@@ -691,11 +691,11 @@
 
     "jsonc-parser": ["jsonc-parser@3.3.1", "", {}, "sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ=="],
 
-    "kern-db": ["kern-db@0.16.0", "", { "peerDependencies": { "@types/bun": "^1.4.4", "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/bun", "@types/pg", "pg", "postgres"] }, "sha512-HkhEc5MJs2QTsXtprHPxrgebJaa9Owg5FEVb5e1vJ6x9BixDWJ6TX8VxA0GH+vNQPHaRx8yCNV7/1YKeIpmFYw=="],
+    "kern-db": ["kern-db@0.17.0", "", { "peerDependencies": { "@types/bun": "^1.4.4", "@types/pg": "^8.0.0", "pg": "^8.23.1", "postgres": "^4.0.0" }, "optionalPeers": ["@types/bun", "@types/pg", "pg", "postgres"] }, "sha512-oMG4rs8RpwrktaiEUQ1YVrXCvhWVJKb9UPuPoMLwiVAoyHSZ6m5UF2hZVhkVC2d5Jy9ivhNcTpsRJ1B6d/F0Yg=="],
 
-    "kern-migrations": ["kern-migrations@0.8.7", "", { "peerDependencies": { "kern-db": "^0.16.0" } }, "sha512-U4a39glnzDiHhci2Aa5ly4YaPmSYqpHgiP7t6WzvlxIM0AZX9ghuaz5dBokTbTyOLHDg9ffHvgCPyUvoRP64ng=="],
+    "kern-migrations": ["kern-migrations@0.9.0", "", { "peerDependencies": { "kern-db": "^0.17.0" } }, "sha512-WgbbbKM/Gp7Z2NryMyyPYuTgu7OzaRRp+rKJ0h1Kb514FXCQDBcOYOA15hP2FC8CGUT+Dmbxy+PI26l7B/hlLA=="],
 
-    "kern-orm": ["kern-orm@0.32.0", "", { "dependencies": { "kern-db": "^0.16.0" } }, "sha512-JymP+sZPFNu0IgsOLedIDWST5XFAY1Lwi6psgxRJ7yLuBLhwJmFAh1QehbTAno8UciTtJQG8g3sufZjsLuoEUw=="],
+    "kern-orm": ["kern-orm@0.32.1", "", { "dependencies": { "kern-db": "^0.17.0" } }, "sha512-5FUTQCkERiMvNmOkQNlKCPKF8mTo6f5Go3J8IysnIx/kcoHCx6Xq1lfN1PzDK6vzsi31s06S6uiY6vqizIbLxQ=="],
 
     "keyv": ["keyv@5.6.0", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw=="],
 

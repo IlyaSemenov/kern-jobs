@@ -1,6 +1,6 @@
 // Enqueues, retries, and deletes through the clients of an application: node-postgres and postgres.js, with their transactions, renamed columns, and parsers of their own, and a Database of kern-db and a Db of kern-orm.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import { runInNewContext } from "node:vm"
 
 import { bindSchema, defineSchema } from "kern-orm"
@@ -10,7 +10,8 @@ import pg from "pg"
 import postgres from "postgres"
 
 import type { EnqueueResult } from "../sql/enqueue"
-import { defineTask } from "../task/task"
+import type { BatchEnqueueOverrides } from "../task/options"
+import { type BatchTask, defineTask, type Task } from "../task/task"
 import {
   createTestSchema,
   databaseUrl,
@@ -137,9 +138,9 @@ const clients: [string, () => Client][] = [
 ]
 
 const sendEmail = defineTask("email.send").withPayload<{ to: string }>()
-const indexProduct = defineTask("search.indexProduct")
+const indexProduct = defineTask("search.indexProduct", { keyMode: "keep" })
   .withPayload<{ productId: string; version: number }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}`, keyMode: "keep" }))
+  .withKey(({ productId }) => `product:${productId}`)
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -859,11 +860,12 @@ describe("options", () => {
     await pool.end()
   })
 
-  test("writes the options of defineTask, replaced by those of withOptions and then by the overrides of the enqueue", async () => {
-    const task = defineTask("t", { queue: "q", maxAttempts: 3, delay: 5 })
+  test("writes the options of defineTask, replaced by the key of withKey and the options of withOptions, and then by the overrides of the enqueue", async () => {
+    const task = defineTask("t", { key: "static", queue: "q", maxAttempts: 3, delay: 5 })
       .withPayload<{ id: string }>()
+      .withKey(({ id }) => `k:${id}`)
       // A field given as undefined keeps the option of defineTask.
-      .withOptions(({ id }) => ({ key: `k:${id}`, maxAttempts: id === "1" ? undefined : 4 }))
+      .withOptions(({ id }) => ({ maxAttempts: id === "1" ? undefined : 4 }))
     const jobs = createJobs(pool, { schemaName: testSchema.name })
     await jobs.enqueue(task, { id: "1" })
     await jobs.enqueue(task, { id: "2" }, { key: null, delay: 0 })
@@ -922,7 +924,7 @@ describe("options", () => {
     expect(calls).toBe(0)
   })
 
-  test("rejects a task name, a key, or a queue with a lone surrogate, also from withOptions, before it calls the executor", async () => {
+  test("rejects a task name, a key, or a queue with a lone surrogate, also from withKey, before it calls the executor", async () => {
     let calls = 0
     const jobs = createJobs(
       () => {
@@ -934,13 +936,44 @@ describe("options", () => {
     const staticQueue = defineTask("t", { queue: "q\udc00" })
     const computedKey = defineTask("t")
       .withPayload<string>()
-      .withOptions(id => ({ key: `k:${id}` }))
+      .withKey(id => `k:${id}`)
     // A task defined by an older version of kern-jobs, whose defineTask accepted such a name.
     const olderTask = { ...defineTask("t"), name: "t\ud800" }
     await expect(jobs.enqueue(olderTask)).rejects.toThrow("The name of a task must be")
     await expect(jobs.enqueue(staticQueue)).rejects.toThrow("queue must be")
     // Cut inside an emoji.
-    await expect(jobs.enqueue(computedKey, "😀".slice(0, 1))).rejects.toThrow("key must be")
+    await expect(jobs.enqueue(computedKey, "😀".slice(0, 1))).rejects.toThrow(
+      "The key of withKey of task t must be",
+    )
+    expect(calls).toBe(0)
+  })
+
+  test("takes the key of the overrides in place of that of withKey, without calling withKey", async () => {
+    const keyFor = mock((id: string) => `k:${id}`)
+    const task = defineTask("t").withPayload<string>().withKey(keyFor)
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    await jobs.enqueue(task, "1", { key: "own" })
+    await jobs.enqueue(task, "2", { key: null })
+    expect(keyFor).not.toHaveBeenCalled()
+    expect((await jobRows(testSchema.conn.query)).map(row => row.key)).toEqual(["own", null])
+  })
+
+  test("rejects a key of withOptions and a key of withKey that is not a string, before it calls the executor", async () => {
+    let calls = 0
+    const jobs = createJobs(
+      () => {
+        calls++
+        return pool
+      },
+      { schemaName: testSchema.name },
+    )
+    // As a JavaScript caller passes them, past the types.
+    const keyOfOptions = defineTask("t").withOptions(() => ({ key: "k" }) as never)
+    const keyOfNumber = defineTask("t").withKey(() => 1 as unknown as string)
+    await expect(jobs.enqueue(keyOfOptions)).rejects.toThrow(
+      new TypeError("withOptions of task t cannot return a key; use withKey"),
+    )
+    await expect(jobs.enqueue(keyOfNumber)).rejects.toThrow("The key of withKey of task t must be")
     expect(calls).toBe(0)
   })
 })
@@ -967,10 +1000,11 @@ describe("enqueueMany", () => {
     return { jobs, counts }
   }
 
-  test("enqueues each payload with the options of the task and the overrides, and two payloads without a key", async () => {
-    const task = defineTask("t", { maxAttempts: 3 })
+  test("enqueues each payload with the options of the task and the overrides, and two payloads whose withKey gives no key in place of that of defineTask", async () => {
+    const task = defineTask("t", { key: "static", maxAttempts: 3 })
       .withPayload<{ id: string }>()
-      .withOptions(({ id }) => (id === "a" ? { key: `k:${id}` } : {}))
+      .withKey(({ id }) => (id === "a" ? `k:${id}` : null))
+      .withOptions(({ id }) => (id === "a" ? { maxAttempts: 4 } : {}))
     const jobs = createJobs(pool, { schemaName: testSchema.name })
     await jobs.enqueueMany(task, [{ id: "a" }, { id: "b" }, { id: "c" }], { queue: "q" })
     expect(
@@ -981,7 +1015,7 @@ describe("enqueueMany", () => {
         payload,
       ]),
     ).toEqual([
-      ["k:a", "q", 3, { id: "a" }],
+      ["k:a", "q", 4, { id: "a" }],
       [null, "q", 3, { id: "b" }],
       [null, "q", 3, { id: "c" }],
     ])
@@ -997,17 +1031,16 @@ describe("enqueueMany", () => {
     ])
   })
 
-  test("rejects two payloads of one key, also key true and the empty key, an argument that is not an array, and an invalid per-payload option or an unserializable payload, before it calls the client", async () => {
+  test("rejects two payloads of one key, also of the key true of the overrides, an argument that is not an array, and an invalid per-payload option or an unserializable payload, before it calls the client", async () => {
     const { jobs, counts } = createCountingJobs()
     const task = defineTask("t")
-      .withPayload<string | true | bigint>()
-      .withOptions(key =>
-        typeof key === "bigint" ? {} : key === "invalid" ? { delay: -1 } : { key },
-      )
+      .withPayload<string | bigint>()
+      .withKey(key => String(key))
+      .withOptions(key => (key === "invalid" ? { delay: -1 } : {}))
     await expect(jobs.enqueueMany(task, ["a", "b", "a"])).rejects.toThrow(
       new RangeError('enqueueMany takes each key once, got "a" twice'),
     )
-    await expect(jobs.enqueueMany(task, [true, ""])).rejects.toThrow(
+    await expect(jobs.enqueueMany(task, ["", "a"], { key: true })).rejects.toThrow(
       new RangeError('enqueueMany takes each key once, got "" twice'),
     )
     await expect(jobs.enqueueMany(task, "a" as unknown as string[])).rejects.toThrow(
@@ -1061,5 +1094,169 @@ describe("enqueueMany", () => {
       "tenant 1",
       "tenant 1",
     ])
+  })
+})
+
+describe("enqueueItems", () => {
+  let pool: pg.Pool
+  beforeEach(() => {
+    pool = new pg.Pool({ connectionString: databaseUrl(), max: 2 })
+  })
+  afterEach(async () => {
+    await pool.end()
+  })
+
+  const publishPosts = defineTask("posts.publish", {
+    key: true,
+    keyMode: "debounce",
+    delay: 2,
+    maxWait: 10,
+  }).withBatchPayload<number>({ maxItems: 100 })
+
+  test("appends the items of sequential enqueues to one pending job", async () => {
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    const [first] = await jobs.enqueueItems(publishPosts, [1])
+    expect(await jobs.enqueueItems(publishPosts, [2, 3])).toEqual([
+      { id: first!.id, created: false },
+    ])
+    const row = only(await jobRows(testSchema.conn.query))
+    expect([row.id, row.key, row.payload, row.maxItems, row.sealed]).toEqual([
+      first!.id,
+      "",
+      [1, 2, 3],
+      100,
+      false,
+    ])
+  })
+
+  test("fills the pending job, and splits the items that do not fit into full jobs and one partial job, with results in the order of the items", async () => {
+    const task = defineTask("t", { key: true }).withBatchPayload<number>({ maxItems: 3 })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    const [open] = await jobs.enqueueItems(task, [1, 2])
+    const results = await jobs.enqueueItems(task, [3, 4, 5, 6, 7])
+    const rows = await jobRows(testSchema.conn.query)
+    expect(results).toEqual([
+      { id: open!.id, created: false },
+      { id: rows[1]!.id, created: true },
+      { id: rows[2]!.id, created: true },
+    ])
+    expect(rows.map(row => [row.payload, row.sealed])).toEqual([
+      [[1, 2, 3], true],
+      [[4, 5, 6], true],
+      [[7], false],
+    ])
+  })
+
+  test("takes the options from the task and the key from the task or the overrides", async () => {
+    const task = defineTask("t", { queue: "q" }).withBatchPayload<number>({ maxItems: 2 })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    expect(await jobs.enqueueItems(task, [1, 2, 3], { key: "k" })).toHaveLength(2)
+    expect(
+      (await jobRows(testSchema.conn.query)).map(row => [row.key, row.queue, row.payload]),
+    ).toEqual([
+      ["k", "q", [1, 2]],
+      ["k", "q", [3]],
+    ])
+  })
+
+  test("resolves to no job for no items, changes nothing, and calls no client factory", async () => {
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    await jobs.enqueueItems(publishPosts, [1])
+    const before = await jobRows(testSchema.conn.query)
+    expect(await jobs.enqueueItems(publishPosts, [])).toEqual([])
+    expect(await jobRows(testSchema.conn.query)).toEqual(before)
+    const outsideRequest = createJobs(() => {
+      throw new Error("no request")
+    })
+    expect(await outsideRequest.enqueueItems(publishPosts, [])).toEqual([])
+    // No items need no key.
+    const withoutKey = defineTask("t").withBatchPayload<number>({ maxItems: 2 })
+    expect(await outsideRequest.enqueueItems(withoutKey, [])).toEqual([])
+  })
+
+  test("takes the key from the items by withKey, called once for each item, unless the enqueue gives a key", async () => {
+    const seen: number[] = []
+    const task = defineTask("t", { key: "static" })
+      .withBatchPayload<{ siteId: string; postId: number }>({ maxItems: 2 })
+      .withKey(post => {
+        seen.push(post.postId)
+        return `site:${post.siteId}`
+      })
+    const jobs = createJobs(pool, { schemaName: testSchema.name })
+    const items = [1, 2, 3].map(postId => ({ siteId: "a", postId }))
+    expect(await jobs.enqueueItems(task, items)).toHaveLength(2)
+    expect(seen).toEqual([1, 2, 3])
+    await jobs.enqueueItems(task, [{ siteId: "b", postId: 4 }], { key: "site:c" })
+    expect(seen).toEqual([1, 2, 3])
+    expect((await jobRows(testSchema.conn.query)).map(row => row.key)).toEqual([
+      "site:a",
+      "site:a",
+      "site:c",
+    ])
+  })
+
+  test("validates batch tasks, enqueue methods, items, and overrides before calling the client", async () => {
+    let calls = 0
+    const jobs = createJobs(
+      () => {
+        calls++
+        return pool
+      },
+      { schemaName: testSchema.name },
+    )
+    const task = defineTask("t").withBatchPayload<number>({ maxItems: 2 })
+    let optionsCalls = 0
+    const asBatchTask = defineTask("plain")
+      .withPayload<number[]>()
+      .withOptions(() => {
+        optionsCalls++
+        return {}
+      }) as unknown as BatchTask<string, number>
+    await expect(jobs.enqueueItems(asBatchTask, [1])).rejects.toThrow(
+      new TypeError("Task plain is not a batch task: enqueue it with enqueue"),
+    )
+    await expect(jobs.enqueueItems(publishPosts, 1 as unknown as number[])).rejects.toThrow(
+      new TypeError("The items of batch task posts.publish must be an array"),
+    )
+    await expect(jobs.enqueueItems(task, [1])).rejects.toThrow(
+      new TypeError("Batch task t requires a key, such as key: true or withKey"),
+    )
+    await expect(
+      jobs.enqueueItems(publishPosts, [1], { key: null } as unknown as BatchEnqueueOverrides),
+    ).rejects.toThrow(
+      new TypeError("Batch task posts.publish requires a key, such as key: true or withKey"),
+    )
+    await expect(
+      jobs.enqueueItems(publishPosts, [1], { delay: 5 } as unknown as BatchEnqueueOverrides),
+    ).rejects.toThrow(
+      new TypeError(
+        "An enqueue of batch task posts.publish takes only a key, got delay; its other options come from defineTask",
+      ),
+    )
+    // A task of the shape of a batch task, which withBatchPayload would reject.
+    const keep = { ...publishPosts, options: { key: true, keyMode: "keep" } as const }
+    const keepOutcome = jobs.enqueueItems(keep, [1])
+    await expect(keepOutcome).rejects.toBeInstanceOf(TypeError)
+    await expect(keepOutcome).rejects.toThrow(
+      'keyMode "keep" does not apply to batch task posts.publish',
+    )
+    const keyed = defineTask("keyed")
+      .withBatchPayload<string>({ maxItems: 2 })
+      .withKey(item => item)
+    await expect(jobs.enqueueItems(keyed, ["a", "b"])).rejects.toThrow(
+      new TypeError(
+        'The items of an enqueue of batch task keyed must have one key, got "a" and "b"',
+      ),
+    )
+    const asTask = publishPosts as unknown as Task<string, number[]>
+    for (const enqueue of [
+      () => jobs.enqueue(asTask, [1]),
+      () => jobs.enqueueMany(asTask, [[1]]),
+    ]) {
+      await expect(enqueue()).rejects.toThrow(
+        new TypeError("Task posts.publish is a batch task: enqueue its items with enqueueItems"),
+      )
+    }
+    expect([calls, optionsCalls]).toEqual([0, 0])
   })
 })

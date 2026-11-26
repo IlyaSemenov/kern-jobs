@@ -7,7 +7,7 @@ await jobs.enqueueMany(indexProductTask, [{ productId: "1" }, { productId: "2" }
 ```
 
 One type parameter relates every payload to the task, the call resolves the scope of the task once, and the payloads of one task and scope tell their keys apart by the stored key alone.
-The options of a payload still come from `withOptions`.
+The key and the options of a payload still come from `withKey` and `withOptions`.
 
 ## Items of several tasks
 

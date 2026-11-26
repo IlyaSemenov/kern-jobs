@@ -30,17 +30,44 @@ describe("defineTask", () => {
     ])
   })
 
-  test("keeps the settings and options through withPayload and withOptions, which computes options from the payload", () => {
+  test("keeps the settings and options through withPayload, withKey, and withOptions, which compute the key and the options from the payload", () => {
     const task = defineTask("search.indexProduct", { lease: 120, scoped: true, delay: 5 })
       .withPayload<{ productId: string }>()
-      .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+      .withKey(({ productId }) => `product:${productId}`)
+      .withOptions(({ productId }) => ({ queue: productId }))
     expect([task.name, task.lease, task.scoped, task.options]).toEqual([
       "search.indexProduct",
       120,
       true,
       { delay: 5 },
     ])
-    expect(task.optionsFor?.({ productId: "42" })).toEqual({ key: "product:42" })
+    expect(task.keyFor?.({ productId: "42" })).toBe("product:42")
+    expect(task.optionsFor?.({ productId: "42" })).toEqual({ queue: "42" })
+  })
+
+  test("makes a batch task by withBatchPayload, with its maxItems, and without withOptions", () => {
+    const task = defineTask("posts.publish", { key: true, lease: 60 }).withBatchPayload<number>({
+      maxItems: 100,
+    })
+    expect([task.maxItems, task.lease, task.options]).toEqual([100, 60, { key: true }])
+    expect("withOptions" in task).toBe(false)
+    expect(defineTask("t").maxItems).toBeUndefined()
+    expect(
+      defineTask("t").implement(() => {}, { onFailure: () => {} }).failure.task.maxItems,
+    ).toBeUndefined()
+  })
+
+  test("withBatchPayload rejects options that are not an object and a task of keyMode keep with TypeError, and a maxItems that is not a count with RangeError", () => {
+    const task = defineTask("t")
+    expect(() => task.withBatchPayload(undefined as never)).toThrow(TypeError)
+    for (const maxItems of [0, 1.5, 2 ** 31, Number.NaN, "3"]) {
+      expect(() => task.withBatchPayload({ maxItems: maxItems as number })).toThrow(
+        new RangeError(`maxItems must be an integer from 1 to 2147483647, got ${String(maxItems)}`),
+      )
+    }
+    expect(() =>
+      defineTask("keep", { key: true, keyMode: "keep" }).withBatchPayload({ maxItems: 2 }),
+    ).toThrow(new TypeError('keyMode "keep" does not apply to batch task keep'))
   })
 
   test("rejects a name that is not a string of at most 128 bytes in UTF-8", () => {
@@ -83,6 +110,17 @@ describe("defineTask", () => {
       "withOptions takes a function of the payload; pass static options to defineTask",
     )
   })
+
+  test("rejects a key of withKey that is not a function, of the payload or of an item", () => {
+    expect(() => defineTask("t").withKey("k" as never)).toThrow(
+      new TypeError("withKey takes a function of the payload"),
+    )
+    expect(() =>
+      defineTask("t")
+        .withBatchPayload<string>({ maxItems: 2 })
+        .withKey("k" as never),
+    ).toThrow(new TypeError("withKey takes a function of an item"))
+  })
 })
 
 describe("implement", () => {
@@ -92,7 +130,7 @@ describe("implement", () => {
     expect(plain.implement(handler)).toEqual({ task: plain, handler })
     const task = defineTask("search.indexProduct")
       .withPayload<{ productId: string }>()
-      .withOptions(({ productId }) => ({ key: productId }))
+      .withKey(({ productId }) => productId)
     const implementation = task.implement(handler)
     expect(implementation.task).toBe(task)
     expect(implementation.handler).toBe(handler)

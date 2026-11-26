@@ -6,7 +6,7 @@ import type pg from "pg"
 import type postgres from "postgres"
 
 import type { EnqueueResult } from "../sql/enqueue"
-import { defineTask } from "../task/task"
+import { type AnyTask, defineTask } from "../task/task"
 
 import type { RetryResult } from "./administration"
 import { ALL_SCOPES, createJobs } from "./jobs"
@@ -16,6 +16,9 @@ declare const jobs: ReturnType<typeof createJobs>
 const sendEmail = defineTask("email.send").withPayload<{ to: string }>()
 const purgeExpiredSessions = defineTask("sessions.purgeExpired")
 const notify = defineTask("notify").withPayload<{ id: string } | undefined>()
+const publishPosts = defineTask("posts.publish", { key: true }).withBatchPayload<number>({
+  maxItems: 100,
+})
 
 describe("createJobs", () => {
   test("takes a client, a client of a transaction, a function that returns one, a Database of kern-db, or a Db of kern-orm", () => {
@@ -80,6 +83,11 @@ describe("enqueue", () => {
     // @ts-expect-error delay and runAt exclude each other.
     void jobs.enqueue(sendEmail, { to: "a@example.com" }, { delay: 60, runAt: new Date() })
   })
+
+  test("rejects a batch task", () => {
+    // @ts-expect-error enqueueItems enqueues the items of a batch task.
+    void jobs.enqueue(publishPosts, [1])
+  })
 })
 
 describe("enqueueMany", () => {
@@ -87,6 +95,8 @@ describe("enqueueMany", () => {
     expectTypeOf(jobs.enqueueMany(sendEmail, [{ to: "a@example.com" }])).toEqualTypeOf<
       Promise<EnqueueResult[]>
     >()
+    // @ts-expect-error enqueueItems enqueues the items of a batch task.
+    void jobs.enqueueMany(publishPosts, [[1], [2, 3]])
     const payloads: readonly { to: string }[] = [{ to: "a@example.com" }]
     void jobs.enqueueMany(sendEmail, payloads, { delay: 60 })
     void jobs.enqueueMany(purgeExpiredSessions, [undefined])
@@ -96,6 +106,42 @@ describe("enqueueMany", () => {
     void jobs.enqueueMany(sendEmail, { to: "a@example.com" })
     // @ts-expect-error The lease belongs to defineTask.
     void jobs.enqueueMany(sendEmail, payloads, { lease: 5 })
+  })
+})
+
+describe("enqueueItems", () => {
+  test("takes an array of the items of a batch task and a key as its override, and resolves to a result of each job", () => {
+    expectTypeOf(jobs.enqueueItems(publishPosts, [1])).toEqualTypeOf<Promise<EnqueueResult[]>>()
+    const items: readonly number[] = [1, 2]
+    void jobs.enqueueItems(publishPosts, items, { key: "site:1" })
+    void jobs.enqueueItems(publishPosts, [])
+    // @ts-expect-error The items are an array.
+    void jobs.enqueueItems(publishPosts, 1)
+    // @ts-expect-error An item has another type.
+    void jobs.enqueueItems(publishPosts, ["1"])
+    // @ts-expect-error The items append to the pending job of their key.
+    void jobs.enqueueItems(publishPosts, [1], { key: null })
+    // @ts-expect-error The other options apply to the whole batch and come from defineTask.
+    void jobs.enqueueItems(publishPosts, [1], { delay: 5 })
+    const overrides = { key: "site:1", delay: 5 }
+    // @ts-expect-error The other options are rejected in an object of the overrides of other enqueues too.
+    void jobs.enqueueItems(publishPosts, [1], overrides)
+    // @ts-expect-error enqueue enqueues a task that is not a batch task.
+    void jobs.enqueueItems(sendEmail, [{ to: "a@example.com" }])
+  })
+
+  test("takes the task of an implementation, of its own kind, and a task of either kind that maxItems tells apart", () => {
+    void jobs.enqueue(sendEmail.implement(() => {}).task, { to: "a@example.com" })
+    void jobs.enqueueItems(publishPosts.implement(() => {}).task, [1])
+    const either = publishPosts as AnyTask<"posts.publish", number[]>
+    // @ts-expect-error The task may be a batch task.
+    void jobs.enqueue(either, [1])
+    if (either.maxItems === undefined) void jobs.enqueue(either, [1])
+    else void jobs.enqueueItems(either, [1])
+    const plain = sendEmail as AnyTask<"email.send", { to: string }>
+    void jobs.enqueue(plain, { to: "a@example.com" })
+    const pair = defineTask("t").withPayload<[number, string]>() as AnyTask<"t", [number, string]>
+    void jobs.enqueue(pair, [1, "a"])
   })
 })
 
@@ -126,6 +172,7 @@ describe("deletePending", () => {
     void jobs.deletePending({ task: sendEmail, key: true })
     void jobs.deletePending({ task: purgeExpiredSessions })
     void jobs.deletePending({ task: defineTask("search.indexProduct", { scoped: true }), key: "k" })
+    void jobs.deletePending({ task: publishPosts, key: "k" })
     // @ts-expect-error A key is a string or true.
     void jobs.deletePending({ task: sendEmail, key: null })
     // @ts-expect-error A key needs its task.

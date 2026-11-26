@@ -1,11 +1,11 @@
-// Leases: the reaper with an existing pending job, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
+// Leases: the reaper with an existing pending job and with batches, the return of the jobs of a worker, the leases that a heartbeat sets, fencing, heartbeat and complete against the reaper and a fail transaction, reaper progress under a hot key, and ownership after the lease expired but before the reaper returned the job.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { param, sql } from "kern-orm/db"
 import { getBackendPid, waitForLock, waitForLockedStatement } from "kern-orm/testing"
 
-import { enqueue } from "../../sql/enqueue"
+import { enqueue, enqueueItems } from "../../sql/enqueue"
 import { toStatementLabel } from "../../sql/statement"
 import {
   createTestSchema,
@@ -268,7 +268,7 @@ describe("reaper with an existing pending job", () => {
       where j.state = 'active' and j.lease_until < ${now}`
     for (let i = 0; i < 3; i++) {
       const err = await reapUnranked().catch(e => e)
-      expect(isUniqueViolation(err, "job_pending_key_idx")).toBe(true)
+      expect(isUniqueViolation(err, "job_open_key_idx")).toBe(true)
     }
   })
 
@@ -295,6 +295,74 @@ describe("reaper with an existing pending job", () => {
       await claimCycle(testSchema.conn.query, { ...W("live"), slots: 1, now: T(11) }),
     )
     expect(next.job.payload).toBe(2)
+  })
+})
+
+describe("reaper with batches", () => {
+  /** Appends a batch of task `t` and the empty key at `now`. */
+  const append = (payload: number[], now: Date, maxAttempts = 5) =>
+    enqueueItems(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "",
+      maxItems: 100,
+      payload,
+      maxAttempts,
+      now,
+    })
+
+  test("returns an expired batch to pending sealed with its id, payload, and key, beside its successor", async () => {
+    await append([1], T(0))
+    const a = only(await claimPlain(testSchema.conn.query, { ...W(), limit: 1, now: T(0) }))
+    const [b] = await append([2, 3], T(1))
+    const stats = { uniqueViolations: 0 }
+    expect(await reap(testSchema.conn.query, { now: T(11) }, stats)).toEqual([
+      { id: a.id, state: "pending", detached: false },
+    ])
+    expect(stats.uniqueViolations).toBe(0)
+    expect(
+      (await jobs(testSchema.conn.query)).map(r => [
+        r.id,
+        r.state,
+        r.key,
+        r.payload,
+        r.sealed,
+        r.attempts,
+      ]),
+    ).toEqual([
+      [a.id, "pending", "", [1], true, 1],
+      [b!.id, "pending", "", [2, 3], false, 0],
+    ])
+  })
+
+  test("returns two expired batches of one key without detaching either", async () => {
+    await append([1], T(0))
+    const a = only(await claimPlain(testSchema.conn.query, { ...W(), limit: 1, now: T(0) }))
+    await append([2], T(1))
+    const b = only(await claimPlain(testSchema.conn.query, { ...W(), limit: 1, now: T(1) }))
+    await append([3], T(2))
+    const reaped = await reap(testSchema.conn.query, { now: T(20) })
+    expect(reaped.sort((x, y) => Number(x.id) - Number(y.id))).toEqual([
+      { id: a.id, state: "pending", detached: false },
+      { id: b.id, state: "pending", detached: false },
+    ])
+    expect((await jobs(testSchema.conn.query)).map(r => [r.payload, r.sealed])).toEqual([
+      [[1], true],
+      [[2], true],
+      [[3], false],
+    ])
+  })
+
+  test("fails an expired batch on its last attempt with its payload", async () => {
+    await append([1], T(0), 1)
+    const a = only(await claimPlain(testSchema.conn.query, { ...W(), limit: 1, now: T(0) }))
+    await append([2], T(1))
+    expect(await reap(testSchema.conn.query, { now: T(11) })).toEqual([
+      { id: a.id, state: "failed", detached: false },
+    ])
+    expect((await jobs(testSchema.conn.query)).map(r => [r.state, r.payload])).toEqual([
+      ["failed", [1]],
+      ["pending", [2]],
+    ])
   })
 })
 

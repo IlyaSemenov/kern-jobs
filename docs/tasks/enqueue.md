@@ -7,6 +7,7 @@ const { id } = await jobs.enqueue(sendEmailTask, { to: "ann@example.com", subjec
 ```
 
 It resolves to `{ id, created }`: the id of the job, and whether the job was created rather than merged into the pending job of its [key](./keys).
+To enqueue the items of a [batch task](./keys#batches), which can fill several jobs, use `jobs.enqueueItems`, which resolves to such an object for each job.
 
 An enqueue joins the transaction of the database client of `jobs`, so enqueue a job in the transaction that writes its data: workers see the enqueue when the transaction commits, and a rollback undoes it.
 [Database Clients and Transactions](../database-clients) shows how to enqueue in the transactions of each client.
@@ -50,7 +51,7 @@ await jobs.enqueueMany(
 ```
 
 It enqueues each payload as `jobs.enqueue` does, in one statement: either all of the jobs or none.
-To [override options](#overriding-options), pass them as the third argument; they apply to every payload, and options that differ by payload, such as a key, come from `withOptions` of the task:
+To [override options](#overriding-options), pass them as the third argument; they apply to every payload, and a key that differs by payload comes from `withKey` of the task, and other such options from `withOptions`:
 
 ```ts
 await jobs.enqueueMany(indexProductTask, payloads, { delay: 0 })
@@ -82,7 +83,7 @@ where p.active;
 
 It enqueues a job as `jobs.enqueue` does, in the transaction of the statement, and takes the options under these names: `payload`, `scope`, `key`, `queue`, `key_mode`, `run_at`, `delay` and `max_wait` in seconds, `max_attempts`, and `reset_attempts`.
 
-- It does not know your task definitions: pass the name of the task and every option that the task would give, such as the key of its `withOptions`, and a payload of the type of the task, which nothing checks.
+- It does not know your task definitions: pass the name of the task and every option that the task would give, such as the key of its `withKey`, and a payload of the type of the task, which nothing checks.
   For a task with `key: true`, pass `key => ''`.
 - For a [scoped](./scopes) task, pass the scope of the job as `scope`, which must not be empty: a worker fails a job of a scoped task without a scope without running its handler.
   For another task, omit `scope`, which makes the job unscoped, as `''` does.
@@ -109,8 +110,28 @@ PostgreSQL may call a function in `FROM` whose arguments take no value of the ro
 
 Do not expand it as `(kern_jobs.enqueue(…)).*`, which PostgreSQL evaluates once for each column, enqueueing each job twice.
 
-The function runs with the privileges of the role that calls it.
+### Items of a batch task
+
+To enqueue the items of a [batch task](./keys#batches) from SQL, call `kern_jobs.enqueue_items` with the name of the task, a JSON array of items as `items`, its `maxItems` as `max_items`, and the key as `key`, which a non-empty array requires:
+
+```sql
+select e.id, e.created
+from kern_jobs.enqueue_items(
+  task => 'posts.publish',
+  items => jsonb_build_array(1, 2, 3),
+  max_items => 100,
+  key => ''
+) e;
+```
+
+It appends the items as `jobs.enqueueItems` does and takes the other options of `enqueue`, except `payload`; it rejects NULL as `items` and `max_items`, and `keep` as `key_mode`.
+It returns a row for each job that took items, in the order of the items: the `id` of the job and whether it was `created`; an empty array returns none.
+
+### Privileges
+
+The SQL functions run with the privileges of the role that calls them.
 Grant that role:
 
-- `INSERT` and `UPDATE` on the table `job`: an enqueue updates the pending job of its key that it merges into;
-- `EXECUTE` on the functions `enqueue` and `check_enqueue`, which `enqueue` calls, if you revoked `EXECUTE` on functions from `PUBLIC`.
+- `USAGE` on the schema `kern_jobs`;
+- `SELECT`, `INSERT`, and `UPDATE` on the table `job`;
+- `EXECUTE` on the functions `enqueue`, `enqueue_items`, `check_enqueue`, `check_items`, and `check_merge`.

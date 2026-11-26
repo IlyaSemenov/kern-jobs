@@ -2,7 +2,7 @@
 
 ## An event while a job of the same key runs or waits for a retry
 
-A key keeps at most one pending job, also one that waits for a retry, and an event while the job of the key runs becomes the next pending job.
+A key of a task that is not a batch task keeps at most one pending job, also one that waits for a retry, and an event while the job of the key runs becomes the next pending job.
 
 - Graphile Worker, same: an event while the job of its key runs adds a new job, and an event while it waits for a retry updates it ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode)).
 - pg-boss, lacks: no queue policy keeps one job of a key that waits to run or for a retry while letting an event during a running job add the next one.
@@ -10,7 +10,7 @@ A key keeps at most one pending job, also one that waits for a retry, and an eve
 
 ## A failure of the running job after an event of its key
 
-If the running job fails with a retryable error and has attempts left while an event of its key has added a pending job, the two jobs merge by the key mode of the pending job.
+If the running job fails with a retryable error and has attempts left while an event of its key has added a pending job, the two jobs merge by the key mode of the pending job, unless one of them is a batch job.
 `replace` and `debounce` delete the failed job, and `keep` deletes the pending one.
 A job that fails for good, such as by `TerminalError`, is recorded as failed without a merge.
 
@@ -42,6 +42,12 @@ The bound limits only how far the events postpone the job: a backoff after a fai
 - Graphile Worker, lacks: `replace` postpones the job by each event without a bound, and `preserve_run_at` keeps the run time of the first event ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode)); debounce with a maximum delay was proposed in [graphile/worker#583](https://github.com/graphile/worker/issues/583).
 - pg-boss, differs: `sendDebounced` accepts at most one job of a key in each time slot of a fixed length.
   When the current slot has a job, it schedules the event in the next slot, and drops it when that slot has a job too ([docs](https://github.com/timgit/pg-boss/blob/12.38.1/docs/api/jobs.md#senddebouncedname-data-options-seconds-key)).
+
+## Items of many events in one job
+
+`enqueueItems` appends the items of a batch task to the pending job of their key until it has `maxItems`, and the items that do not fit go to new jobs, full ones due at once.
+
+- Graphile Worker, differs: an enqueue that updates the pending job of its key concatenates the arrays of the two payloads, without a capacity that splits them into jobs ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode)).
 
 ## The same key twice in one call
 

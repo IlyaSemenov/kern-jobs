@@ -8,6 +8,7 @@ import { waitForLock } from "kern-orm/testing"
 import {
   type Conn,
   createTestSchema,
+  idsOf,
   isPending,
   jobs,
   only,
@@ -21,7 +22,13 @@ import { schema } from "../worker/db/db"
 import { complete, fail } from "../worker/db/settlement"
 import * as t from "../worker/db/types"
 
-import { enqueue, enqueueMany, type EnqueueParams } from "./enqueue"
+import {
+  enqueue,
+  enqueueItems,
+  type EnqueueItemsParams,
+  enqueueMany,
+  type EnqueueParams,
+} from "./enqueue"
 import type { KeyMode } from "./job"
 import type { ValuesTarget } from "./statement"
 
@@ -455,6 +462,281 @@ describe("event during active", () => {
       ["active", 1],
       ["pending", 2],
     ])
+  })
+})
+
+describe("batches", () => {
+  const debounced = { mode: "debounce", delay: 2, maxWait: 10 } as const
+
+  /** Appends the items of a batch of capacity 3 of task `t` and the empty key at T(0), with the options `o`, on `db`. */
+  const append = (
+    payload: unknown[],
+    o: Partial<EnqueueItemsParams> = {},
+    db: ValuesTarget = testSchema.conn,
+  ) =>
+    enqueueItems(db, testSchema.table, {
+      task: "t",
+      key: "",
+      maxItems: 3,
+      payload,
+      now: T(0),
+      ...o,
+    })
+
+  /** Returns the payload, whether it is sealed, and the run time in seconds of each job, in the order of their ids. */
+  const batchRows = async () =>
+    (await jobs(testSchema.conn.query)).map(row => ({
+      payload: row.payload,
+      sealed: row.sealed,
+      runAt: secondsOf(row.runAt),
+    }))
+
+  test("appends the items of sequential enqueues to the open batch of the key in their order, with duplicates", async () => {
+    const publish = { key: "", maxItems: 100, ...debounced }
+    const [first] = await append([1], { ...publish, now: T(0) })
+    expect(first!.created).toBe(true)
+    expect(await append([2, 3], { ...publish, now: T(1) })).toEqual([
+      { id: first!.id, created: false },
+    ])
+    expect(await append([1, 1], { ...publish, now: T(1.5) })).toEqual([
+      { id: first!.id, created: false },
+    ])
+    expect(await batchRows()).toEqual([{ payload: [1, 2, 3, 1, 1], sealed: false, runAt: 3.5 }])
+  })
+
+  test("an append moves the run time of a debounced batch no later than maxWait after the enqueue that opened it", async () => {
+    const publish = { key: "", maxItems: 100, ...debounced, maxWait: 3 }
+    await append([1], { ...publish, now: T(0) })
+    await append([2], { ...publish, now: T(1.5) })
+    expect(await batchRows()).toEqual([{ payload: [1, 2], sealed: false, runAt: 3 }])
+  })
+
+  test("seals the batch that it fills, due at once, and splits the items that do not fit into full jobs and at most one partial job", async () => {
+    const [open] = await append([1, 2], { ...debounced, now: T(0) })
+    const results = await append([3, 4, 5, 6, 7], { ...debounced, now: T(1) })
+    expect(results.map(r => r.created)).toEqual([false, true, true])
+    expect(results[0]!.id).toBe(open!.id)
+    expect(results.map(r => r.id)).toEqual(await idsOf(testSchema.conn.query, ""))
+    expect(await batchRows()).toEqual([
+      { payload: [1, 2, 3], sealed: true, runAt: 1 },
+      { payload: [4, 5, 6], sealed: true, runAt: 1 },
+      // A new partial batch opens a debounce window of its own.
+      { payload: [7], sealed: false, runAt: 3 },
+    ])
+    expect(await append([8], { ...debounced, now: T(2) })).toEqual([
+      { id: results[2]!.id, created: false },
+    ])
+  })
+
+  test("an enqueue that fills the batch exactly leaves no open batch, so the next enqueue opens a new one", async () => {
+    const [open] = await append([1, 2], { delay: 30 })
+    expect(await append([3], { delay: 30, now: T(1) })).toEqual([{ id: open!.id, created: false }])
+    const [next] = await append([4], { delay: 30, now: T(2) })
+    expect(next!.created).toBe(true)
+    expect(await batchRows()).toEqual([
+      { payload: [1, 2, 3], sealed: true, runAt: 1 },
+      { payload: [4], sealed: false, runAt: 32 },
+    ])
+  })
+
+  test("one enqueue without an open batch creates several full batches, all sealed, in the order of their items", async () => {
+    const results = await append([1, 2, 3, 4, 5, 6], { delay: 30 })
+    expect(results.map(r => r.created)).toEqual([true, true])
+    expect(await batchRows()).toEqual([
+      { payload: [1, 2, 3], sealed: true, runAt: 0 },
+      { payload: [4, 5, 6], sealed: true, runAt: 0 },
+    ])
+  })
+
+  test("an empty array returns no job and changes nothing, also the run time of the open batch", async () => {
+    expect(await append([])).toEqual([])
+    expect(await jobs(testSchema.conn.query)).toEqual([])
+    await append([1], { ...debounced, now: T(0) })
+    const before = await jobs(testSchema.conn.query)
+    expect(await append([], { ...debounced, now: T(1) })).toEqual([])
+    expect(await jobs(testSchema.conn.query)).toEqual(before)
+  })
+
+  test("a partial batch takes items after its run time until a worker claims it", async () => {
+    const [open] = await append([1])
+    expect(await append([2], { now: T(5) })).toEqual([{ id: open!.id, created: false }])
+    const claim = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(6) }))
+    expect(claim.job.payload).toEqual([1, 2])
+    const [next] = await append([3], { now: T(7) })
+    expect(next!.created).toBe(true)
+  })
+
+  test("keeps the batches of other scopes, tasks, and keys apart", async () => {
+    await append([1])
+    await append([2], { scope: "s" })
+    await append([3], { task: "u" })
+    await append([4], { key: "k" })
+    await append([5])
+    expect(
+      (await jobs(testSchema.conn.query)).map(row => [row.scope, row.task, row.key, row.payload]),
+    ).toEqual([
+      ["", "t", "", [1, 5]],
+      ["s", "t", "", [2]],
+      ["", "u", "", [3]],
+      ["", "t", "k", [4]],
+    ])
+  })
+
+  test("an array payload of a job that is not a batch replaces the payload of the pending job of its key", async () => {
+    const first = await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "k",
+      payload: [1],
+    })
+    expect(
+      await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "k", payload: [2, 3] }),
+    ).toEqual({ id: first.id, created: false })
+    expect((await jobs(testSchema.conn.query)).map(row => [row.payload, row.maxItems])).toEqual([
+      [[2, 3], null],
+    ])
+  })
+
+  test("rejects a merge into a pending job of another kind and changes nothing", async () => {
+    await enqueue(testSchema.conn, testSchema.table, { task: "t", key: "plain", payload: [1] })
+    await append([1, 2], { key: "batch" })
+    const before = await jobs(testSchema.conn.query)
+    const cases: [() => Promise<unknown>, string][] = [
+      [
+        () => append([3], { key: "plain" }),
+        "The pending job of key 'plain' of task t is not a batch",
+      ],
+      [
+        () => enqueue(testSchema.conn, testSchema.table, { task: "t", key: "batch", payload: [3] }),
+        "The pending job of key 'batch' of task t is a batch",
+      ],
+      [
+        () =>
+          enqueueMany(testSchema.conn, testSchema.table, {
+            task: "t",
+            jobs: [
+              { key: "new", payload: 1 },
+              { key: "batch", mode: "keep", payload: 2 },
+            ],
+          }),
+        "is a batch",
+      ],
+    ]
+    for (const [call, message] of cases) {
+      const outcome = call()
+      await expect(outcome).rejects.toMatchObject({ code: "55000" })
+      await expect(outcome).rejects.toThrow(message)
+    }
+    expect(await jobs(testSchema.conn.query)).toEqual(before)
+  })
+
+  test("an open batch of another maxItems, as after a deploy that changes it, keeps its items and run time and takes no more, and the items go to new jobs", async () => {
+    await append([1, 2], { delay: 30 })
+    const results = await append([3, 4, 5], { maxItems: 2, delay: 30, now: T(1) })
+    expect(results.map(r => r.created)).toEqual([true, true])
+    expect(await batchRows()).toEqual([
+      { payload: [1, 2], sealed: true, runAt: 30 },
+      { payload: [3, 4], sealed: true, runAt: 1 },
+      { payload: [5], sealed: false, runAt: 31 },
+    ])
+  })
+
+  describe("concurrency", () => {
+    test("a producer waits for the uncommitted batch of another, and appends to it after its commit", async () => {
+      const [p1, p2] = [await testSchema.connect(), await testSchema.connect()]
+      await p1.query`begin`
+      const [first] = await append([1, 2], {}, p1)
+      const second = append([3, 4], {}, p2)
+      await waitForLock(testSchema.conn, p2.pid)
+      await p1.query`commit`
+      expect((await second).map(r => [r.id === first!.id, r.created])).toEqual([
+        [true, false],
+        [false, true],
+      ])
+      expect((await batchRows()).map(row => row.payload)).toEqual([[1, 2, 3], [4]])
+    })
+
+    test("a batch that waits for an uncommitted job of its key that is not a batch rejects with 23505 after its commit, and changes nothing", async () => {
+      const [p1, p2] = [await testSchema.connect(), await testSchema.connect()]
+      await p1.query`begin`
+      await enqueue(p1, testSchema.table, { task: "t", key: "", payload: 1 })
+      const batch = append([2], {}, p2)
+      await waitForLock(testSchema.conn, p2.pid)
+      await p1.query`commit`
+      await expect(batch).rejects.toMatchObject({ code: "23505" })
+      expect((await jobs(testSchema.conn.query)).map(row => row.payload)).toEqual([1])
+    })
+
+    test("an enqueue of a job that is not a batch that waits for an uncommitted batch of its key rejects with 55000 after its commit, and changes nothing", async () => {
+      const [p1, p2] = [await testSchema.connect(), await testSchema.connect()]
+      await p1.query`begin`
+      await append([1], {}, p1)
+      const plain = enqueue(p2, testSchema.table, { task: "t", key: "", payload: 2 })
+      await waitForLock(testSchema.conn, p2.pid)
+      await p1.query`commit`
+      await expect(plain).rejects.toMatchObject({ code: "55000" })
+      expect((await jobs(testSchema.conn.query)).map(row => row.payload)).toEqual([[1]])
+    })
+
+    test("a rollback undoes the append to the open batch and the jobs of the items that do not fit", async () => {
+      await append([1])
+      const before = await jobs(testSchema.conn.query)
+      const producer = await testSchema.connect()
+      await producer.query`begin`
+      expect(await append([2, 3, 4, 5, 6, 7], {}, producer)).toHaveLength(3)
+      await producer.query`rollback`
+      expect(await jobs(testSchema.conn.query)).toEqual(before)
+      expect(await append([2], { now: T(1) })).toEqual([{ id: before[0]!.id, created: false }])
+    })
+
+    test("an enqueue that waits for a claim of the open batch appends its items to a new batch, and the claimed job keeps its own", async () => {
+      const [open] = await append([1])
+      const worker = await testSchema.connect()
+      await worker.query`begin`
+      const claim = only(await claimPlain(worker.query, { ...W, limit: 1, now: T(1) }))
+      const producer = await testSchema.connect()
+      const event = append([2, 3], { now: T(1) }, producer)
+      await waitForLock(testSchema.conn, producer.pid)
+      await worker.query`commit`
+      const [next] = await event
+      expect(next!.created).toBe(true)
+      expect(claim.id).toBe(open!.id)
+      expect(
+        (await jobs(testSchema.conn.query)).map(row => [row.state, row.payload, row.sealed]),
+      ).toEqual([
+        ["active", [1], true],
+        ["pending", [2, 3], false],
+      ])
+    })
+
+    test("producers on 10 connections neither lose nor overfill items, keep the order of each producer, and leave at most one open batch", async () => {
+      const random = createRandom(7)
+      const conns = await Promise.all(Array.from({ length: 10 }, () => testSchema.connect()))
+      // Each item is the producer, the enqueue, and the position; a duplicate repeats an item within an enqueue.
+      const inputs = conns.map((_, c) =>
+        Array.from({ length: 20 }, (_, i) =>
+          Array.from({ length: random.int(0, 7) }, (_, j) => c * 10000 + i * 10 + Math.min(j, 5)),
+        ),
+      )
+      await Promise.all(
+        conns.map(async (conn, c) => {
+          for (const items of inputs[c]!) await append(items, { maxItems: 4 }, conn)
+        }),
+      )
+      const rows = await jobs(testSchema.conn.query)
+      const stored = rows.flatMap(row => row.payload as number[])
+      expect([...stored].sort((a, b) => a - b)).toEqual(inputs.flat(2).sort((a, b) => a - b))
+      for (const row of rows) {
+        const size = (row.payload as number[]).length
+        expect(size).toBeGreaterThan(0)
+        expect(size).toBeLessThanOrEqual(4)
+        expect(row.sealed).toBe(size === 4)
+      }
+      expect(rows.filter(row => !row.sealed).length).toBeLessThanOrEqual(1)
+      for (let c = 0; c < conns.length; c++) {
+        const own = stored.filter(item => Math.floor(item / 10000) === c)
+        expect(own).toEqual(inputs[c]!.flat())
+      }
+    })
   })
 })
 

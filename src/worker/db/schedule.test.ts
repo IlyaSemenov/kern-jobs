@@ -4,7 +4,7 @@ import { type Driver, identifier } from "kern-orm/db"
 import { getBackendPid, waitForLock } from "kern-orm/testing"
 
 import { defineSchedule, type Schedule, toWorkerSchedule } from "../../schedule/schedule"
-import { enqueue } from "../../sql/enqueue"
+import { enqueue, enqueueItems } from "../../sql/enqueue"
 import { toStatementLabel } from "../../sql/statement"
 import { defineTask } from "../../task/task"
 import {
@@ -59,6 +59,19 @@ test("catch-up includes the boundary and enqueues at most once, including in the
       expected,
     )
   }
+})
+
+test("a schedule of a batch task appends its items to the open batch of its key", async () => {
+  const batchTask = defineTask("digest", { key: true }).withBatchPayload<string>({ maxItems: 3 })
+  const schedule = defineSchedule(batchTask, { cron: { minute: 0, hour: 3 }, payload: ["tick"] })
+  await enqueueItems(testSchema.conn, testSchema.table, {
+    task: "digest",
+    key: "",
+    maxItems: 3,
+    payload: ["event"],
+  })
+  await run(schedule)
+  expect((await jobs(testSchema.conn.query)).map(job => job.payload)).toEqual([["event", "tick"]])
 })
 
 test("catch-up resolves task options at enqueue time and applies schedule overrides", async () => {

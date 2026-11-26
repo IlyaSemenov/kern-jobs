@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import {
-  type EnqueueOptions,
   type EnqueueOverrides,
   mergeOptions,
+  type StaticEnqueueOptions,
   toEnqueueParams,
 } from "./options"
 
@@ -72,7 +72,7 @@ describe("toEnqueueParams", () => {
   })
 
   test("passes maxWait in debounce mode only", () => {
-    const debounce: EnqueueOptions = {
+    const debounce: StaticEnqueueOptions = {
       key: "k",
       keyMode: "debounce",
       delay: 2,
@@ -88,7 +88,7 @@ describe("toEnqueueParams", () => {
   })
 
   test("ignores an invalid maxWait outside debounce, and resetAttempts with keep", () => {
-    const debounce: EnqueueOptions = {
+    const debounce: StaticEnqueueOptions = {
       key: "k",
       keyMode: "debounce",
       delay: 2,

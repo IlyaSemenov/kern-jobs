@@ -5,7 +5,7 @@ import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
 
 import type { Backoff } from "./backoff"
 import { FAILURE_TASK_SUFFIX, type JobFailure } from "./failure"
-import type { EnqueueOptions, StaticEnqueueOptions } from "./options"
+import { checkBatchKeyMode, type EnqueueOptions, type StaticEnqueueOptions } from "./options"
 
 /** Settings of a task, which an enqueue cannot override. */
 export interface TaskSettings {
@@ -47,13 +47,14 @@ export interface HandlerContext<Scope extends string | null = string | null> {
   job: JobInfo<Scope>
 }
 
-/** Implementation of a task, which `task.implement` returns, for the manifest of a worker. */
+/** Implementation of a task, which `task.implement` returns, for the manifest of a worker; `T` is the type of its task. */
 export interface TaskImplementation<
   Name extends string = string,
   Payload = void,
   Scope extends string | null = string | null,
+  T = TaskBase<Name, Payload, Scope>,
 > {
-  readonly task: Task<Name, Payload, Scope>
+  readonly task: T
   /**
    * Implementation that runs the `onFailure` given to `implement`.
    * A wrapper that replaces `handler` must keep it, such as by `{ ...implementation, handler }`.
@@ -100,9 +101,9 @@ export interface FailureOptions<Payload = unknown, Scope extends string | null =
 }
 
 /**
- * Task that producers enqueue and workers run, defined with `defineTask`; `Scope` is the type of the scope of its jobs, `string` for a task defined with `scoped: true`.
+ * Task of either kind, `Task` or `BatchTask`, which the APIs of a task of either kind, such as `deletePending` and `runJob`, take; `AnyTask` tells the two kinds apart by `maxItems`.
  */
-export interface Task<
+export interface TaskBase<
   Name extends string = string,
   Payload = void,
   Scope extends string | null = string | null,
@@ -115,13 +116,15 @@ export interface Task<
   readonly backoff?: Backoff | undefined
   /** Whether each job of the task belongs to a scope, given to `defineTask`. */
   readonly scoped?: boolean | undefined
+  /** Maximum number of items per job of a batch task, given to `withBatchPayload`; absent for another task. */
+  readonly maxItems?: number | undefined
   /** Options of each enqueue, given to `defineTask`. */
-  readonly options?: EnqueueOptions | undefined
+  readonly options?: StaticEnqueueOptions | undefined
   /** Returns the options of an enqueue of a payload, given with `withOptions`, which replace `options` field by field. */
-  // Methods, so that a task of any payload is a `Task<string, unknown>`.
+  // Methods, so that a task of any payload is a `TaskBase<string, unknown>`.
   optionsFor?(payload: Payload): EnqueueOptions
   /**
-   * Implements the task with the handler of its jobs and the options of the implementation.
+   * Implements the task with the handler of its jobs and the options of the implementation, whose `task` is this task, of its own type.
    * With `onFailure`, the implementation has the implementation of its failure task as `failure`.
    */
   implement(
@@ -129,14 +132,77 @@ export interface Task<
     options: ImplementOptions<Payload, Scope> & {
       onFailure: FailureHandler<Payload, Scope> | FailureOptions<Payload, Scope>
     },
-  ): TaskImplementation<Name, Payload, Scope> & {
+  ): TaskImplementation<Name, Payload, Scope, this> & {
     readonly failure: FailureImplementation<Name, Payload, Scope>
   }
   implement(
     handler: (payload: Payload, context: HandlerContext<Scope>) => unknown,
     options?: ImplementOptions<Payload, Scope>,
-  ): TaskImplementation<Name, Payload, Scope>
+  ): TaskImplementation<Name, Payload, Scope, this>
 }
+
+/** Task whose enqueue adds or updates one job with its payload, which `jobs.enqueue` and `jobs.enqueueMany` take. */
+export interface Task<
+  Name extends string = string,
+  Payload = void,
+  Scope extends string | null = string | null,
+> extends TaskBase<Name, Payload, Scope> {
+  readonly maxItems?: undefined
+  /** Returns the key of an enqueue of a payload, or `null` for none, given with `withKey`, which replaces the key of `options`. */
+  // A method, as `optionsFor`.
+  keyFor?(payload: Payload): string | null
+}
+
+/**
+ * Task of items of type `Item`, defined with `withBatchPayload`, which `jobs.enqueueItems` takes: the items of its enqueues of a key collect into jobs of at most `maxItems` items, and the handler gets an array of them.
+ */
+export interface BatchTask<
+  Name extends string = string,
+  Item = unknown,
+  Scope extends string | null = string | null,
+> extends TaskBase<Name, Item[], Scope> {
+  readonly maxItems: number
+  /** Returns the key of an item, given with `withKey`, which replaces the key of `options` for an enqueue of items. */
+  // A method, as `optionsFor`.
+  keyFor?(item: Item): string
+}
+
+/** Batch task of `withBatchPayload`, whose key can still come from its items. */
+export interface BatchTaskBuilder<
+  Name extends string,
+  Item,
+  Scope extends string | null = string | null,
+> extends BatchTask<Name, Item, Scope> {
+  /**
+   * Sets a function that returns the key of an item, such as of the entity that the item belongs to, which gives the key of each enqueue of items in place of that of `defineTask`, unless the enqueue gives a key.
+   * The items of one enqueue must have one key: an enqueue of items whose keys differ rejects with `TypeError`, unless it gives a key, which all its items take.
+   */
+  withKey(key: (item: Item) => string): BatchTask<Name, Item, Scope>
+}
+
+/**
+ * Task of either kind whose handler gets a `Payload`: a `Task`, or a `BatchTask` when `Payload` is an array of items; `task.maxItems === undefined` tells a `Task` from a `BatchTask`.
+ * `Scope` is the type of the scope of its jobs, `string` for a task defined with `scoped: true`.
+ */
+export type AnyTask<
+  Name extends string = string,
+  Payload = void,
+  Scope extends string | null = string | null,
+> = Task<Name, Payload, Scope> | BatchTaskOf<Name, Payload, Scope>
+
+/** Batch task whose handler gets a `Payload`: of `unknown` items for an `unknown` payload, and `never` for a payload that is not an array of any length. */
+type BatchTaskOf<
+  Name extends string,
+  Payload,
+  Scope extends string | null,
+> = unknown extends Payload
+  ? BatchTask<Name, unknown, Scope>
+  : Payload extends readonly (infer Item)[]
+    ? // A batch can hold any number of items, so a tuple payload has no batch task.
+      Item[] extends Payload
+      ? BatchTask<Name, Item, Scope>
+      : never
+    : never
 
 /** Options of `task.implement`. */
 export interface ImplementOptions<Payload = unknown, Scope extends string | null = string | null> {
@@ -147,18 +213,44 @@ export interface ImplementOptions<Payload = unknown, Scope extends string | null
   onFailure?: FailureHandler<Payload, Scope> | FailureOptions<Payload, Scope> | undefined
 }
 
-/** Task of `defineTask`, whose payload type and options computed from the payload can still be given. */
-export interface TaskBuilder<
+/** Options of `withBatchPayload`. */
+export interface BatchOptions {
+  /** Maximum number of items per job: a full job is due at once, and the items that do not fit go to the next job. */
+  maxItems: number
+}
+
+/** Task of `withKey`, whose options computed from the payload can still be given. */
+export interface KeyedTaskBuilder<
   Name extends string,
   Payload,
   Scope extends string | null = string | null,
 > extends Task<Name, Payload, Scope> {
+  /**
+   * Sets a function that returns the options of each enqueue from its payload other than the key, such as a queue or a delay, which replace the options given to `defineTask` field by field.
+   */
+  withOptions(options: (payload: Payload) => EnqueueOptions): Task<Name, Payload, Scope>
+}
+
+/** Task of `defineTask`, whose payload type, key and options computed from the payload can still be given, or which can become a batch task. */
+export interface TaskBuilder<
+  Name extends string,
+  Payload,
+  Scope extends string | null = string | null,
+> extends KeyedTaskBuilder<Name, Payload, Scope> {
   /** Sets the payload type of the task. */
   withPayload<P>(): TaskBuilder<Name, P, Scope>
   /**
-   * Sets a function that returns the options of each enqueue from its payload, such as a key, which replace the options given to `defineTask` field by field.
+   * Sets a function that returns the key of each enqueue from its payload, such as of the entity that the payload belongs to, or `null` for none, which replaces the key of `defineTask`, unless the enqueue gives a key.
+   * Call it before `withOptions`.
    */
-  withOptions(options: (payload: Payload) => EnqueueOptions): Task<Name, Payload, Scope>
+  withKey(key: (payload: Payload) => string | null): KeyedTaskBuilder<Name, Payload, Scope>
+  /**
+   * Makes the task a batch task of items of type `Item`, which `jobs.enqueueItems` enqueues and whose handler gets an array of them.
+   * The items of an enqueue append to the pending job of its key, which takes items until a worker claims it or it has `maxItems`; the items that do not fit go to new jobs, full ones due at once and at most one partial one, which takes the items of later enqueues.
+   * The key of an enqueue of items comes from the enqueue, `withKey`, or the options of `defineTask`, such as `key: true` for one batch of each scope; its other options come from `defineTask`.
+   * It throws `TypeError` for a task of `keyMode: "keep"`.
+   */
+  withBatchPayload<Item>(options: BatchOptions): BatchTaskBuilder<Name, Item, Scope>
 }
 
 /**
@@ -197,7 +289,8 @@ export function defineTask(name: string, options: TaskOptions = {}): TaskBuilder
     lease,
     backoff,
     scoped,
-    options: enqueueOptions as EnqueueOptions,
+    maxItems: undefined,
+    options: enqueueOptions as StaticEnqueueOptions,
   })
 }
 
@@ -216,9 +309,9 @@ export function checkTaskName(name: unknown): asserts name is string {
   }
 }
 
-/** Whether a value is a task, which `defineTask` returns. */
-export function isTask(value: unknown): value is Task<string, unknown> {
-  const task = value as Partial<Task<string, unknown>> | null | undefined
+/** Whether a value is a task of any kind, which `defineTask` returns. */
+export function isTask(value: unknown): value is TaskBase<string, unknown> {
+  const task = value as Partial<TaskBase<string, unknown>> | null | undefined
   return typeof task?.name === "string" && typeof task.implement === "function"
 }
 
@@ -246,7 +339,7 @@ interface ResolvedFailure {
   /** Name of the failure task, which the failure task was checked to have: the name under which the failure jobs are inserted. */
   name: string
   /** Failure task as read from the failure implementation, for the settings of its worker. */
-  task: Task<string, unknown>
+  task: TaskBase<string, unknown>
   /** `maxAttempts` of the options of the failure task, given to `onFailure`, or the default of an enqueue; the claims of the task stamp it, since the worker or the reaper that adds a failure job runs no code of the task. */
   maxAttempts: number
 }
@@ -286,31 +379,69 @@ export function isLease(value: unknown): value is number {
 }
 
 type TaskFields<Name extends string> = Pick<
-  Task<Name, never>,
-  "name" | "lease" | "backoff" | "scoped" | "options"
->
+  TaskBase<Name, never>,
+  "name" | "lease" | "backoff" | "scoped" | "maxItems" | "options"
+> & {
+  /** Function of `withKey`, of the payload or of an item. */
+  keyFor?: ((unit: never) => string | null) | undefined
+}
 
 function createTaskBuilder<Name extends string, Payload>(
   fields: TaskFields<Name>,
 ): TaskBuilder<Name, Payload> {
   return createTask(fields, {
+    ...createWithOptions<Name, Payload>(fields),
     withPayload: () => createTaskBuilder(fields),
+    withKey: (keyFor: (payload: Payload) => string | null) => {
+      checkKeyFunction(keyFor, "the payload")
+      const keyedFields = { ...fields, keyFor }
+      return createTask(keyedFields, createWithOptions(keyedFields))
+    },
+    withBatchPayload: <Item>(options: BatchOptions) => {
+      if (typeof options !== "object" || options === null) {
+        throw new TypeError("withBatchPayload takes options with maxItems")
+      }
+      const { maxItems } = options
+      checkCount("maxItems", maxItems)
+      checkBatchKeyMode(fields.name, fields.options?.keyMode)
+      // A batch task takes no `withOptions`: an option of a whole array of items would apply to the whole batch, which holds the items of other enqueues too.
+      const batchFields = { ...fields, maxItems }
+      return createTask(batchFields, {
+        withKey: (keyFor: (item: Item) => string) => {
+          checkKeyFunction(keyFor, "an item")
+          return createTask(batchFields, { keyFor }) as BatchTask<Name, Item>
+        },
+      }) as BatchTaskBuilder<Name, Item>
+    },
+  }) as TaskBuilder<Name, Payload>
+}
+
+/** Returns `withOptions` of a task of fields, which may have the function of `withKey`. */
+function createWithOptions<Name extends string, Payload>(
+  fields: TaskFields<Name>,
+): Pick<KeyedTaskBuilder<Name, Payload>, "withOptions"> {
+  return {
     withOptions: (optionsFor: (payload: Payload) => EnqueueOptions) => {
       if (typeof optionsFor !== "function") {
         throw new TypeError(
           "withOptions takes a function of the payload; pass static options to defineTask",
         )
       }
-      return createTask({ ...fields, optionsFor }, {})
+      return createTask({ ...fields, optionsFor }, {}) as Task<Name, Payload>
     },
-  })
+  }
+}
+
+/** Checks the argument of `withKey`: throws `TypeError` unless it is a function, of the payload or of an item. */
+function checkKeyFunction(keyFor: unknown, of: string): void {
+  if (typeof keyFor !== "function") throw new TypeError(`withKey takes a function of ${of}`)
 }
 
 function createTask<Name extends string, Payload, Extra extends object>(
-  fields: TaskFields<Name> & Pick<Task<Name, Payload>, "optionsFor">,
+  fields: TaskFields<Name> & Pick<TaskBase<Name, Payload>, "optionsFor">,
   extra: Extra,
-): Task<Name, Payload> & Extra {
-  const task: Task<Name, Payload> & Extra = {
+): TaskBase<Name, Payload> & Extra {
+  const task: TaskBase<Name, Payload> & Extra = {
     ...fields,
     ...extra,
     // The overloads of `implement` tell an implementation with a failure task from one without, which one function body cannot.
@@ -324,10 +455,14 @@ function createTask<Name extends string, Payload, Extra extends object>(
         throw new TypeError("The options of implement must be an object")
       }
       const onFailure = options?.onFailure
-      if (onFailure === undefined) return { task, handler }
+      if (onFailure === undefined) return { task, handler } as TaskImplementation<Name, Payload>
       checkNoFailureOfFailure(fields.name)
-      return { task, handler, failure: createFailureImplementation(fields, onFailure) }
-    }) as Task<Name, Payload>["implement"],
+      return {
+        task,
+        handler,
+        failure: createFailureImplementation(fields, onFailure),
+      } as TaskImplementation<Name, Payload>
+    }) as TaskBase<Name, Payload>["implement"],
   }
   return task
 }
@@ -360,8 +495,8 @@ function createFailureImplementation<Name extends string, Payload>(
   }
   const options = maxAttempts === undefined ? {} : { maxAttempts }
   const task = createTask<typeof name, JobFailure<Payload>, object>(
-    { name, lease: undefined, backoff, scoped: fields.scoped, options },
+    { name, lease: undefined, backoff, scoped: fields.scoped, maxItems: undefined, options },
     {},
-  )
+  ) as Task<typeof name, JobFailure<Payload>>
   return { task, handler }
 }

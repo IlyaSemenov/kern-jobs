@@ -23,6 +23,8 @@ export const purgeExpiredSessionsTask = defineTask("sessions.purgeExpired")
 await jobs.enqueue(purgeExpiredSessionsTask)
 ```
 
+To collect the items of many enqueues into one job, define a [batch task](./keys#batches) with `withBatchPayload` instead of `withPayload`, and enqueue its items with `jobs.enqueueItems`.
+
 ## Options of a task
 
 To enqueue every job of a task the same way, pass the options to `defineTask`:
@@ -34,12 +36,13 @@ export const sendEmailTask = defineTask("email.send", { maxAttempts: 5 }).withPa
 }>()
 ```
 
-To compute options from the payload, such as a key, pass a function that returns them to `withOptions`:
+To compute the [key](./keys) from the payload, pass a function that returns it, or `null` for none, to `withKey`, and to compute other options, pass a function that returns them to `withOptions` after it:
 
 ```ts
 export const indexProductTask = defineTask("search.indexProduct", { delay: 5 })
-  .withPayload<{ productId: string }>()
-  .withOptions(({ productId }) => ({ key: `product:${productId}` }))
+  .withPayload<{ productId: string; priority: boolean }>()
+  .withKey(({ productId }) => `product:${productId}`)
+  .withOptions(({ priority }) => ({ queue: priority ? "search:priority" : null }))
 ```
 
-They replace the options of `defineTask` one by one, as [overrides](./enqueue#overriding-options) of an enqueue do.
+They replace the options of `defineTask` one by one, and the [overrides](./enqueue#overriding-options) of an enqueue replace them; `withKey` is not called for an enqueue that gives a key.

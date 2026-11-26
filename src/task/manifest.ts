@@ -3,7 +3,7 @@
 
 import { type Schedule, toWorkerSchedules } from "../schedule/schedule"
 
-import { isTask, resolveFailure, type Task, type TaskImplementation } from "./task"
+import { isTask, resolveFailure, type TaskBase, type TaskImplementation } from "./task"
 
 /** Tasks a worker runs and schedules it evaluates. */
 export interface Manifest {
@@ -48,7 +48,7 @@ export interface ManifestTask {
   /** Implementation whose handler runs the jobs of the task. */
   implementation: Pick<TaskImplementation<string, unknown>, "handler">
   /** Settings of the task, each read once and not checked. */
-  settings: Pick<Task<string, unknown>, "lease" | "backoff" | "scoped">
+  settings: Pick<TaskBase<string, unknown>, "lease" | "backoff" | "scoped">
   /** Attempt budget of the failure jobs of the task, which its claims stamp, for an implementation with a failure task. */
   failureMaxAttempts?: number | undefined
 }
@@ -99,7 +99,7 @@ export function toManifestTasks(
 }
 
 /** Returns the settings of a task, each read once. */
-function toSettings(task: Task<string, unknown>): ManifestTask["settings"] {
+function toSettings(task: TaskBase<string, unknown>): ManifestTask["settings"] {
   const { lease, backoff, scoped } = task
   return { lease, backoff, scoped }
 }

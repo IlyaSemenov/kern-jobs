@@ -24,6 +24,7 @@ export type Param = string | number | boolean | Date | readonly string[] | null 
 export type StatementOperation =
   | "enqueue:one"
   | "enqueue:many"
+  | "enqueue:items"
   | "admin:retry-failed"
   | "admin:delete-job"
   | "admin:delete-pending"

@@ -4,6 +4,7 @@ A worker claims ready jobs of the tasks it implements in claim cycles.
 Each claim statement runs in its own autocommit transaction.
 
 A claim makes a pending job active with a new claim id, increments `attempts`, sets `lease_until` to now plus the lease of its task, from a map of task leases that the worker passes, and overwrites `failure_max_attempts` of the row, the stamp of its failure job, from a map of the budgets of tasks that the worker passes, with null for a task without one ([Failure jobs](failure-jobs.md#stamps)).
+A claim of a batch job seals it, so it never takes items again ([Data model](data-model.md#states)).
 It returns the claim lag, the claim time minus `run_at`, so that late claims are visible.
 
 A claim does not check `attempts` against `max_attempts`, so a job whose budget a `replace` lowered below its spent attempts runs once more instead of staying pending forever.
