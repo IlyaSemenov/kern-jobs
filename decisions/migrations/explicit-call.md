@@ -9,7 +9,7 @@ const worker = startWorker(driver, { manifest })
 ```
 
 Producers enqueue through the executor of the application and cannot migrate, so only a step before every process of a new version makes the schema ready for all of them.
-A migration must keep the previous version of kern-jobs working on the new schema; the new version need not support the previous schema.
+From 1.0, a migration must keep the previous version of kern-jobs working on the new schema; the new version need not support the previous schema.
 A migration that fails rejects the call, which stops the deploy.
 
 ## Migrating at the start of a worker

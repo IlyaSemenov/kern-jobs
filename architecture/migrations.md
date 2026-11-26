@@ -14,11 +14,17 @@ The column names, types, and nullability declared in `worker/db/tables/` must ma
 - A released migration never changes: a change of the schema is a new migration.
 - A migration that changes the [summary view](data-model.md#summary-view) must in its `up` keep each column with its type, unit, and meaning, and only append columns by `replaceView` of kern-migrations, which keeps the grants of the application on the view; its `down` restores the previous view, with `rollback: "recreate"` when `up` appends columns.
 - A migration must keep the table and the columns by which an application deletes jobs from SQL ([Administration](administration.md#delete-from-sql)).
-- A migration must keep the producers and the workers of the previous version of kern-jobs working, their enqueues, claims, heartbeats, settlements, and reaper, since they run on the migrated schema during a rolling deploy.
-- A migration that builds or drops an index of a table that an earlier migration created must do it with `concurrently` of `createIndex` and `dropIndex` of kern-migrations, since a plain `CREATE INDEX` blocks the writes of every enqueue, claim, and settlement while it builds; a migration creates the indexes of its own new table with the table.
-- A function that a migration creates must have a SQL-standard body, `BEGIN ATOMIC`, which binds the objects of the schema at its creation, or name no object of the schema and fix its search path to `pg_catalog, pg_temp`, since a call runs with the `search_path` of its caller, which would otherwise give the operators of a PL/pgSQL body; a migration creates it by `createFunction` of kern-migrations, and changes it by `replaceFunction`, which keeps its grants and restores the previous body on rollback.
+- A function that a migration creates must have a SQL-standard body, `BEGIN ATOMIC`, which binds the objects of the schema at its creation, or name no object of the schema and fix its search path to `pg_catalog, pg_temp`, since a call runs with the `search_path` of its caller, which would otherwise give the operators of a PL/pgSQL body; a migration creates it by `createFunction` of kern-migrations.
 - A migration that adds a check constraint to a table that an earlier migration created must add it `NOT VALID` when the existing rows pass it by construction, such as of columns that it adds as null, since validating it scans the table under the lock that blocks its writes.
 - Each migration has a `down` that restores the structure before it, for the verification of the history; kern-jobs has no API that rolls a schema back.
+
+### From 1.0
+
+These rules apply from kern-jobs 1.0; a migration of a 0.x release may break them, and its changeset then tells users to stop the previous version before `migrateJobs`.
+
+- A migration must keep the producers and the workers of the previous version of kern-jobs working, their enqueues, claims, heartbeats, settlements, and reaper, since they run on the migrated schema during a rolling deploy.
+- A migration that builds or drops an index of a table that an earlier migration created must do it with `concurrently` of `createIndex` and `dropIndex` of kern-migrations, since a plain `CREATE INDEX` blocks the writes of every enqueue, claim, and settlement while it builds; a migration creates the indexes of its own new table with the table.
+- A migration changes a function by `replaceFunction` of kern-migrations, which keeps its grants and the objects that depend on it, and restores the previous body on rollback, rather than drop and create it.
 
 ## migrateJobs
 
