@@ -38,7 +38,7 @@ A job of a [queue](../tasks/queues) waits behind the jobs of its queue that are 
 
 When its [key](../tasks/keys) has a pending job that takes new enqueues, such as one that an enqueue added after the failure, `retry` changes neither job and resolves to `{ retried: false, pendingId }`.
 Then delete the failed job if the pending job does its work, or delete the pending job and retry the failed one again.
-A job of a [batch task](../tasks/keys#batches) never meets one: it returns with its own items beside the pending batches of its key.
+A job of a [batch task](../tasks/keys#batches) always returns to pending, beside the pending batches of its key.
 
 `retry` resolves to `null` when no failed job has the id, such as one that a retry has already returned to pending.
 
@@ -135,7 +135,7 @@ await jobs.deleteFailed({ task: sendNewsletterTask, olderThan: 7 * 24 * 60 * 60 
 
 Without a filter, `deleteFailed` deletes the failed jobs of every task of the scope of `jobs`, as `deletePending` does, such as when you [delete the data of a tenant](#delete-pending-jobs).
 
-`deleteFailed` resolves to the number of the jobs it deleted, and leaves the pending jobs and the jobs that run, also a failed job that a `retry` returns to pending at the same time.
+`deleteFailed` resolves to the number of the jobs it deleted, and leaves the pending jobs and the jobs that run.
 
 ### Delete old failed jobs every night
 

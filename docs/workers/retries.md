@@ -15,7 +15,6 @@ export const chargeCardTask = defineTask("payments.charge", { maxAttempts: 3 }).
 
 An enqueue with `replace` or `debounce` keeps the attempts that its pending job has spent, also while the job waits for a retry; pass `resetAttempts: true` to give it a full budget again.
 Attempts belong to one job: a failed job that a newer event [supersedes](../tasks/keys#while-a-job-of-the-key-runs) leaves its attempts behind, and the pending job runs on its own, so a key whose jobs keep failing retries for as long as events keep arriving.
-A job whose `maxAttempts` an enqueue lowers below the attempts it spent gets one more attempt.
 
 ## Backoff
 
@@ -88,6 +87,5 @@ The failed items run again after the backoff, and on the last attempt the job fa
 The error of the job lists the index and the message of each failed item.
 
 - Every item that the error does not list counts as done, so list every item that you did not finish, such as when the handler stops early on its [signal](./stopping).
-- An index is the position of the item in the array that the handler gets.
 - The error of an item does not decide what happens to it: an item that fails with a `TerminalError` runs again like any other failed item.
 - As with any job, a worker that dies before it records the outcome leaves the whole batch to run again, including the items that it finished.

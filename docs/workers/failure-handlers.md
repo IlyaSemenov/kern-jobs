@@ -51,8 +51,6 @@ Its first argument is the `JobFailure` of the failed job, with its `payload` as 
 - `error.message`: the message that the table stores in `last_error`, such as `lease expired`.
   The error itself, with its class and stack, reaches only [`onError`](../operations/monitoring#report-errors) of the worker that ran the handler.
 
-After a recorded [partial failure](./retries#retry-only-the-failed-items-of-a-batch) of a batch, the `payload` holds the items that the failure listed.
-
 Its second argument is the [context](./handlers) of a handler, whose `job` is the failure job itself.
 
 ## The failure job
@@ -60,7 +58,7 @@ Its second argument is the [context](./handlers) of a handler, whose `job` is th
 The failure job has the name of your task with `:failure` after it, such as `orders.charge:failure`: the [summary of the jobs](../operations/monitoring#watch-the-backlog), [`runHandler`](./handlers#wrap-every-handler), and [`onError`](../operations/monitoring#report-errors) show it by this name.
 It has the scope of the failed job, which `onFailure` of a [scoped](../tasks/scopes) task gets as `job.scope` of its context, and no key or queue, so it does not wait for the other jobs of the key or the queue of the failed job.
 
-It runs under the [lease](./leases) of the worker, and by default it has 25 attempts with the default [backoff](./retries#backoff), which last about 14 hours.
+By default it has 25 attempts with the default [backoff](./retries#backoff), which last about 14 hours.
 To outlast a longer outage of a service that `onFailure` needs, give it as an object of the handler with `maxAttempts`, `backoff`, or both:
 
 ```ts
@@ -119,7 +117,7 @@ await runFailure(chargeOrder, { orderId: "42", generation: 3 })
 ```
 
 `runFailure` resolves to what `onFailure` returns, or rejects with what it throws; with [`runHandler`](./handlers#wrap-every-handler), it resolves or rejects as `runHandler` does.
-`onFailure` gets a `JobFailure` of a failure on the last attempt: the reason `handler-error`, the current time as `failedAt`, the payload through JSON, as [`runJob`](../testing/#run-a-handler) gives it to a handler, and as `job` the key, the queue, and `maxAttempts` that the options of the task give for the payload.
+By default, `onFailure` gets a failure of the handler on the last attempt, with the payload through JSON, as [`runJob`](../testing/#run-a-handler) gives it to a handler.
 Replace the fields of the `JobFailure` in the options, such as the reason, the error, or `job.attempt`:
 
 ```ts
@@ -129,7 +127,5 @@ await runFailure(
   { reason: "terminal-error", error: new Error("card declined") },
 )
 ```
-
-Without `error`, the message is the one that kern-jobs records for the reason, such as `lease expired`, or `job failed` for an error of the handler.
 
 For a [scoped task](../tasks/scopes), pass the scope of the failed job in `job.scope`, or call `testJobs.runFailure` to give it the scope of `testJobs`, as [`testJobs.runJob`](../testing/#run-a-handler) does.

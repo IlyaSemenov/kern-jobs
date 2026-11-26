@@ -84,16 +84,15 @@ await jobs.enqueueItems(publishPostsTask, [{ siteId: "a", postId: 1 }])
 
 A key passed to the enqueue, such as ``{ key: `site:${siteId}` }``, takes precedence over `withKey` and the key of `defineTask`.
 
-- A job takes items until a worker starts it or it has `maxItems`; a full job is due at once, and the items that do not fit go to new jobs, of which the last, partial one starts a debounce window of its own.
+- A job takes items until a worker starts it or it has `maxItems`; a full job is due at once, and the items that do not fit go to new jobs.
 - A job keeps the order of its items, and duplicates stay: an enqueue that your code repeats adds its items again.
 - The jobs of a key can run at the same time, unless they share a [queue](./queues).
-- Give the other options, such as `keyMode: "debounce"`, to `defineTask`: an enqueue of items overrides only the key, and a batch task rejects `keyMode: "keep"`.
+- Give the other options, such as `keyMode: "debounce"`, to `defineTask`: an enqueue of items overrides only the key, and a batch task takes the key modes `replace` and `debounce`.
 - Without a key of the enqueue, `withKey` must return one key for all its items.
 - `jobs.enqueueItems` resolves to `{ id, created }` of each job that took items, in the order of the items; an empty array needs no key and changes nothing.
-- A job that runs again, after a failed attempt or a stop of its worker, keeps its items, or after a recorded [partial failure](../workers/retries#retry-only-the-failed-items-of-a-batch) the items that it listed: batches never merge.
+- A job that runs again, such as after a failure or a stop, keeps its items, or only the [failed ones](../workers/retries#retry-only-the-failed-items-of-a-batch): batches never merge.
 - `deletePending` with the key deletes every pending batch of the key.
-- After a change of `maxItems`, new items go to new jobs, and a pending job keeps its items, also more than a lowered `maxItems`.
-- An enqueue that would merge into a pending job of the key of the other kind, such as during the deploy of a task that became a batch task, rejects with a PostgreSQL error.
+- A job enqueued before you lower `maxItems` keeps its items, so its handler can get more than the new `maxItems`.
 - Enqueue items in transactions of the isolation level `READ COMMITTED`, the default of PostgreSQL, and keep them short: an enqueue of items locks its key until its transaction ends.
 
 ## While a job of the key runs
@@ -108,14 +107,12 @@ export const indexProductTask = defineTask("search.indexProduct", { delay: 5 })
   .withOptions(({ productId }) => ({ queue: `product:${productId}` }))
 ```
 
-When the running job fails and has attempts left, or its worker [stops](../workers/stopping) and interrupts it, it merges with the pending job by the mode of the latest enqueue of the pending job, unless one of them is a [batch](#batches):
+When the running job fails and has attempts left, or its worker [stops](../workers/stopping) and interrupts it, it merges with the pending job by the mode of the latest enqueue of the pending job, unless the task is a [batch task](#batches):
 
 - `replace` or `debounce`: the running job is deleted, and the pending job runs with the newer payload.
 - `keep`: the pending job is deleted, and the running job runs again with its own payload, after its backoff when it failed, so the first event still wins.
 
-When only the pending job is a [batch](#batches) that takes more items, such as after a change of the task to a batch task, the running job runs again with its own payload beside it, without its key.
-
-The pending job stays as it is when the running job completes, fails for good, or its worker dies: the job of a dead worker that has attempts left runs again beside the pending job, without its key unless it is a batch.
+The pending job stays as it is when the running job completes, fails for good, or its worker dies: the job of a dead worker that has attempts left runs again beside the pending job.
 
 So treat a job of a key as a signal that its entity changed rather than as one event: every event either merges into a job that runs after it or becomes the next job, but several events run as one job with one payload, and [deleting](#cancel-a-pending-job) that job deletes them all.
 Read the current state of the entity in the handler, and enqueue the events without a key to process each of them with its own payload.

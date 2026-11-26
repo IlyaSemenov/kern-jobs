@@ -85,9 +85,9 @@ It enqueues a job as `jobs.enqueue` does, in the transaction of the statement, a
 
 - It does not know your task definitions: pass the name of the task and every option that the task would give, such as the key of its `withKey`, and a payload of the type of the task, which nothing checks.
   For a task with `key: true`, pass `key => ''`.
-- For a [scoped](./scopes) task, pass the scope of the job as `scope`, which must not be empty: a worker fails a job of a scoped task without a scope without running its handler.
+- For a [scoped](./scopes) task, pass the scope of the job as `scope`, which must not be empty.
   For another task, omit `scope`, which makes the job unscoped, as `''` does.
-- An option passed as NULL is the same as an omitted one, so a column that is NULL omits its option, such as the key; `task` and `scope` reject NULL.
+- An option passed as NULL is the same as an omitted one, so a column that is NULL omits its option, such as the key; never pass NULL as `task` or `scope`.
 - An omitted payload reaches the handler as `undefined`; pass `'null'::jsonb` for `null`.
 - The rows of one key merge into its pending job one after another, as separate enqueues do.
 
@@ -124,7 +124,7 @@ from kern_jobs.enqueue_items(
 ) e;
 ```
 
-It appends the items as `jobs.enqueueItems` does and takes the other options of `enqueue`, except `payload`; it rejects NULL as `items` and `max_items`, and `keep` as `key_mode`.
+It appends the items as `jobs.enqueueItems` does and takes the other options of `enqueue`, except `payload` and the key mode `keep`.
 It returns a row for each job that took items, in the order of the items: the `id` of the job and whether it was `created`; an empty array returns none.
 
 ### Privileges

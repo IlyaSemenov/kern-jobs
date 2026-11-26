@@ -109,8 +109,7 @@ A task without jobs in a scope has no row, so take a missing value as zero where
 
 A growing `oldest_due_seconds` means that the workers do not keep up, or that no worker takes the jobs of the task, such as when none runs or implements it.
 A job of a [queue](../tasks/queues) also waits for the jobs before it in its queue.
-`longest_running_seconds` counts from the moment a worker took the job, also while the worker records its result.
-Compare it with the usual run time of the task to find a handler that hangs, or a job of a worker that ended, which stays running until a worker returns it, as [Leases](../workers/leases) describes.
+Compare `longest_running_seconds` with the usual run time of the task to find a handler that hangs, or a job of a worker that ended, which stays running until a worker returns it, as [Leases](../workers/leases) describes.
 
 A summary of every task reads every job, so query it at the interval of your metrics rather than often.
 Later versions of kern-jobs only add columns to the view, so select the columns by name.

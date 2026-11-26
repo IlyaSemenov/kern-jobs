@@ -11,7 +11,6 @@ stopOnSignals(worker, { close: () => sql.end() })
 The worker takes no more jobs and lets the running handlers end for 5 seconds; pass `abortAfter` in seconds to change it.
 Then it [aborts their signals](./handlers#stop-long-handlers) and waits until they end: a job whose handler throws on the abort returns to pending at once without spending an attempt, unless the stop has been forced by then.
 A [`TerminalError` or a `RetryError`](./retries#decide-in-the-handler) that a handler throws on the abort keeps its meaning: the job fails for good, or retries with its attempt spent.
-A job whose outcome the worker cannot record, such as without a database connection, returns once its lease expires, or once a worker with the same [`id`](./leases#return-the-jobs-of-a-restarted-worker-at-once) starts: it runs again, or fails if that was its last attempt.
 
 The process exits within 25 seconds of the signal, also when a handler ignores its abort, a query hangs, or `close` has not ended, since the worker cannot cancel them.
 Pass `timeout` in seconds shorter than the time that your process manager gives the process before it kills it:
@@ -22,9 +21,7 @@ stopOnSignals(worker, { abortAfter: 3, timeout: 8, close: () => sql.end() })
 
 A job whose handler still runs at the exit returns once its lease expires, or once a worker with the same `id` starts: it runs again, spending its attempt, or fails if that was its last attempt.
 
-Another signal within 2 seconds of the first joins the stop, since one Ctrl+C can reach the process twice, such as when a script runner forwards it.
-A later signal while the worker is still stopping [forces](#stop-from-your-code) the stop: the process calls `close` and exits with 1.
-`stopOnSignals` stops listening once a signal has forced the stop, or once the stop has ended and 2 seconds have passed since the first signal; after that, SIGTERM and SIGINT have their usual effect again, such as ending the process at once, also during `close`, unless your application listens for them.
+A signal more than 2 seconds after the first, while the worker is still stopping, [forces](#stop-from-your-code) the stop: the process calls `close` and exits with 1.
 
 ## Stop before your own shutdown
 
@@ -49,8 +46,8 @@ It resolves once the worker has stopped and rejects as [`stop`](#stop-from-your-
 Pass `timeout` so that the stop and then your shutdown end before your process manager kills the process; without it, the stop waits as long as the handlers run.
 Exit the process yourself after your shutdown, since a handler that ignores its abort or a query in flight can keep it running.
 
-Another signal works as with `stopOnSignals`: within 2 seconds of the first, it joins the stop, and later, while the worker is still stopping, it forces the stop, which rejects at once, so that your shutdown still runs.
-It stops listening as `stopOnSignals` does, after which a signal can end the process during your shutdown.
+A later signal forces the stop as with `stopOnSignals`, and `waitForSignalAndStop` rejects at once, so that your shutdown still runs.
+A later SIGTERM or SIGINT can end the process during your shutdown, so listen for them yourself if your shutdown must finish.
 
 ## Stop from your code
 

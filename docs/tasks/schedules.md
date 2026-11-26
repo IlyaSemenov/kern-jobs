@@ -58,12 +58,12 @@ Keep the functions of `withKey` and `withOptions` of the task fast and free of s
 ## Recover missed occurrences
 
 Workers check their schedules about every 15 seconds, also while their handlers are busy.
-Several workers may check the same minute, but only one check commits the decision whether to enqueue a job for it, so the schedule enqueues at most once per minute, also after its previous job completes.
+A schedule enqueues at most once per minute, also when several workers list it or its previous job completes within the minute.
 
 If no check of the schedule commits during the minute of an occurrence, such as during downtime or after a database error, the occurrence is skipped.
 Pass `catchUp: { within: 3600 }` to enqueue it if a worker checks the schedule within the next hour.
 A check enqueues at most once however many occurrences it recovers, so write the task to process everything that is due rather than a single occurrence.
-A new schedule starts at the minute of its first committed check and recovers nothing before it, also when an earlier check failed.
+A new schedule starts at the minute of its first successful check.
 
 ## Pause a schedule
 

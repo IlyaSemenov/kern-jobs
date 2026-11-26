@@ -37,10 +37,9 @@ test("enqueues a welcome email for the new user", async () => {
 - `testJobs.calls` lists every recorded enqueue, and `testJobs.clear()` forgets them, such as before each test.
   `enqueueMany` records an enqueue of each of its payloads.
 
-An enqueue through `testJobs` rejects invalid options, a payload that `JSON.stringify` throws for, such as a bigint, and a scoped task without a scope as `createJobs` does, and records nothing then; `enqueueMany` also rejects two payloads of one key, and records none of its payloads when it rejects.
-If a pending job of the same task name, scope, and key takes new enqueues, `enqueue` resolves to `{ id, created: false }` with its id, and `enqueueMany` gives such an object for the payload; if that job is a batch, they reject as `createJobs` does.
-`enqueueItems` of a [batch task](../tasks/keys#batches) is recorded once with its array of items, also an empty one, as its `payload`, and with its key in its options, such as of `withKey`, and resolves to the jobs that its items fill by their count: the pending job of the key until it has `maxItems`, then new ones.
-If the items would append to a pending job that is not a batch, `enqueueItems` rejects as it does with `createJobs`.
+An enqueue through `testJobs` rejects as `createJobs` does, such as for invalid options or a scoped task without a scope, and records nothing then; a rejected `enqueueMany` records none of its payloads.
+An enqueue with the key of a pending job of its task and scope resolves to `{ id, created: false }` with the id of that job, and `enqueueMany` gives such an object for the payload.
+`enqueueItems` of a [batch task](../tasks/keys#batches) is recorded once, with its whole array of items as its `payload`, and resolves to the jobs that its items fill, as with `createJobs`.
 Its jobs stay pending, since no worker runs them: `deletePending` and `delete` delete them, and nothing fails, so `retry` resolves to `null`.
 Each `createTestJobs()` keeps its own jobs, so another one, also with `ALL_SCOPES`, does not reach them.
 
@@ -88,16 +87,11 @@ Pass an `AbortSignal` in `signal` to test how the handler [stops](../workers/han
 
 `runJob` calls the handler without [retries](../workers/retries) or `onFailure`; to test `onFailure`, run it by [`runFailure`](../workers/failure-handlers#test-onfailure).
 
-A handler that [fails some items of a batch](../workers/retries#retry-only-the-failed-items-of-a-batch) makes `runJob` reject with its `BatchItemsError`, whose `indexes` are the positions of the items that the handler reports as failed:
+A handler that [fails some items of a batch](../workers/retries#retry-only-the-failed-items-of-a-batch) makes `runJob` reject with its `BatchItemsError`, whose `indexes` are the positions of the failed items:
 
 ```ts
-const items = ["page-1", "page-2"]
-const error = await runJob(rebuildPages, items).catch((e: unknown) => e)
-expect(error).toBeInstanceOf(BatchItemsError)
-expect(items.filter((_, i) => (error as BatchItemsError).indexes.includes(i))).toEqual(["page-2"])
+await expect(runJob(rebuildPages, ["page-1", "page-2"])).rejects.toMatchObject({ indexes: [1] })
 ```
-
-The worker checks the report and decides whether the items run again.
 
 For a [scoped task](../tasks/scopes), pass the scope of its job to `runJob` in `job.scope`.
 To give its job the scope of `testJobs` instead, call `testJobs.runJob` without `job.scope`:

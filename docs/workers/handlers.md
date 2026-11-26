@@ -59,8 +59,7 @@ The reason of the signal is a `HandlerAbort`, whose `reason` tells why:
 - `lost`: the worker no longer holds the job, and another worker may run it.
 - `deadline`: the worker could not extend the lease, which is about to end.
 
-After the abort of a stop, a handler that throws while the stop still waits for it returns its job to pending at once without spending an attempt, also on its last attempt, and `onError` does not get the error; a `TerminalError`, a `RetryError`, or a return keeps its usual meaning.
-Once the stop [stops waiting](./stopping#stop-from-your-code), at its timeout or when forced, the outcome of a handler that ends later does not change its job, which returns later with its attempt spent, or fails if that was its last attempt.
+A handler that throws on the abort of a stop, while the stop waits for it, returns its job to pending without spending an attempt, also on its last attempt; a `TerminalError` or a `RetryError` keeps its meaning, as [Graceful Shutdown](./stopping) describes.
 
 A handler that ignores the signal keeps running: it delays the stop of its worker, and after `lost` or `deadline`, another worker can run the same job at the same time.
 

@@ -15,7 +15,7 @@ Retry returns a `failed` job to pending in place, and returns `null` for an id o
 - `attempts` becomes 0, a full budget, so that a retry after a fix of its cause survives transient errors again ([decision](../decisions/administration/retry-resets-attempts.md)).
 - `run_at` and `window_started_at` become now, `not_before` and `failed_at` null, as a new enqueue sets them: a retry has no backoff.
 - When a pending job of its `(scope, task, key)` that is not sealed exists, it changes neither job and returns the id of the pending one, in every key mode, so that the operator decides which of them runs ([decision](../decisions/administration/retry-keeps-both-jobs.md)).
-- A batch job returns sealed whatever the jobs of its key, since its items are in no other job, with the items that it had when it failed, which [partial failures](settlement.md#partial-failure-of-a-batch) may have reduced.
+- A batch job returns sealed whatever the jobs of its key, since its items are in no other job.
 
 The statement locks the failed row and the pending job of its key, and updates the failed row only without such a job ([decision](../decisions/administration/retry-updates-the-row.md)):
 
