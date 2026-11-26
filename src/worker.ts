@@ -4,7 +4,7 @@
 export type { Driver } from "kern-orm/db"
 export type { CronDefinition, CronField, CronRange, Weekday } from "./schedule/cron"
 export { defineSchedule, type Schedule, type ScheduleOptions } from "./schedule/schedule"
-export { RetryError, type RetryErrorOptions, TerminalError } from "./task/errors"
+export { BatchItemsError, RetryError, type RetryErrorOptions, TerminalError } from "./task/errors"
 export {
   defineManifest,
   findUnimplementedTasks,

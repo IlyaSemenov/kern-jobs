@@ -1,12 +1,12 @@
-// Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, through `runHandler`, the lease and backoff of its task, and the check of the list; and a worker that runs them.
+// Tasks of a worker from the task implementations of a manifest: the handler of an implementation with the payload and metadata of its job, through `runHandler`, the lease and backoff of its task, and the check of the list; and a worker that runs them, also with partial failures of batches through `runHandler`.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import { sql } from "kern-orm/db"
 
-import { enqueue } from "../sql/enqueue"
+import { enqueue, enqueueItems } from "../sql/enqueue"
 import { fixedBackoff } from "../task/backoff"
-import { RetryError, TerminalError } from "../task/errors"
+import { BatchItemsError, RetryError, TerminalError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
 import type { RunHandlerContext } from "../task/run-handler"
 import { defineTask, type HandlerContext, type JobInfo } from "../task/task"
@@ -26,6 +26,7 @@ const job: ClaimedJob = {
   attempts: 2,
   maxAttempts: 5,
   payload: { productId: "42" },
+  maxItems: null,
 }
 
 describe("toWorkerTasks", () => {
@@ -367,6 +368,84 @@ describe("a worker of a manifest", () => {
       ]),
     )
   })
+
+  test("the indexes of a partial failure of a batch name its items in their order before runHandler, which can change the array", async () => {
+    const task = defineTask("t").withBatchPayload<string>({ maxItems: 10 })
+    // Reports the item "b" by its index before the reversal, and an index that only the item that runHandler added has.
+    const implementation = task.implement(items => {
+      throw new BatchItemsError([[items.includes("c") ? 2 : 1, `${items.join()} failed`]])
+    })
+    const [reversed] = await enqueueItems(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "reversed",
+      maxItems: 10,
+      payload: ["a", "b"],
+    })
+    const [extended] = await enqueueItems(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "extended",
+      maxItems: 10,
+      payload: ["a", "b"],
+    })
+    const log = recordEvents()
+    startTestWorker(testSchema, {
+      concurrency: 2,
+      tasks: toWorkerTasks([implementation], ({ job, payload }, run) => {
+        const items = payload as string[]
+        if (job.key === "reversed") items.reverse()
+        else items.push("c")
+        return run()
+      }),
+      onEvent: log.onEvent,
+    })
+    for (const job of [reversed!, extended!]) {
+      expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
+    }
+    const rows = await jobs(testSchema.conn.query)
+    expect(rows.map(row => [row.id, row.payload, row.lastError])).toEqual([
+      [reversed!.id, ["b"], '1 of 2 batch items failed in attempt 1\n#1: "b,a failed"'],
+      [
+        extended!.id,
+        ["a", "b"],
+        "The BatchItemsError of task t is invalid: index 2 is not an item of the 2 items of its job",
+      ],
+    ])
+  })
+
+  test.each(["batch", "plain"] as const)(
+    "a partial failure settles a %s job by its row, not by the kind of the task that runs it, as after a deploy that changes the kind",
+    async kind => {
+      // A batch job of a task that is no longer a batch task, or a job of a task that became one, both of an array payload.
+      const enqueued =
+        kind === "batch"
+          ? (
+              await enqueueItems(testSchema.conn, testSchema.table, {
+                task: "t",
+                key: "",
+                maxItems: 10,
+                payload: ["a", "b"],
+              })
+            )[0]!
+          : await enqueue(testSchema.conn, testSchema.table, { task: "t", payload: ["a", "b"] })
+      const task = defineTask("t")
+      const fail = () => {
+        throw new BatchItemsError([[1, "b failed"]])
+      }
+      const implementation =
+        kind === "batch"
+          ? task.withPayload<string[]>().implement(fail)
+          : task.withBatchPayload<string>({ maxItems: 10 }).implement(fail)
+      const log = recordEvents()
+      startTestWorker(testSchema, { tasks: toWorkerTasks([implementation]), onEvent: log.onEvent })
+      expect((await log.waitFor("settled")).outcome).toBe("retry")
+      const row = only(await jobs(testSchema.conn.query, sql`id = ${enqueued.id}`))
+      expect([row.payload, row.lastError]).toEqual(
+        kind === "batch"
+          ? [["b"], '1 of 2 batch items failed in attempt 1\n#1: "b failed"']
+          : [["a", "b"], "The BatchItemsError of task t is invalid: its job is not a batch job"],
+      )
+    },
+  )
 
   describe("failure tasks", () => {
     const sourceTask = defineTask("orders.charge").withPayload<{ orderId: string }>()

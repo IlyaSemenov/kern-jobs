@@ -1,8 +1,8 @@
-// Migrates a schema of its own, enqueues one job in it through node-postgres and postgres.js, checks the manifest and runs a handler of the worker, and prints the results as JSON.
+// Migrates a schema of its own, enqueues one job in it through node-postgres and postgres.js, checks the manifest, runs a handler of the worker, and builds the error of failed items of a batch, and prints the results as JSON.
 
 import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import { migrateJobs } from "kern-jobs/migrations"
-import { defineManifest, RetryError } from "kern-jobs/worker"
+import { BatchItemsError, defineManifest, RetryError } from "kern-jobs/worker"
 import pg from "pg"
 import postgres from "postgres"
 
@@ -57,6 +57,12 @@ try {
       unimplementedTasks,
       duplicateRejected: duplicate instanceof Error,
       retryDelay: retry instanceof RetryError ? retry.delay : null,
+      batchIndexes: new BatchItemsError(
+        new Map([
+          [2, "c"],
+          [0, "a"],
+        ]),
+      ).indexes,
     }),
   )
 } finally {

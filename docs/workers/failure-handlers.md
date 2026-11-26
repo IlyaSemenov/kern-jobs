@@ -51,6 +51,8 @@ Its first argument is the `JobFailure` of the failed job, with its `payload` as 
 - `error.message`: the message that the table stores in `last_error`, such as `lease expired`.
   The error itself, with its class and stack, reaches only [`onError`](../operations/monitoring#report-errors) of the worker that ran the handler.
 
+After a recorded [partial failure](./retries#retry-only-the-failed-items-of-a-batch) of a batch, the `payload` holds the items that the failure listed.
+
 Its second argument is the [context](./handlers) of a handler, whose `job` is the failure job itself.
 
 ## The failure job

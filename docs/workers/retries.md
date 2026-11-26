@@ -61,3 +61,33 @@ export default syncAccountTask.implement(async ({ accountId }, { signal }) => {
 ```
 
 A retry after `RetryError` spends an attempt like any other failure.
+
+## Retry only the failed items of a batch
+
+When the items of a [batch](../tasks/keys#batches) are independent, such as pages that the handler rebuilds one by one, throw a `BatchItemsError` with the indexes of the failed items and their errors, so that only those items run again:
+
+```ts [src/worker/tasks/rebuild-pages.ts]
+import { BatchItemsError } from "kern-jobs/worker"
+
+import { rebuildPagesTask } from "../../tasks"
+
+export default rebuildPagesTask.implement(async pageIds => {
+  const failures = new Map<number, unknown>()
+  for (const [index, pageId] of pageIds.entries()) {
+    try {
+      await rebuildPage(pageId)
+    } catch (error) {
+      failures.set(index, error)
+    }
+  }
+  if (failures.size > 0) throw new BatchItemsError(failures)
+})
+```
+
+The failed items run again after the backoff, and on the last attempt the job fails for good with only them, which [`onFailure`](./failure-handlers) gets.
+The error of the job lists the index and the message of each failed item.
+
+- Every item that the error does not list counts as done, so list every item that you did not finish, such as when the handler stops early on its [signal](./stopping).
+- An index is the position of the item in the array that the handler gets.
+- The error of an item does not decide what happens to it: an item that fails with a `TerminalError` runs again like any other failed item.
+- As with any job, a worker that dies before it records the outcome leaves the whole batch to run again, including the items that it finished.

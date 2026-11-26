@@ -88,6 +88,17 @@ Pass an `AbortSignal` in `signal` to test how the handler [stops](../workers/han
 
 `runJob` calls the handler without [retries](../workers/retries) or `onFailure`; to test `onFailure`, run it by [`runFailure`](../workers/failure-handlers#test-onfailure).
 
+A handler that [fails some items of a batch](../workers/retries#retry-only-the-failed-items-of-a-batch) makes `runJob` reject with its `BatchItemsError`, whose `indexes` are the positions of the items that the handler reports as failed:
+
+```ts
+const items = ["page-1", "page-2"]
+const error = await runJob(rebuildPages, items).catch((e: unknown) => e)
+expect(error).toBeInstanceOf(BatchItemsError)
+expect(items.filter((_, i) => (error as BatchItemsError).indexes.includes(i))).toEqual(["page-2"])
+```
+
+The worker checks the report and decides whether the items run again.
+
 For a [scoped task](../tasks/scopes), pass the scope of its job to `runJob` in `job.scope`.
 To give its job the scope of `testJobs` instead, call `testJobs.runJob` without `job.scope`:
 

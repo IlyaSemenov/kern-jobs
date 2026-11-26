@@ -1,11 +1,12 @@
-// Workers through the public API on the drivers that the documentation connects: jobs that `createJobs` enqueued run with their payloads and metadata, the errors of handlers decide their retries and reach `onError`, a job that failed for good runs again after `jobs.retry`, a job taken too late to keep its lease fails without running, and `stop` aborts the signal of a running handler, whose job returns without spending its attempt.
+// Workers through the public API on the drivers that the documentation connects: jobs that `createJobs` enqueued run with their payloads and metadata, the errors of handlers decide their retries and reach `onError`, a batch retries only the items that its handler reports as failed and fails for good with them, a job that failed for good runs again after `jobs.retry`, a job taken too late to keep its lease fails without running, and `stop` aborts the signal of a running handler, whose job returns without spending its attempt.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { createJobs, defineTask, fixedBackoff, type JobInfo } from "kern-jobs"
+import { createJobs, defineTask, fixedBackoff, type JobFailure, type JobInfo } from "kern-jobs"
 import { nodePostgresDriver } from "kern-jobs/drivers/node-postgres"
 import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import {
+  BatchItemsError,
   defineManifest,
   type Driver,
   HandlerAbort,
@@ -37,6 +38,36 @@ const renderPreview = defineTask("documents.renderPreview", {
 }).withPayload<{ documentId: string }>()
 const syncAccount = defineTask("accounts.sync").withPayload<{ accountId: string }>()
 const importFeed = defineTask("feeds.import", { maxAttempts: 1 }).withPayload<{ feedId: string }>()
+const rebuildPages = defineTask("pages.rebuild", {
+  key: true,
+  maxAttempts: 2,
+  backoff: fixedBackoff(0.2),
+}).withBatchPayload<{ pageId: string; token: string }>({ maxItems: 5 })
+
+/** Rebuilds each page of a batch, and reports the pages whose rebuild throws, with their ids in the messages of their errors. */
+function rebuildEach(rebuild: (pageId: string) => void) {
+  return (pages: { pageId: string }[]) => {
+    const failures = new Map<number, unknown>()
+    for (const [index, { pageId }] of pages.entries()) {
+      try {
+        rebuild(pageId)
+      } catch (error) {
+        let reason: string
+        try {
+          reason = String(error instanceof Error ? error.message : error)
+        } catch {
+          reason = "unprintable error"
+        }
+        failures.set(index, new Error(`rebuild ${pageId}: ${reason}`, { cause: error }))
+      }
+    }
+    if (failures.size > 0) throw new BatchItemsError(failures)
+  }
+}
+
+/** Returns pages of the ids 1 to `count`, each with a token that no error may copy. */
+const pagesOf = (count: number) =>
+  Array.from({ length: count }, (_, i) => ({ pageId: String(i + 1), token: `secret-${i + 1}` }))
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -149,6 +180,78 @@ for (const [name, createDriver] of drivers) {
           ["accounts.sync", [errors[2], "retry"]],
         ]),
       )
+    })
+
+    test("a batch retries only the items that its handler reports as failed, after the backoff of the task, and an ordinary error retries all its items", async () => {
+      const jobs = createTestJobs()
+      await jobs.enqueueItems(rebuildPages, pagesOf(5))
+      const runs: [string[], number][] = []
+      const done = Promise.withResolvers<void>()
+      const { worker, reports } = start(
+        defineManifest({
+          tasks: [
+            rebuildPages.implement((pages, { job }) => {
+              runs.push([pages.map(page => page.pageId), job.attempt])
+              if (job.attempt === 2) return done.resolve()
+              return rebuildEach(pageId => {
+                if (pageId === "2") throw new Error("timeout")
+              })(pages)
+            }),
+          ],
+        }),
+      )
+      await done.promise
+      await worker.stop()
+      expect(runs).toEqual([
+        [["1", "2", "3", "4", "5"], 1],
+        [["2"], 2],
+      ])
+      expect(reports.map(([error, info]) => [error instanceof BatchItemsError, info])).toEqual([
+        [true, expect.objectContaining({ source: "handler", decision: "retry" })],
+      ])
+      expect(await jobRows()).toEqual([])
+
+      // An ordinary error keeps every item.
+      await jobs.enqueueItems(rebuildPages, pagesOf(2))
+      const retried = Promise.withResolvers<string[]>()
+      const second = start(
+        defineManifest({
+          tasks: [
+            rebuildPages.implement((pages, { job }) => {
+              if (job.attempt === 1) throw new Error("the renderer is down")
+              retried.resolve(pages.map(page => page.pageId))
+            }),
+          ],
+        }),
+      )
+      expect(await retried.promise).toEqual(["1", "2"])
+      await second.worker.stop()
+    })
+
+    test("a batch whose item fails on every attempt fails for good with only that item, which its error names and onFailure gets", async () => {
+      await createTestJobs().enqueueItems(rebuildPages, pagesOf(5))
+      const failed = Promise.withResolvers<JobFailure<{ pageId: string; token: string }[]>>()
+      const { worker } = start(
+        defineManifest({
+          tasks: [
+            rebuildPages.implement(
+              rebuildEach(pageId => {
+                if (pageId === "2") throw new Error("timeout")
+              }),
+              { onFailure: failure => failed.resolve(failure) },
+            ),
+          ],
+        }),
+      )
+      const failure = await failed.promise
+      await worker.stop()
+      const message = '1 of 1 batch item failed in attempt 2\n#0: "rebuild 2: timeout"'
+      expect([failure.payload, failure.error.message, failure.job.attempt]).toEqual([
+        [{ pageId: "2", token: "secret-2" }],
+        message,
+        2,
+      ])
+      expect(await jobRows()).toEqual([["pages.rebuild", "failed", 2, message, 0]])
     })
 
     test("a job that failed for good runs again from its first attempt after jobs.retry", async () => {

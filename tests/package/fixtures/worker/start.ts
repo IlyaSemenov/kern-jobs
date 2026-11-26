@@ -2,6 +2,7 @@
 
 import type { HandlerContext } from "kern-jobs"
 import {
+  BatchItemsError,
   type Driver,
   HandlerAbort,
   startWorker,
@@ -30,6 +31,11 @@ export function stopConsumerWorkerAtSignal(worker: Worker) {
 /** Returns the metadata of the job of a handler. */
 export function describeJob(context: HandlerContext) {
   return context.job
+}
+
+/** Returns a BatchItemsError for errors keyed by their batch indexes. */
+export function reportFailedItems(errors: Map<number, unknown>) {
+  return new BatchItemsError(errors)
 }
 
 /** Returns why the signal of a handler was aborted, or `null`. */

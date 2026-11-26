@@ -47,7 +47,8 @@ Check constraints enforce these invariants for every write:
 - Requeue makes an active job pending again or deletes it as superseded, as fail does, but never makes it failed ([Settlement](settlement.md#requeue)).
 - The reaper makes an active job whose lease expired pending again, or failed on its last attempt, and so does a worker at its start with the active jobs of its id.
 - No worker or enqueue changes a `failed` row: it stays as a dead letter, outside the uniqueness of keys.
-- A pending batch job is open until an enqueue fills it, an enqueue of another `max_items` seals it, or a claim seals it; every return of it to pending, by fail, requeue, the reaper, or a retry, keeps it sealed, with its id, payload, and key, so it never takes items again and never merges or detaches.
+- A pending batch job is open until an enqueue fills it, an enqueue of another `max_items` seals it, or a claim seals it; every return of it to pending, by fail, requeue, the reaper, or a retry, keeps it sealed, with its id and key, so it never takes items again and never merges or detaches.
+  After its first claim, its payload stays whole, except that a fail or a requeue of a [partial failure](settlement.md#partial-failure-of-a-batch) reduces it to the items that the failure lists.
 - A retry of the application makes a failed job pending again, unless it is not a batch job and a pending job of its key that is not sealed exists; a delete of the application deletes pending or failed jobs by id or by a filter ([Administration](administration.md)).
 
 ## Indexes
@@ -89,7 +90,7 @@ Keys:
 - Among pending rows that are not sealed, `(scope, task, key)` is unique; sealed, active, and failed rows do not take part.
 - A batch job never has more than `max_items` items, and a key has at most one open batch.
 - An enqueue while a job of the key is active creates the next pending row, and the active job keeps its key.
-- No transition of a worker, an enqueue, or a retry drops a job silently: either the surviving row of its key absorbs it by the key mode, or the job loses its key and runs, or a sealed batch job returns with its own items; a delete of the application drops the job that it names.
+- No transition of a worker, an enqueue, or a retry drops a job silently: either the surviving row of its key absorbs it by the key mode, or the job loses its key and runs, or a sealed batch job returns with its own items, less those that its handler reported as processed by a partial failure; a delete of the application drops the job that it names.
 - `attempts` of a row never decreases, except by an explicit reset in an enqueue, by a requeue, which gives back the attempt of its own claim, and by a retry, which resets it, and never moves to another row.
 - No recomputation of `run_at` moves it below `not_before`.
 

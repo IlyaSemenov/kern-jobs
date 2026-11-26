@@ -13,7 +13,7 @@ Fail runs one transaction on a connection that the driver reserves for it ([Driv
 
 1. It locks the active row of the claim; without one, the claim is lost, and nothing changes.
 2. On a terminal error or on the last attempt, the row becomes `failed` with `failed_at` now and keeps its key, and the same statement inserts the failure job of a row that its claim stamped for one, with the reason that the worker passes, or `handler-error` without one ([Failure jobs](failure-jobs.md#insert)).
-3. A row without a key, or a batch job, returns to pending with `run_at` and `not_before` at now plus the backoff, and a new debounce window; a batch job returns sealed, with its id and payload, beside the open batch of its key, since its items are in no other job.
+3. A row without a key, or a batch job, returns to pending with `run_at` and `not_before` at now plus the backoff, and a new debounce window; a batch job returns sealed, with its id and its payload, or only the items of a [partial failure](#partial-failure-of-a-batch), beside the open batch of its key, since its items are in no other job.
 4. Another row with a key locks the pending row of its `(scope, task, key)` that is not sealed, the competitor, and then:
    - without a competitor, it returns to pending as in step 3;
    - with a competitor that is a batch job, the row returns to pending as in step 3 without its key, as the [reaper](leases.md) returns it, since it merges into no batch;
@@ -28,6 +28,15 @@ A producer that waits for an uncommitted return to pending merges into the retur
 
 Attempts belong to the row: a merge never moves them, and a terminal outcome is always recorded as `failed`, never deleted by a merge.
 
+## Partial failure of a batch
+
+A fail or a requeue of a batch job can keep only some of its items, by their ascending indexes in its payload, which the worker checks against the payload that it claimed ([Worker](worker.md#settlement), [decision](../decisions/settlement/partial-batch-failure.md)).
+The statement that makes the row `failed` or pending also sets its payload to those items in their order, so the row keeps its id, key, sealing, and failure-job stamp, and `attempts` as fail or requeue sets it, and a failure job, built from the updated row, records only those items.
+The transaction locks the active row by its id and claim id before it changes the payload, so a stale claim changes no payload, and a claimed batch is sealed, so its payload is still the one that the worker claimed.
+
+A partial failure that does not commit changes no payload: the reaper returns the row, or makes it `failed` on its last attempt, with every item of the claim, also those that the handler finished.
+After a statement of unknown outcome, the payload may have changed, and the outcome of the settlement tells it as for any settlement ([Connection loss](#connection-loss)).
+
 ## Requeue
 
 Requeue returns a job whose attempt does not count: the stop of its worker interrupted its handler, or began before the worker started it ([Worker](worker.md#stopping), [decision](../decisions/settlement/requeue-on-stop.md)).
@@ -36,7 +45,7 @@ It runs the transaction of fail with these differences:
 - It never makes the row `failed`, also on its last attempt.
 - The row returns to pending with `attempts` less one, `run_at`, `not_before`, and `window_started_at` at now, and its `last_error` kept.
 - A competitor of its key merges as in fail: `keep` deletes the competitor, `replace` or `debounce` deletes the row as superseded, and a batch job makes the row lose its key; a `23505` retries the transaction as in fail.
-- A batch job returns sealed with its id and payload, as in fail.
+- A batch job returns sealed with its id and its payload, or only the items of a [partial failure](#partial-failure-of-a-batch), as in fail.
 
 ## Connection loss
 

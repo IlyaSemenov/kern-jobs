@@ -1,4 +1,4 @@
-// Worker runtime: the drivers it runs on, a failed release of a connection, the check of its schema before it claims and reaps, its state and readiness, slots taken until settlement, a long settlement beside the heartbeat of other jobs, zombies of reclaimed jobs, lease origins of claims, heartbeats one at a time, claiming only with a working heartbeat, aborts of lost and unconfirmed leases, the jobs of a previous worker of an id and a worker whose id a running one holds, retries, terminal and unprintable errors, and stopping.
+// Worker runtime: the drivers it runs on, a failed release of a connection, the check of its schema before it claims and reaps, its state and readiness, slots taken until settlement, a long settlement beside the heartbeat of other jobs, zombies of reclaimed jobs, lease origins of claims, heartbeats one at a time, claiming only with a working heartbeat, aborts of lost and unconfirmed leases, the jobs of a previous worker of an id and a worker whose id a running one holds, retries, terminal and unprintable errors, partial failures of batches, and stopping.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import * as timers from "node:timers/promises"
@@ -9,9 +9,9 @@ import { waitForLockedStatement } from "kern-orm/testing"
 import pg from "pg"
 
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
-import { enqueue } from "../sql/enqueue"
+import { enqueue, enqueueItems } from "../sql/enqueue"
 import { toStatementLabel } from "../sql/statement"
-import { RetryError, TerminalError } from "../task/errors"
+import { BatchItemsError, RetryError, TerminalError } from "../task/errors"
 import { defineTask } from "../task/task"
 import {
   createTestDriver,
@@ -1146,6 +1146,243 @@ describe("failures", () => {
     }
     // Telling the error classes of the proxy fails, so its job retries with the default backoff.
     expect(log.all("backoff-error").map(e => e.claim.id)).toEqual([proxy.id])
+  })
+})
+
+describe("partial failures of batches", () => {
+  /** Enqueues a batch of task `t` of `items` under its own key, with up to `maxAttempts` attempts. */
+  const enqueueBatch = async (key: string, items: unknown[], o: { maxAttempts?: number } = {}) =>
+    only(
+      await enqueueItems(testSchema.conn, testSchema.table, {
+        task: "t",
+        key,
+        maxItems: 100,
+        payload: items,
+        maxAttempts: o.maxAttempts,
+      }),
+    )
+
+  test("a BatchItemsError keeps only the failed items of the batch, which retry after the backoff of the task with the attempt spent, and the error records each by its index", async () => {
+    const job = await enqueueBatch("k", ["a", "b", "c", "d", "e"])
+    const log = recordEvents()
+    const thrown = new BatchItemsError([
+      [3, "d timed out"],
+      [1, new Error("b\nfailed")],
+    ])
+    startTestWorker(testSchema, {
+      tasks: {
+        t: {
+          handler() {
+            throw thrown
+          },
+          backoff: attempt => 100 * attempt,
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    expect((await log.waitFor("settled")).outcome).toBe("retry")
+    expect(log.all("end").map(e => [e.outcome, e.error])).toEqual([["retry", thrown]])
+    const row = only(await jobs(testSchema.conn.query, sql`id = ${job.id}`))
+    expect([row.state, row.payload, row.attempts, row.sealed, row.lastError]).toEqual([
+      "pending",
+      ["b", "d"],
+      1,
+      true,
+      '2 of 5 batch items failed in attempt 1\n#1: "b\\nfailed"\n#3: "d timed out"',
+    ])
+    // The backoff counts from the time of the fail, which also starts the window of the returned job.
+    expect(row.notBefore!.getTime() - row.windowStartedAt.getTime()).toBe(100_000)
+  })
+
+  test("the report and the recorded error are read before onError, whose changes of the error do not reach the settlement", async () => {
+    const job = await enqueueBatch("k", ["a", "b", "c"])
+    const log = recordEvents()
+    startTestWorker(testSchema, {
+      tasks: {
+        t: {
+          handler() {
+            throw new BatchItemsError([[2, new Error("c failed")]])
+          },
+        },
+      },
+      onEvent: event => {
+        if (event.type === "end" && event.error instanceof BatchItemsError) {
+          Object.defineProperty(event.error, "indexes", { value: [0] })
+          ;(event.error.errors[0] as Error).message = "changed"
+        }
+        log.onEvent(event)
+      },
+    })
+    expect((await log.waitFor("settled")).outcome).toBe("retry")
+    const row = only(await jobs(testSchema.conn.query, sql`id = ${job.id}`))
+    expect([row.payload, row.lastError]).toEqual([
+      ["c"],
+      '1 of 3 batch items failed in attempt 1\n#2: "c failed"',
+    ])
+  })
+
+  test("a backoff that throws is reported, and the batch keeps only its failed items with the default backoff", async () => {
+    const job = await enqueueBatch("k", ["a", "b"])
+    const log = recordEvents()
+    startTestWorker(testSchema, {
+      tasks: {
+        t: {
+          handler() {
+            throw new BatchItemsError([[0, "a failed"]])
+          },
+          backoff: () => {
+            throw new Error("policy")
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    expect((await log.waitFor("settled")).outcome).toBe("retry")
+    expect(log.all("backoff-error")).toHaveLength(1)
+    const row = only(await jobs(testSchema.conn.query, sql`id = ${job.id}`))
+    expect(row.payload).toEqual(["a"])
+    // The default backoff of the first attempt is 2 seconds.
+    expect(row.notBefore!.getTime() - row.windowStartedAt.getTime()).toBe(2000)
+  })
+
+  test("a report of a job that is not a batch job, or of an index that is not an item of the batch, fails the whole job as an ordinary error with a TypeError", async () => {
+    // A job enqueued before its task became a batch task, whose payload is an array.
+    const plain = await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "plain",
+      payload: ["a", "b"],
+    })
+    const batch = await enqueueBatch("batch", ["a", "b"])
+    const log = recordEvents()
+    const thrown = new BatchItemsError([[2, "c failed"]])
+    startTestWorker(testSchema, {
+      concurrency: 2,
+      tasks: {
+        t: {
+          handler() {
+            throw thrown
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    for (const job of [plain, batch]) {
+      expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
+    }
+    const errors = [plain, batch].map(job => log.all("end", e => e.claim.id === job.id)[0]!.error)
+    expect(errors.map(e => [e instanceof TypeError, (e as Error).cause])).toEqual([
+      [true, thrown],
+      [true, thrown],
+    ])
+    const rows = await jobs(testSchema.conn.query)
+    expect(rows.map(row => [row.id, row.payload, row.attempts, row.lastError])).toEqual([
+      [
+        plain.id,
+        ["a", "b"],
+        1,
+        "The BatchItemsError of task t is invalid: its job is not a batch job",
+      ],
+      [
+        batch.id,
+        ["a", "b"],
+        1,
+        "The BatchItemsError of task t is invalid: index 2 is not an item of the 2 items of its job",
+      ],
+    ])
+  })
+
+  test("a report whose indexes cannot be read as numbers, or are elements of the prototype of its array, fails the whole job as an ordinary error", async () => {
+    const opaque = await enqueueBatch("opaque", ["a", "b"])
+    const inherited = await enqueueBatch("inherited", ["a", "b"])
+    const log = recordEvents()
+    startTestWorker(testSchema, {
+      concurrency: 2,
+      tasks: {
+        t: {
+          handler(job) {
+            const error = new BatchItemsError([[1, "b failed"]])
+            // An index without a primitive value, or a hole of the array whose prototype has the index 1.
+            const indexes =
+              job.key === "opaque"
+                ? [Object.create(null) as number]
+                : Object.setPrototypeOf(
+                    new Array<number>(1),
+                    Object.assign(Object.create(Array.prototype) as object, [1]),
+                  )
+            Object.defineProperty(error, "indexes", { value: indexes })
+            throw error
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    for (const job of [opaque, inherited]) {
+      expect((await log.waitFor("settled", e => e.claim.id === job.id)).outcome).toBe("retry")
+    }
+    const rows = await jobs(testSchema.conn.query)
+    expect(rows.map(row => [row.id, row.payload, row.lastError])).toEqual([
+      [
+        opaque.id,
+        ["a", "b"],
+        "The BatchItemsError of task t is invalid: its indexes are not non-negative safe integers in strictly increasing order",
+      ],
+      [
+        inherited.id,
+        ["a", "b"],
+        "The BatchItemsError of task t is invalid: its indexes and errors are not arrays without holes",
+      ],
+    ])
+  })
+
+  test("after the abort of stop, a partial failure returns the batch at once with its failed items and the attempt given back, and an invalid one with all its items", async () => {
+    const batch = await enqueueBatch("batch", ["a", "b", "c"], { maxAttempts: 1 })
+    const plain = await enqueue(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "plain",
+      payload: ["a", "b"],
+    })
+    const log = recordEvents()
+    const done: string[] = []
+    let messagesRead = 0
+    startTestWorker(testSchema, {
+      concurrency: 2,
+      tasks: {
+        t: {
+          // Finishes the first item, is interrupted on the second, and never starts the third.
+          async handler(job, { signal }) {
+            const [first] = job.payload as string[]
+            done.push(first!)
+            const interrupted = await timers
+              .setTimeout(3600_000, undefined, { signal })
+              .catch((e: unknown) => e)
+            throw new BatchItemsError([
+              [1, interrupted],
+              [
+                2,
+                // A requeue records no error, so the worker does not read the message.
+                Object.defineProperty(new Error(), "message", {
+                  get() {
+                    messagesRead++
+                    return "not started"
+                  },
+                }),
+              ],
+            ])
+          },
+        },
+      },
+      onEvent: log.onEvent,
+    })
+    await Promise.all([batch, plain].map(job => log.waitFor("start", e => e.claim.id === job.id)))
+    await stopTestWorkers()
+    expect([done, messagesRead]).toEqual([["a", "a"], 0])
+    expect(log.all("end").map(e => e.outcome)).toEqual(["requeue", "requeue"])
+    expect(log.all("settled").map(e => e.outcome)).toEqual(["requeued", "requeued"])
+    const rows = await jobs(testSchema.conn.query)
+    expect(rows.map(row => [row.id, row.state, row.payload, row.attempts, row.lastError])).toEqual([
+      [batch.id, "pending", ["b", "c"], 0, null],
+      [plain.id, "pending", ["a", "b"], 0, null],
+    ])
   })
 })
 

@@ -90,7 +90,7 @@ A key passed to the enqueue, such as ``{ key: `site:${siteId}` }``, takes preced
 - Give the other options, such as `keyMode: "debounce"`, to `defineTask`: an enqueue of items overrides only the key, and a batch task rejects `keyMode: "keep"`.
 - Without a key of the enqueue, `withKey` must return one key for all its items.
 - `jobs.enqueueItems` resolves to `{ id, created }` of each job that took items, in the order of the items; an empty array needs no key and changes nothing.
-- A job that runs again, after a failed attempt or a stop of its worker, keeps its items: batches never merge.
+- A job that runs again, after a failed attempt or a stop of its worker, keeps its items, or after a recorded [partial failure](../workers/retries#retry-only-the-failed-items-of-a-batch) the items that it listed: batches never merge.
 - `deletePending` with the key deletes every pending batch of the key.
 - After a change of `maxItems`, new items go to new jobs, and a pending job keeps its items, also more than a lowered `maxItems`.
 - An enqueue that would merge into a pending job of the key of the other kind, such as during the deploy of a task that became a batch task, rejects with a PostgreSQL error.

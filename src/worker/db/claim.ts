@@ -34,7 +34,18 @@ export type ClaimRef = Pick<Claim, "id" | "claimId">
 /** Columns of the claimed row `j` that the worker reads, by its handler, its settlement, and its events, which a claim statement returns and whose record `select` decodes. */
 const claimedJobColumns = columnsOf(
   job,
-  ["id", "claimId", "task", "scope", "key", "queue", "attempts", "maxAttempts", "payload"],
+  [
+    "id",
+    "claimId",
+    "task",
+    "scope",
+    "key",
+    "queue",
+    "attempts",
+    "maxAttempts",
+    "payload",
+    "maxItems",
+  ],
   { alias: "j" },
 )
 

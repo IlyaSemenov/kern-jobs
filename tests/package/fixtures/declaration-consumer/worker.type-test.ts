@@ -9,7 +9,14 @@ import type {
   TaskBuilder,
   TaskImplementation,
 } from "kern-jobs"
-import type { AbortReason, CronDefinition, Manifest, Schedule, Worker } from "kern-jobs/worker"
+import type {
+  AbortReason,
+  BatchItemsError,
+  CronDefinition,
+  Manifest,
+  Schedule,
+  Worker,
+} from "kern-jobs/worker"
 
 import {
   defineCleanup,
@@ -26,6 +33,7 @@ import {
 import {
   describeAbort,
   describeJob,
+  reportFailedItems,
   startConsumerWorker,
   stopConsumerWorkerAtSignal,
 } from "../declarations/worker/start.js"
@@ -65,8 +73,9 @@ describe("emitted declarations of the worker", () => {
     expectTypeOf(describeJob).returns.toEqualTypeOf<JobInfo>()
   })
 
-  test("keep the worker, the outcome of its stop at a signal, the reason of an abort, and the check of the manifest", () => {
+  test("keep the worker, the outcome of its stop at a signal, the reason of an abort, the error of failed items of a batch, and the check of the manifest", () => {
     expectTypeOf(startConsumerWorker).returns.toEqualTypeOf<Worker>()
+    expectTypeOf(reportFailedItems).returns.toEqualTypeOf<BatchItemsError>()
     expectTypeOf(stopConsumerWorkerAtSignal).returns.toEqualTypeOf<Promise<void>>()
     expectTypeOf(describeAbort).returns.toEqualTypeOf<AbortReason | null>()
     expectTypeOf(unimplementedTasks).toEqualTypeOf<string[]>()

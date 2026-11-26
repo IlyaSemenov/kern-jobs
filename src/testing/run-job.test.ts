@@ -2,6 +2,7 @@
 
 import { describe, expect, mock, test } from "bun:test"
 
+import { BatchItemsError } from "../task/errors"
 import type { JobFailure } from "../task/failure"
 import type { RunHandlerContext } from "../task/run-handler"
 import { defineTask, type HandlerContext } from "../task/task"
@@ -284,6 +285,20 @@ describe("outcome", () => {
         1,
       ),
     ).rejects.toBe(error)
+  })
+
+  test("rejects with the BatchItemsError of a batch handler as it is, with the indexes that the handler reports", async () => {
+    const task = defineTask("t", { key: true }).withBatchPayload<string>({ maxItems: 10 })
+    const items = ["a", "b", "c"]
+    const error = await runJob(
+      task.implement(batch => {
+        throw new BatchItemsError([[batch.indexOf("c"), "c failed"]])
+      }),
+      items,
+    ).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(BatchItemsError)
+    const { indexes } = error as BatchItemsError
+    expect(items.filter((_, i) => indexes.includes(i))).toEqual(["c"])
   })
 
   test("gives the handler the signal of options, or one that never aborts", async () => {

@@ -18,7 +18,15 @@ import type { FailOptions } from "./db/settlement"
 import type { WorkerEvent } from "./events"
 import { type HandlerAbort, type KeptLease, startHeartbeat } from "./heartbeat"
 import { type Loop, maxInterval, monotonicNow, startLoop } from "./loop"
-import { classifyThrown, type Thrown, toHandlerOutcome } from "./outcome"
+import {
+  type BatchFailure,
+  checkBatchReport,
+  classifyThrown,
+  formatBatchError,
+  type Thrown,
+  toErrorMessage,
+  toHandlerOutcome,
+} from "./outcome"
 import { startReaper } from "./reaper"
 import { settle, type SettleAction } from "./settle"
 
@@ -118,32 +126,19 @@ export interface Worker {
 }
 
 /**
- * Returns the message of a thrown value, also of one whose inspection or string conversion throws, such as `Object.create(null)` or an object with a throwing getter.
- * U+0000 becomes the text `\u0000`, since PostgreSQL rejects it in a text value, and the fail would never apply.
- */
-function toErrorMessage(error: unknown): string {
-  let message: string
-  try {
-    message = error instanceof Error ? String(error.message) : String(error)
-  } catch {
-    return "unprintable error"
-  }
-  return message.replaceAll("\0", "\\u0000")
-}
-
-/**
- * Builds the options of the fail of a job whose handler threw `error`, by its classification `thrown`: a `TerminalError` fails it for good, with the reason `terminal-error`, a `RetryError` retries it after its delay, and any other error after the backoff of its task, with the reason of a fail without one, `handler-error`.
+ * Builds the options of the fail of a job whose handler threw an error, which the fail records as `message`, by its classification `thrown`: a `TerminalError` fails it for good, with the reason `terminal-error`, a `RetryError` retries it after its delay, and any other error, also a partial failure of a batch, after the backoff of its task, with the reason of a fail without one, `handler-error`.
+ * The indexes of the items that a partial failure keeps, `items`, go to the fail on every branch.
  * When it gets no valid delay, it reports the error and takes the default backoff, so that the job is still settled: what was thrown by the backoff or by the read of the class of the thrown value or of the delay of a `RetryError`, or a `RangeError` for a delay outside the range of `isDelay`, which keeps SQL from rejecting the fail.
  * The fail uses the delay only if the job returns to pending.
  */
 function toFailOptions(
   task: WorkerTask,
   claim: Claim,
-  error: unknown,
+  message: string,
   thrown: Thrown,
   onBackoffError: (error: unknown) => void,
+  items?: number[],
 ): FailOptions {
-  const message = toErrorMessage(error)
   const attempt = claim.job.attempts
   if (thrown.type === "terminal") return { error: message, reason: "terminal-error", backoff: 0 }
   if ("failure" in thrown) onBackoffError(thrown.failure)
@@ -151,7 +146,7 @@ function toFailOptions(
     try {
       const backoff =
         thrown.type === "retry" ? thrown.delay : (task.backoff ?? defaultBackoff)(attempt)
-      if (isDelay(backoff)) return { error: message, backoff }
+      if (isDelay(backoff)) return { error: message, backoff, items }
       onBackoffError(
         new RangeError(
           `The delay of the retry of task ${claim.job.task} is ${String(backoff)}, not ${delayRange}`,
@@ -162,7 +157,7 @@ function toFailOptions(
       onBackoffError(e)
     }
   }
-  return { error: message, backoff: defaultBackoff(attempt) }
+  return { error: message, backoff: defaultBackoff(attempt), items }
 }
 
 /**
@@ -280,12 +275,8 @@ export function startRuntime(o: RuntimeOptions): Worker {
       return execute(claim, kept, async () => ({
         type: "fail",
         options: {
-          ...toFailOptions(
-            task,
-            claim,
-            new Error(FAILURE_MESSAGES["late-claim"]),
-            { type: "other" },
-            e => emit({ type: "backoff-error", claim, error: e }),
+          ...toFailOptions(task, claim, FAILURE_MESSAGES["late-claim"], { type: "other" }, e =>
+            emit({ type: "backoff-error", claim, error: e }),
           ),
           reason: "late-claim",
         },
@@ -293,6 +284,9 @@ export function startRuntime(o: RuntimeOptions): Worker {
     }
     execute(claim, kept, async () => {
       emit({ type: "start", claim })
+      // The indexes of a partial failure of a batch name the items in their order before any code of the application, which can change the array, such as a `runHandler` that sorts it.
+      const { payload } = claim.job
+      const length = Array.isArray(payload) ? payload.length : null
       let failed = false
       let error: unknown
       try {
@@ -305,16 +299,41 @@ export function startRuntime(o: RuntimeOptions): Worker {
       kept.endHandler()
       const aborted = kept.signal.aborted ? (kept.signal.reason as HandlerAbort).reason : null
       // The thrown value is classified once, before the report, whose receiver gets the value and can change it: the report and the settlement both use this classification.
-      const thrown = failed ? classifyThrown(error) : null
+      let thrown = failed ? classifyThrown(error) : null
       const { attempts: attempt, maxAttempts } = claim.job
+      let batch: BatchFailure | undefined
+      if (thrown?.type === "items") {
+        const failure = checkBatchReport(thrown.report, {
+          isBatch: claim.job.maxItems !== null,
+          length,
+        })
+        if ("invalid" in failure) {
+          // An invalid report fails the whole job as an ordinary error, which keeps every item.
+          error = new TypeError(
+            `The BatchItemsError of task ${claim.job.task} is invalid: ${failure.invalid}`,
+            { cause: error },
+          )
+          thrown = { type: "other" }
+        } else {
+          batch = failure
+        }
+      }
       const outcome = toHandlerOutcome({ thrown, aborted, attempt, maxAttempts })
+      // The messages of the items are read before the report, whose receiver can change the errors, and only for a fail, since a requeue records no error.
+      const batchMessage =
+        batch && outcome !== "requeue" ? formatBatchError(batch, attempt) : undefined
       emit({ type: "end", claim, outcome, error, aborted })
       if (!thrown) return { type: "complete" }
-      if (outcome === "requeue") return { type: "requeue" }
+      if (outcome === "requeue") return { type: "requeue", items: batch?.indexes }
       return {
         type: "fail",
-        options: toFailOptions(task, claim, error, thrown, e =>
-          emit({ type: "backoff-error", claim, error: e }),
+        options: toFailOptions(
+          task,
+          claim,
+          batchMessage ?? toErrorMessage(error),
+          thrown,
+          e => emit({ type: "backoff-error", claim, error: e }),
+          batch?.indexes,
         ),
       }
     })

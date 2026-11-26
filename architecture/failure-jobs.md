@@ -62,7 +62,7 @@ The `JobFailure`, a type of the main entry, is built in SQL from the stored row,
 - `error.message`: the `last_error` that the failure wrote; the stack, the cause, and the class of an error are not kept.
 - `failedAt`: `failed_at` in ISO 8601 in UTC with milliseconds, truncated, by `to_char` of the time at UTC, independent of `TimeZone` and `DateStyle`.
 - `job`: the id as text, the task, the scope with `null` for the empty scope, the attempt, `maxAttempts`, the key, and the queue of the failed row.
-- `payload`: the stored payload, omitted only when it is SQL NULL, so a JSON `null` and the nulls inside it stay.
+- `payload`: the stored payload, omitted only when it is SQL NULL, so a JSON `null` and the nulls inside it stay; of a batch, the items that its [partial failures](settlement.md#partial-failure-of-a-batch) kept, which the statement of the failure sets.
   The type gives it as the payload type of the task, required, since a field that is optional only for a payload type that admits `undefined` would make a task of some payload no `Task<string, unknown>` ([Producer](producer.md#task-definitions)).
 
 ## Consequences of ordinary jobs

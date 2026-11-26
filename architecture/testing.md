@@ -29,7 +29,7 @@
   It checks the scope and resolves the options of the task before it reads the other fields of `job`, except the key, which it reads before the options, whose checks take it as the key of an enqueue, so that the key of `job` replaces that of `withKey` without calling `withKey`, as an override of an enqueue does.
 - `job.id` must have the form and the range of an id of the table, a decimal integer from 1 to 2^63 − 1 without leading zeros, though no row of it needs to exist: `resolveJobInfo` rejects another one by `checkJobId` of `producer/jobs.ts`, which `delete` and `retry` also run.
 - `runJob` runs the handler by `runTaskHandler` of `task/run-handler.ts`, as the worker does, through `options.runHandler` when it is given, with the name of the task and the payload through JSON: it resolves or rejects as `runHandler` does, or as the handler does without it.
-  It does not turn `RetryError` and `TerminalError` into a settlement.
+  It does not turn `RetryError`, `TerminalError`, and `BatchItemsError` into a settlement, and rejects with a `BatchItemsError` as it is, without the checks of the worker, which need the row of the job.
 - It runs the `onFailure` of an implementation as the handler of its failure implementation, `implementation.failure`, with a `JobFailure` as the payload ([Failure jobs](failure-jobs.md#failure-tasks)).
 - `testJobs.runJob` passes its options as they are to `runJobWithScope`, the body of `runJob`, so its job gets `options.job.scope` when it is not `undefined`.
   Otherwise its job gets the scope that an enqueue through the double gives, from `getEnqueueScope` of `producer/jobs.ts` at the call.

@@ -19,11 +19,14 @@ import { monotonicNow, sleep } from "./loop"
 /** Retries of a settlement that PostgreSQL rejected, such as by `statement_timeout`, before it is given up. */
 const maxRejections = 3
 
-/** Settlement of a claim: `complete`, `fail` with these options, or `requeue` with the attempt given back. */
+/**
+ * Settlement of a claim: `complete`, `fail` with these options, or `requeue` with the attempt given back.
+ * A fail or a requeue of a batch job with `items` keeps only the items at those indexes.
+ */
 export type SettleAction =
   | { type: "complete" }
   | { type: "fail"; options: FailOptions }
-  | { type: "requeue" }
+  | { type: "requeue"; items?: number[] | undefined }
 
 /** Options of a settlement. */
 export interface SettleOptions {
@@ -76,6 +79,6 @@ async function run(o: SettleOptions): Promise<"completed" | FailOutcome | Requeu
     case "fail":
       return await fail(o.db, o.claim, o.action.options)
     case "requeue":
-      return await requeue(o.db, o.claim)
+      return await requeue(o.db, o.claim, { items: o.action.items })
   }
 }

@@ -1,4 +1,4 @@
-// Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, batches that return sealed beside their successors, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
+// Completion with bigint ids, fail and requeue: the last attempt and terminal errors, the merge with the pending job of the key by its mode, the uniqueness of pending keys during a retry, the attempt budget, requeue with the attempt given back, batches that return sealed beside their successors and keep only the items of a partial failure, races of the return to pending with enqueues, isolation from statements of other handlers, and connection loss in the fail transaction.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
@@ -539,6 +539,78 @@ describe("batches", () => {
     ])
     const failure = only(await jobs(testSchema.conn.query, sql`j.task = 't:failure'`))
     expect(failure.payload).toMatchObject({ job: { id: a.id, key: "" }, payload: [1] })
+  })
+
+  /** A claimed batch of `items` of the empty key, with up to `maxAttempts` attempts. */
+  async function claimedBatch(
+    items: unknown[],
+    o: { maxAttempts?: number; failureMaxAttempts?: number } = {},
+  ) {
+    await enqueueItems(testSchema.conn, testSchema.table, {
+      task: "t",
+      key: "",
+      maxItems: 100,
+      payload: items,
+      maxAttempts: o.maxAttempts ?? 5,
+      now: T(0),
+    })
+    const failureMaxAttempts: Record<string, number> =
+      o.failureMaxAttempts === undefined ? {} : { t: o.failureMaxAttempts }
+    return only(
+      await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(0), failureMaxAttempts }),
+    )
+  }
+
+  test("fail with items keeps only the items of those indexes, in their order, with its id, attempts, key, error, and backoff", async () => {
+    const a = await claimedBatch([10, 20, 10, { n: 30 }, null])
+    expect(await failA(a, { items: [2, 3, 4], error: "2 failed" })).toBe("retry")
+    const row = only(await jobs(testSchema.conn.query))
+    // By index, one of two equal items stays, and a JSON null is an item.
+    expect([
+      row.id,
+      row.state,
+      row.key,
+      row.payload,
+      row.sealed,
+      row.attempts,
+      row.lastError,
+      secondsOf(row.runAt),
+      secondsOf(row.notBefore!),
+    ]).toEqual([a.id, "pending", "", [10, { n: 30 }, null], true, 1, "2 failed", 32, 32])
+  })
+
+  test("fail with items on the last attempt makes the batch failed with those items, and its failure job records them and the error", async () => {
+    const a = await claimedBatch([1, 2, 3], { maxAttempts: 1, failureMaxAttempts: 3 })
+    expect(await failA(a, { items: [1], error: "item failed" })).toBe("failed")
+    const row = only(await jobs(testSchema.conn.query, sql`j.task = 't'`))
+    expect([row.state, row.payload, row.lastError]).toEqual(["failed", [2], "item failed"])
+    const failure = only(await jobs(testSchema.conn.query, sql`j.task = 't:failure'`))
+    expect(failure.payload).toMatchObject({ error: { message: "item failed" }, payload: [2] })
+  })
+
+  test("requeue with items keeps only those items with the attempt given back and the error of the latest failure", async () => {
+    const first = await claimedBatch([1, 2, 3])
+    await failA(first, { items: [0, 2], error: "2 failed", backoff: 0, now: T(0) })
+    const second = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(1) }))
+    expect(second.job.payload).toEqual([1, 3])
+    expect(await requeue(testSchema.db, second, { items: [1], now: T(2) })).toBe("requeued")
+    const row = only(await jobs(testSchema.conn.query))
+    expect([row.state, row.payload, row.attempts, row.lastError, row.sealed]).toEqual([
+      "pending",
+      [3],
+      1,
+      "2 failed",
+      true,
+    ])
+  })
+
+  test("fail with items of a stale claim, after the reaper returned the batch and another claim took it, is fenced and keeps the payload", async () => {
+    const stale = await claimedBatch([1, 2, 3])
+    expect(await reap(testSchema.conn.query, { now: T(61) })).toHaveLength(1)
+    const current = only(await claimPlain(testSchema.conn.query, { ...W, limit: 1, now: T(61) }))
+    expect(await failA(stale, { items: [0] })).toBe("fenced")
+    const row = only(await jobs(testSchema.conn.query))
+    expect([row.state, row.claimId, row.payload]).toEqual(["active", current.claimId, [1, 2, 3]])
   })
 
   test.each(["fail", "requeue"] as const)(

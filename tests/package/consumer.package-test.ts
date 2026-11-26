@@ -158,6 +158,7 @@ describe.each(["node", "bun"])("%s", runtime => {
       unimplementedTasks: ["posts.publish", "reminders.send"],
       duplicateRejected: true,
       retryDelay: 10,
+      batchIndexes: [0, 2],
     })
   }, 60_000)
 

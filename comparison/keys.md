@@ -49,6 +49,13 @@ The bound limits only how far the events postpone the job: a backoff after a fai
 
 - Graphile Worker, differs: an enqueue that updates the pending job of its key concatenates the arrays of the two payloads, without a capacity that splits them into jobs ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/job-key.md#job_key_mode)).
 
+## Retry of the failed items of a batch
+
+A handler of a batch task throws a `BatchItemsError` of the indexes of its failed items and their errors, and the job keeps only those items, with its attempts and the backoff of its task, and fails for good with them on its last attempt.
+
+- Graphile Worker, differs: a task whose payload is an array returns an array of promises of the same length, and the job fails with a payload of the entries whose promises rejected and an error of their messages, while a thrown error keeps every entry ([docs](https://github.com/graphile/worker/blob/v0.18.0/website/docs/tasks.md#handling-batch-jobs), [source](https://github.com/graphile/worker/blob/v0.18.0/src/worker.ts#L262-L357)).
+  A returned array of another length counts as a full success.
+
 ## The same key twice in one call
 
 `enqueueMany` rejects two payloads whose options give the same key before it runs its statement, since the enqueues of the payloads one after another would merge them by their modes, which one statement cannot.
