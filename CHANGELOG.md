@@ -1,5 +1,18 @@
 # kern-jobs
 
+## 0.5.0
+
+### Minor Changes
+
+- 27dc763: Add batch tasks, defined by `defineTask(…).withBatchPayload<Item>({ maxItems })`, whose jobs run with up to `maxItems` items: `jobs.enqueueItems(task, items)` and the SQL function `enqueue_items` append items to the pending job of their key.
+  Stop the producers and the workers of the previous version before `migrateJobs`: their enqueues fail on the updated schema.
+- 27dc763: Compute the key of a task from its payload with `withKey(payload => key)`; the options that `withOptions` returns no longer take a key.
+
+### Patch Changes
+
+- 0400732: Fix enqueues, `defineTask`, and schedules ignoring options that are inherited or given by getters, such as an inherited `key`.
+  Options that are `null`, an array, or another value that is not an object throw `TypeError` when passed to `defineTask`, given as the overrides of an enqueue or a schedule, or returned by the function of `withOptions`.
+
 ## 0.4.0
 
 ### Minor Changes
