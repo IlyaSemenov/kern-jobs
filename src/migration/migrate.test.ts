@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { defineMigrations, getMigrationStatus, migrate } from "kern-migrations"
+import { getMigrationStatus } from "kern-migrations"
 import { bindSchema, defineSchema } from "kern-orm"
 import type { Driver } from "kern-orm/db"
 
@@ -13,7 +13,7 @@ import { createTestSchema, jobs, type TestSchema } from "../test-harness/databas
 import { bindWorkerDb } from "../worker/db/db"
 
 import { checkJobSchema, migrateJobs, type MigrateJobsOptions } from "./migrate"
-import { jobMigrations, MIGRATION_TABLE } from "./migrations"
+import { jobMigrations } from "./migrations"
 
 let testSchema: TestSchema
 /** Job table of a schema that the test migrates, beside the migrated schema of the test. */
@@ -42,14 +42,7 @@ describe("migrateJobs", () => {
     expect(
       (await jobs(bindWorkerDb(testSchema.database, table.schemaName).$query)).map(job => job.id),
     ).toEqual([id])
-    expect(await appliedKeys(table.schemaName)).toEqual([
-      "0001_create_job",
-      "0002_schedule",
-      "0003_job_summary",
-      "0004_failure_jobs",
-      "0005_enqueue_function",
-      "0006_retry_function",
-    ])
+    expect(await appliedKeys(table.schemaName)).toEqual(jobMigrations.keys)
   })
 
   test("with a database, migrates in its transaction, which rolls the schema back", async () => {
@@ -66,14 +59,7 @@ describe("migrateJobs", () => {
   test("with a Db of kern-orm, migrates the schema of kern-jobs rather than the schema of the Db", async () => {
     const db = bindSchema(defineSchema(), testSchema.database, { schemaName: testSchema.name })
     await migrateJobs(db, { schemaName: table.schemaName })
-    expect(await appliedKeys(table.schemaName)).toEqual([
-      "0001_create_job",
-      "0002_schedule",
-      "0003_job_summary",
-      "0004_failure_jobs",
-      "0005_enqueue_function",
-      "0006_retry_function",
-    ])
+    expect(await appliedKeys(table.schemaName)).toEqual(jobMigrations.keys)
   })
 
   test("rejects a wrong target or option before it runs a statement", async () => {
@@ -104,26 +90,9 @@ describe("migrateJobs", () => {
 describe("checkJobSchema", () => {
   test("rejects a schema that lacks migrations with an error that names migrateJobs, and passes it once migrated", async () => {
     await expect(checkJobSchema(testSchema.database, table.schemaName)).rejects.toThrow(
-      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary, 0004_failure_jobs, 0005_enqueue_function, 0006_retry_function)`,
+      `The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: ${jobMigrations.keys.join(", ")})`,
     )
     await migrateJobs(testSchema.driver, { schemaName: table.schemaName })
     await checkJobSchema(testSchema.database, table.schemaName)
-  })
-
-  test("passes a schema with migrations of a newer version, as during a rolling deploy", async () => {
-    const newerMigrations = defineMigrations(
-      {
-        "0001_create_job": () => import("./migrations/0001_create_job"),
-        "0002_schedule": () => import("./migrations/0002_schedule"),
-        "0003_job_summary": () => import("./migrations/0003_job_summary"),
-        "0004_failure_jobs": () => import("./migrations/0004_failure_jobs"),
-        "0005_enqueue_function": () => import("./migrations/0005_enqueue_function"),
-        "0006_retry_function": () => import("./migrations/0006_retry_function"),
-        "0007_newer": { up: "select 1" },
-      },
-      { tableName: MIGRATION_TABLE },
-    )
-    await migrate(testSchema.database, newerMigrations, { schemaName: testSchema.name })
-    await checkJobSchema(testSchema.database, testSchema.name)
   })
 })

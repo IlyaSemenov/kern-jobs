@@ -8,6 +8,7 @@ import { type Driver, identifier, isQueryError, QueryError } from "kern-orm/db"
 import { waitForLockedStatement } from "kern-orm/testing"
 
 import { migrateJobs } from "../migration/migrate"
+import { jobMigrations } from "../migration/migrations"
 import { defineSchedule, toWorkerSchedule } from "../schedule/schedule"
 import { enqueue } from "../sql/enqueue"
 import { labelSql } from "../sql/statement"
@@ -386,7 +387,7 @@ describe("a running worker", () => {
       // Neither a claim nor the reaper has run in the schema, which would fail without the table.
       expect(reports.map(([, info]) => info)).toEqual([{ source: "schema" }, { source: "schema" }])
       expect(String(reports[0]![0])).toBe(
-        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: 0001_create_job, 0002_schedule, 0003_job_summary, 0004_failure_jobs, 0005_enqueue_function, 0006_retry_function)`,
+        `Error: The schema "${table.schemaName}" of kern-jobs is not up to date: call migrateJobs of kern-jobs/migrations before the worker starts (pending migrations: ${jobMigrations.keys.join(", ")})`,
       )
 
       await migrateJobs(testSchema.driver, { schemaName: table.schemaName })
