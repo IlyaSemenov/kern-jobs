@@ -1,12 +1,15 @@
 # kern-jobs
 
-Background jobs for TypeScript, stored in PostgreSQL: enqueue work in the transaction that writes your data, share typed task definitions between your application and its workers, and control retries and repeated updates.
+Background jobs for TypeScript, stored in PostgreSQL.
+Enqueue typed jobs in the same transaction as your data changes, using your own client or ORM.
+Merge repeated enqueues, debounce bursts of updates, and run jobs one at a time per entity.
+Schedule recurring jobs with cron, without duplicates across workers.
 
-It works with your PostgreSQL client: postgres.js, node-postgres, Orchid ORM, kern-orm, kern-db, or [another client](https://ilyasemenov.github.io/kern-jobs/database-clients#other-clients) that runs SQL text with parameters.
+It works with postgres.js, node-postgres, Orchid ORM, kern-orm, kern-db, or [another client](https://ilyasemenov.github.io/kern-jobs/database-clients#other-clients) that runs parameterized SQL.
 
 kern-jobs is in early development, and the API changes between minor versions.
 
-See the [documentation](https://ilyasemenov.github.io/kern-jobs/), and how kern-jobs [compares](https://ilyasemenov.github.io/kern-jobs/comparison) with Graphile Worker and pg-boss.
+See the [documentation](https://ilyasemenov.github.io/kern-jobs/) and the [comparison](https://ilyasemenov.github.io/kern-jobs/comparison) with Graphile Worker and pg-boss.
 
 ## Install
 
@@ -16,9 +19,9 @@ npm install kern-jobs postgres
 
 ## Usage
 
-The examples import `sql`, the postgres.js client of your application, from `src/db.ts`: `export const sql = postgres(process.env.DATABASE_URL!)`.
+The examples import `sql`, your postgres.js client, from `src/db.ts`: `export const sql = postgres(process.env.DATABASE_URL!)`.
 
-Create the schema of kern-jobs in your database before your application and its workers start, such as at every deploy:
+Migrate the schema of kern-jobs at every deploy, before your application and its workers start:
 
 ```ts
 // src/migrate.ts
@@ -31,31 +34,33 @@ await migrateJobs(postgresJsDriver(sql))
 await sql.end()
 ```
 
-Define each task with the type of its payload in a module that both your application and the worker import:
+Define each task with the type of its payload in a module that your application and the worker share:
 
 ```ts
 // src/tasks.ts
 import { defineTask } from "kern-jobs"
 
-export const indexProductTask = defineTask("products.index").withPayload<{ productId: string }>()
+export const sendWelcomeEmailTask = defineTask("email.sendWelcome").withPayload<{
+  userId: string
+}>()
 ```
 
 Enqueue a job in the transaction that writes its data: workers see the job once the transaction commits, and never when it rolls back.
 
 ```ts
-// src/products.ts
+// src/users.ts
 import { createJobs } from "kern-jobs"
 
 import { sql } from "./db"
-import { indexProductTask } from "./tasks"
+import { sendWelcomeEmailTask } from "./tasks"
 
 await sql.begin(async tx => {
-  await tx`update product set price = ${price} where id = ${productId}`
-  await createJobs(tx).enqueue(indexProductTask, { productId })
+  const [user] = await tx`insert into users (email) values (${email}) returning id`
+  await createJobs(tx).enqueue(sendWelcomeEmailTask, { userId: user.id })
 })
 ```
 
-Implement the task and start a worker in a process of its own:
+Implement the task and start a worker in a separate process:
 
 ```ts
 // src/worker.ts
@@ -63,14 +68,14 @@ import { postgresJsDriver } from "kern-jobs/drivers/postgres-js"
 import { defineManifest, startWorker, stopOnSignals } from "kern-jobs/worker"
 
 import { sql } from "./db"
-import { indexProductTask } from "./tasks"
+import { sendWelcomeEmailTask } from "./tasks"
 
-const indexProduct = indexProductTask.implement(async ({ productId }) => {
-  await updateSearchIndex(productId)
+const sendWelcomeEmail = sendWelcomeEmailTask.implement(async ({ userId }) => {
+  await mailer.sendWelcome(userId)
 })
 
 const worker = startWorker(postgresJsDriver(sql), {
-  manifest: defineManifest({ tasks: [indexProduct] }),
+  manifest: defineManifest({ tasks: [sendWelcomeEmail] }),
 })
 
 stopOnSignals(worker, { close: () => sql.end() })
@@ -80,4 +85,4 @@ To run a job from start to end in one script, see [Getting Started](https://ilya
 
 ## Kern libraries
 
-kern-jobs is part of [Kern](https://ilyasemenov.github.io/kern-orm/ecosystem), a family of PostgreSQL libraries for TypeScript, and integrates with [kern-orm](https://ilyasemenov.github.io/kern-orm/) and [kern-db](https://ilyasemenov.github.io/kern-orm/database/getting-started) when your application uses them.
+kern-jobs is part of [Kern](https://ilyasemenov.github.io/kern-orm/ecosystem), a family of PostgreSQL libraries for TypeScript, alongside [kern-orm](https://ilyasemenov.github.io/kern-orm/) and [kern-db](https://ilyasemenov.github.io/kern-orm/database/getting-started).

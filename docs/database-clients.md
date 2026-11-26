@@ -79,8 +79,8 @@ An enqueue in `db.$transaction` then joins the transaction:
 
 ```ts
 await db.$transaction(async () => {
-  await db.product.find(productId).update({ price })
-  await jobs.enqueue(indexProductTask, { productId })
+  const userId = await db.user.insert({ email }).get("id")
+  await jobs.enqueue(sendWelcomeEmailTask, { userId })
 })
 ```
 
@@ -137,8 +137,8 @@ An enqueue in `db.$transaction` then joins the transaction:
 
 ```ts
 await db.$transaction(async () => {
-  await db.product.find(productId).update({ price })
-  await jobs.enqueue(indexProductTask, { productId })
+  const userId = await db.user.get("id").create({ email })
+  await jobs.enqueue(sendWelcomeEmailTask, { userId })
 })
 ```
 
@@ -161,8 +161,8 @@ To enqueue in a transaction of postgres.js, pass `createJobs` the client of the 
 
 ```ts
 await sql.begin(async tx => {
-  await tx`update product set price = ${price} where id = ${productId}`
-  await createJobs(tx).enqueue(indexProductTask, { productId })
+  const [user] = await tx`insert into users (email) values (${email}) returning id`
+  await createJobs(tx).enqueue(sendWelcomeEmailTask, { userId: user.id })
 })
 ```
 
@@ -180,8 +180,8 @@ export const jobs = createJobs(() => transactionSql.getStore() ?? sql)
 
 await sql.begin(tx =>
   transactionSql.run(tx, async () => {
-    await tx`update product set price = ${price} where id = ${productId}`
-    await jobs.enqueue(indexProductTask, { productId })
+    const [user] = await tx`insert into users (email) values (${email}) returning id`
+    await jobs.enqueue(sendWelcomeEmailTask, { userId: user.id })
   }),
 )
 ```
