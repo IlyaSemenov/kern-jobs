@@ -30,6 +30,30 @@ describe("defineTask", () => {
     ])
   })
 
+  test("reads each setting and option once, also from getters of a class and prototypes, and rejects options that are not an object", () => {
+    let reads = 0
+    class Options {
+      lease = 300
+      get queue() {
+        reads++
+        return "q"
+      }
+    }
+    const task = defineTask("t", new Options())
+    expect([task.lease, task.options, reads]).toEqual([300, { queue: "q" }, 1])
+    expect(defineTask("t", Object.create({ scoped: true, delay: 5 }))).toMatchObject({
+      scoped: true,
+      options: { delay: 5 },
+    })
+    expect({ queue: "mail", ...defineTask("t", { delay: 5 }).options }).toStrictEqual({
+      queue: "mail",
+      delay: 5,
+    })
+    expect(() => defineTask("t", null as never)).toThrow(
+      new TypeError("The options of defineTask must be an object of options, got null"),
+    )
+  })
+
   test("keeps the settings and options through withPayload, withKey, and withOptions, which compute the key and the options from the payload", () => {
     const task = defineTask("search.indexProduct", { lease: 120, scoped: true, delay: 5 })
       .withPayload<{ productId: string }>()

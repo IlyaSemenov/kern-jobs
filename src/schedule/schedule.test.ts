@@ -2,7 +2,7 @@ import { expect, mock, test } from "bun:test"
 
 import { defineTask } from "../task/task"
 
-import { defineSchedule } from "./schedule"
+import { defineSchedule, toWorkerSchedule } from "./schedule"
 
 const task = defineTask("backup")
 
@@ -56,4 +56,28 @@ test("rejects a schedule of a batch task with items of different keys of withKey
     TypeError,
   )
   expect(keyFor).toHaveBeenCalled()
+})
+
+test("rejects a misspelled override of a schedule of a batch task", () => {
+  const digest = defineTask("digest", { key: true }).withBatchPayload<string>({ maxItems: 10 })
+  expect(() =>
+    defineSchedule(digest, { cron: { minute: 0 }, payload: ["a"], enqueue: { kye: "k" } as never }),
+  ).toThrow(
+    new TypeError(
+      "An enqueue of batch task digest takes only a key, got kye; its other options come from defineTask",
+    ),
+  )
+})
+
+test("reads a getter of the overrides once per check of a schedule, and gives the worker the value that it checked", () => {
+  let reads = 0
+  class Overrides {
+    get key() {
+      reads++
+      return `k${reads}`
+    }
+  }
+  const schedule = defineSchedule(task, { cron: { minute: 0 }, enqueue: new Overrides() })
+  const workerSchedule = toWorkerSchedule(schedule)
+  expect([reads, workerSchedule.enqueue]).toEqual([2, { key: "k2" }])
 })

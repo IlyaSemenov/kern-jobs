@@ -4,6 +4,7 @@ import {
   checkEnqueueOverrides,
   type EnqueueOverrides,
   getTaskEnqueueParams,
+  readOverrides,
 } from "../task/options"
 import { type BatchTask, checkTaskName, isTask, type Task, type TaskBase } from "../task/task"
 
@@ -81,7 +82,7 @@ export function toWorkerSchedule(schedule: Schedule): WorkerSchedule {
   if (!schedule || typeof schedule !== "object") {
     throw new TypeError("A manifest takes schedules defined with defineSchedule")
   }
-  const { id, task, payload, enqueue, enabled, catchUp } = schedule
+  const { id, task, payload, enabled, catchUp } = schedule
   if (typeof id !== "string" || !id || !isStorableText(id)) {
     throw new TypeError(
       `Schedule ID must be a string that is not empty and has ${storableTextRule}`,
@@ -97,12 +98,8 @@ export function toWorkerSchedule(schedule: Schedule): WorkerSchedule {
   if (task.scoped) {
     throw new TypeError(`Cannot schedule scoped task ${task.name}`)
   }
-  if (
-    enqueue !== undefined &&
-    (!enqueue || typeof enqueue !== "object" || Array.isArray(enqueue))
-  ) {
-    throw new TypeError(`enqueue of schedule ${id} must be an object of enqueue options`)
-  }
+  // The worker reuses these checked override values for every occurrence.
+  const enqueue = readOverrides(task, schedule.enqueue, `enqueue of schedule ${id}`)
   if (typeof enabled !== "boolean") {
     throw new TypeError(`enabled of schedule ${id} must be a boolean`)
   }

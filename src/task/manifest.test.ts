@@ -133,7 +133,9 @@ describe("defineManifest", () => {
       ],
       [
         { ...schedule, enqueue: "urgent" },
-        new TypeError(`enqueue of schedule ${schedule.id} must be an object of enqueue options`),
+        new TypeError(
+          `enqueue of schedule ${schedule.id} must be an object of options, got urgent`,
+        ),
       ],
       [
         { ...schedule, task: { name: "missing" } },

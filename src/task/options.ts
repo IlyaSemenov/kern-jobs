@@ -103,6 +103,7 @@ export type BatchEnqueueOverrides = {
 
 /**
  * Resolves the enqueue parameters shared by producers and schedules, with overrides applied last; for a batch task, the payload is its array of items.
+ * It reads the overrides more than once, so the caller passes stable values, such as those that `readOverrides` returns.
  * A key of the overrides replaces that of `withKey`, which is then not called.
  */
 export function getTaskEnqueueParams<P>(
@@ -115,7 +116,7 @@ export function getTaskEnqueueParams<P>(
   const ownKey = keyFor === undefined || overrides?.key !== undefined ? undefined : keyFor
   if (maxItems === undefined) {
     const key = ownKey && { key: getPayloadKey(task.name, ownKey(payload)) }
-    const options = task.optionsFor?.(payload)
+    const options = readOptions(task.optionsFor?.(payload), `withOptions of task ${task.name}`)
     if (options?.key !== undefined) {
       throw new TypeError(`withOptions of task ${task.name} cannot return a key; use withKey`)
     }
@@ -201,6 +202,61 @@ interface MergedOptions {
   lease?: unknown
   backoff?: unknown
   scoped?: unknown
+}
+
+/**
+ * Returns a copy of the options of an enqueue and the settings of a task that an object of options gives other than `undefined`, or `undefined` for `undefined`.
+ * The API reads through it the options of `defineTask`, those that the function of `withOptions` returns, and the overrides of an enqueue or a schedule.
+ * It reads each field once by property access, so that an inherited property and a getter of a class count as an own property does, and the checks, the precedence of the key, and the merge see the same values; it drops other fields.
+ * It throws `TypeError`, with `name` in the message, for a value other than `undefined` that is `null`, an array, or not an object.
+ */
+export function readOptions<O extends object | undefined>(value: O, name: string): O {
+  if (value === undefined) return value
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an object of options, got ${String(value)}`)
+  }
+  const {
+    key,
+    queue,
+    maxAttempts,
+    delay,
+    runAt,
+    keyMode,
+    resetAttempts,
+    maxWait,
+    lease,
+    backoff,
+    scoped,
+  } = value as MergedOptions
+  // Only the fields given, so that a spread of a copy, such as of `task.options`, does not replace the fields of another object with `undefined`.
+  const options = {
+    key,
+    queue,
+    maxAttempts,
+    delay,
+    runAt,
+    keyMode,
+    resetAttempts,
+    maxWait,
+    lease,
+    backoff,
+    scoped,
+  }
+  return Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined)) as O
+}
+
+/**
+ * Returns a copy of the overrides of an enqueue of a task as `readOptions` does.
+ * For a batch task, it also throws `TypeError` for an own enumerable property of the overrides other than `key` whose value is not `undefined`, such as a misspelled `key`, which `readOptions` would drop, so that the items would go to the batch of another key.
+ */
+export function readOverrides<O extends object | undefined>(
+  task: TaskBase<string, unknown>,
+  overrides: O,
+  name: string,
+): O {
+  const options = readOptions(overrides, name)
+  if (task.maxItems !== undefined) checkBatchOverrides(task.name, overrides)
+  return options
 }
 
 /**

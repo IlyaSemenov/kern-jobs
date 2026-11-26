@@ -5,7 +5,12 @@ import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
 
 import type { Backoff } from "./backoff"
 import { FAILURE_TASK_SUFFIX, type JobFailure } from "./failure"
-import { checkBatchKeyMode, type EnqueueOptions, type StaticEnqueueOptions } from "./options"
+import {
+  checkBatchKeyMode,
+  type EnqueueOptions,
+  readOptions,
+  type StaticEnqueueOptions,
+} from "./options"
 
 /** Settings of a task, which an enqueue cannot override. */
 export interface TaskSettings {
@@ -267,7 +272,10 @@ export function defineTask<const Name extends string>(
   options?: TaskOptions,
 ): TaskBuilder<Name, void>
 export function defineTask(name: string, options: TaskOptions = {}): TaskBuilder<string, void> {
-  const { lease, backoff, scoped, ...enqueueOptions } = options
+  const { lease, backoff, scoped, ...enqueueOptions } = readOptions(
+    options,
+    "The options of defineTask",
+  )
   checkTaskName(name)
   // Only `implement` gives such a name, so that no task of the application takes the failure jobs of another.
   if (isFailureTaskName(name)) {

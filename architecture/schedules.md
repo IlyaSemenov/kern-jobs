@@ -11,7 +11,7 @@ A shared cursor records the minutes already checked, so workers cannot enqueue t
   For a task without `withOptions`, it checks the merged enqueue options, calling `withKey` for the static payload unless the overrides of the schedule give a key.
   For a task with it, it checks the enqueue overrides without calling the function, for errors that no option of the task can correct; each enqueue checks the merged options.
   The evaluator takes only the compiled schedule, so the public type does not carry the representation of the calendar.
-- The application must not mutate a schedule or its nested options after `startWorker`: the worker compiles the calendar at start but reads the payload and the enqueue overrides at each enqueue.
+- The application must not mutate a schedule or its nested options after `startWorker`: the worker compiles the calendar and copies the fields of the enqueue overrides at start, but reads the payload and the objects of those fields, such as the `Date` of `runAt`, at each enqueue.
 - Each enqueue uses the schedule's static payload, resolves the task options for that payload, and applies the schedule's enqueue overrides.
   Only the task, by its options or `withKey`, or the schedule gives the job a key.
 - The handler may run on another worker in the same schema.

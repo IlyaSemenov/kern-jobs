@@ -37,6 +37,62 @@ describe("enqueue", () => {
     ])
   })
 
+  test("takes a key of the overrides from a getter of a class or a prototype, which replaces the key of withKey", async () => {
+    const keyFor = mock((payload: { id: number }) => `id:${payload.id}`)
+    const task = defineTask("t", { key: "static" }).withPayload<{ id: number }>().withKey(keyFor)
+    class Overrides {
+      get key() {
+        return "getter"
+      }
+    }
+    const jobs = createTestJobs()
+    await jobs.enqueue(task, { id: 1 }, new Overrides())
+    await jobs.enqueue(task, { id: 2 }, Object.create({ key: "inherited" }))
+    expect(keyFor).not.toHaveBeenCalled()
+    expect(jobs.calls.map(call => call.options.key)).toEqual(["getter", "inherited"])
+  })
+
+  test("reads each field of the overrides and of the options of withOptions once, also from getters of a class and prototypes", async () => {
+    const reads: string[] = []
+    class Options {
+      get queue() {
+        reads.push("queue")
+        return `q${reads.length}`
+      }
+    }
+    class Overrides {
+      get delay() {
+        reads.push("delay")
+        return reads.length
+      }
+    }
+    const task = defineTask("t", { runAt: new Date("2030-01-01T00:00:00Z") })
+      .withPayload<number>()
+      .withOptions(() => new Options())
+    const jobs = createTestJobs()
+    await jobs.enqueue(task, 1, new Overrides())
+    await jobs.enqueue(task, 2, Object.create({ delay: 5, maxAttempts: 2 }))
+    expect(reads).toEqual(["delay", "queue", "queue"])
+    expect(jobs.calls.map(call => call.options)).toStrictEqual([
+      { queue: "q2", delay: 1 },
+      { queue: "q3", delay: 5, maxAttempts: 2 },
+    ])
+  })
+
+  test("rejects overrides and options of withOptions that are not an object with TypeError, and records nothing", async () => {
+    const task = defineTask("t")
+      .withPayload<number>()
+      .withOptions(() => 5 as never)
+    const jobs = createTestJobs()
+    await expect(jobs.enqueue(sendEmailTask, { to: "a" }, null as never)).rejects.toThrow(
+      new TypeError("The overrides of an enqueue must be an object of options, got null"),
+    )
+    await expect(jobs.enqueue(task, 1)).rejects.toThrow(
+      new TypeError("withOptions of task t must be an object of options, got 5"),
+    )
+    expect(jobs.calls).toEqual([])
+  })
+
   test("records only the options that a layer gave, also an explicit keyMode replace", async () => {
     const jobs = createTestJobs()
     await jobs.enqueue(sendEmailTask, { to: "a" })
@@ -141,6 +197,22 @@ describe("enqueueMany", () => {
     expect(jobs.calls.map(call => call.options.key)).toEqual(["a", null, "a", "b"])
   })
 
+  test("reads the overrides once per call, also without payloads", async () => {
+    const task = defineTask("t").withPayload<string>()
+    let reads = 0
+    const overrides = {
+      get queue() {
+        reads++
+        return `q${reads}`
+      },
+    }
+    const jobs = createTestJobs()
+    await jobs.enqueueMany(task, ["a", "b"], overrides)
+    await jobs.enqueueMany(task, [], overrides)
+    expect(reads).toBe(2)
+    expect(jobs.calls.map(call => call.options.queue)).toEqual(["q1", "q1"])
+  })
+
   test("rejects two payloads of one key and a payload that JSON cannot serialize as createJobs does, and records nothing, also of the payloads before it", async () => {
     const task = defineTask("t").withPayload<string | bigint>()
     const jobs = createTestJobs()
@@ -186,6 +258,34 @@ describe("enqueueItems", () => {
       ]),
     ).rejects.toThrow(TypeError)
     expect(jobs.calls.map(call => call.options.key)).toEqual(["site:a"])
+  })
+
+  test("uses a key of the overrides from a getter in place of withKey, and rejects an inherited or misspelled override other than the key", async () => {
+    const keyFor = mock((post: { siteId: string }) => `site:${post.siteId}`)
+    const keyed = defineTask("posts.publish")
+      .withBatchPayload<{ siteId: string }>({ maxItems: 3 })
+      .withKey(keyFor)
+    class Overrides {
+      get key() {
+        return "all"
+      }
+    }
+    const jobs = createTestJobs()
+    await jobs.enqueueItems(keyed, [{ siteId: "a" }, { siteId: "b" }], new Overrides())
+    await expect(
+      jobs.enqueueItems(keyed, [{ siteId: "a" }], Object.create({ queue: "q" })),
+    ).rejects.toThrow(
+      new TypeError(
+        "An enqueue of batch task posts.publish takes only a key, got queue; its other options come from defineTask",
+      ),
+    )
+    await expect(jobs.enqueueItems(publishPosts, [1], { kye: "site:a" } as never)).rejects.toThrow(
+      new TypeError(
+        "An enqueue of batch task posts.publish takes only a key, got kye; its other options come from defineTask",
+      ),
+    )
+    expect(keyFor).not.toHaveBeenCalled()
+    expect(jobs.calls.map(call => call.options.key)).toEqual(["all"])
   })
 
   test("seals the pending job of the key with another maxItems and appends to new jobs", async () => {

@@ -17,6 +17,7 @@ import {
   checkKey,
   type EnqueueOverrides,
   getTaskEnqueueParams,
+  readOverrides,
   toStoredKey,
 } from "../task/options"
 import type { BatchTask, Task, TaskBase } from "../task/task"
@@ -209,6 +210,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       overrides?: EnqueueOverrides,
     ): Promise<EnqueueResult> {
       checkNotBatchTask(task)
+      overrides = readOverrides(task, overrides, "The overrides of an enqueue")
       const params = getTaskEnqueueParams(task, payload, overrides)
       const [result] = await store.enqueueMany({
         task: params.task,
@@ -224,6 +226,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
     ): Promise<EnqueueResult[]> {
       checkNotBatchTask(task)
       if (!Array.isArray(payloads)) throw new TypeError("enqueueMany takes an array of payloads")
+      overrides = readOverrides(task, overrides, "The overrides of an enqueue")
       // `Array.from` visits the holes of a sparse array too, as a loop of enqueues does, which `map` skips.
       const jobs = Array.from(payloads, payload => getTaskEnqueueParams(task, payload, overrides))
       if (jobs.length === 0) {
@@ -246,6 +249,7 @@ export function createJobsApi(store: JobStore, scope: JobsOptions["scope"]): Job
       if (maxItems === undefined) {
         throw new TypeError(`Task ${task.name} is not a batch task: enqueue it with enqueue`)
       }
+      overrides = readOverrides(task, overrides, "The overrides of an enqueue")
       const params = getTaskEnqueueParams(task, items, overrides as EnqueueOverrides)
       return store.enqueueItems({ ...params, maxItems, scope: getEnqueueScope(task, scope) })
     },
