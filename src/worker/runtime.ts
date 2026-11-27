@@ -118,7 +118,7 @@ export interface Worker {
   /**
    * Stops the worker: it takes no more jobs, lets the running handlers end until `abortAfter`, then aborts their signals, and resolves once they end and the worker has recorded their outcomes or given that up, such as without a connection; a job whose outcome is not recorded returns to pending once its lease expires, or fails on its last attempt.
    * A job whose handler throws after the abort, other than a `TerminalError` or a `RetryError`, returns to pending at once without spending its attempt, unless the stop has given up by then.
-   * It starts no further check of a schedule and waits for the one in flight.
+   * It starts no further check of a schedule and waits for the one in flight, also for the function of the scopes of its schedule.
    * At `timeout`, or at once with `force`, it stops waiting and rejects: the worker starts no more operations, a handler that still runs is no longer settled, and its job returns once its lease expires; the statements in flight are not cancelled, so a check of a schedule in flight may still enqueue its job.
    * Every call throws `TypeError` or `RangeError` for a wrong option before it acts; a later call with valid options returns the promise of the first one, and its `abortAfter` and `timeout` change nothing, while its `force` gives up the stop in progress.
    */

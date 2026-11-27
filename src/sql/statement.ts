@@ -25,6 +25,7 @@ export type StatementOperation =
   | "enqueue:one"
   | "enqueue:many"
   | "enqueue:items"
+  | "enqueue:scopes"
   | "admin:retry-failed"
   | "admin:delete-job"
   | "admin:delete-pending"

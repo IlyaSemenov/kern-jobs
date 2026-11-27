@@ -1,10 +1,10 @@
-// Enqueue: one upsert by the partial unique index of the open keys, of one job or of many, and the items of a batch task, which the SQL function `enqueue_items` of the schema appends.
+// Enqueue: one upsert by the partial unique index of the open keys, of one job, of many, or of a job in each of many scopes, and the items of a batch task, which the SQL function `enqueue_items` of the schema appends.
 // The SQL function `enqueue` of the schema copies the statement of one job, which `enqueue-function.test.ts` compares with it: a change of the run time or the merge of a job needs a new migration that replaces the function.
 
 import { encodePayload, type KeyMode } from "./job"
 import type { JobTable } from "./job-table"
 import { NOW } from "./postgres"
-import { labelSql, queryValues, type ValuesTarget } from "./statement"
+import { labelSql, type Param, queryValues, type ValuesTarget } from "./statement"
 
 /** Attempts of a job whose enqueue gives no `maxAttempts`. */
 export const DEFAULT_MAX_ATTEMPTS = 25
@@ -148,6 +148,24 @@ export function prepareEnqueueItems(
   return async getDb => appendItems(getDb(), table, o.task, o.scope ?? "", row, o.now ?? null)
 }
 
+/**
+ * Enqueues a job of the same parameters in each of the scopes, as `enqueue` does in one, by one statement, so that the jobs commit or roll back together; it runs no statement for no scopes.
+ * The scopes must be distinct, since one statement cannot update a row twice.
+ * The statement inserts the rows and locks the keys in the order of the scopes, so callers whose scopes overlap must pass them in one order, such as sorted, or they can deadlock.
+ */
+export async function enqueueInScopes(
+  db: ValuesTarget,
+  table: JobTable,
+  o: Omit<EnqueueParams, "scope">,
+  scopes: readonly string[],
+): Promise<void> {
+  if (scopes.length === 0) return
+  const row = toEnqueueRow(o)
+  // One scope takes the statement of one job, as one job of `enqueueMany` does.
+  if (scopes.length === 1) await insertOne(db, table, o.task, scopes[0]!, row, o.now ?? null)
+  else await insertInScopes(db, table, o.task, scopes, row, o.now ?? null)
+}
+
 /** Values of the insert of a job, as `enqueue` and the JSON array of `enqueueMany` send them, with a payload as its JSON text, absent for SQL NULL. */
 interface EnqueueRow {
   queue: string | null
@@ -225,6 +243,49 @@ function mergeIntoPendingJob(
        max_items    = ${table.schema}.check_merge(j.task, j.key, j.max_items, null)`
 }
 
+/** SQL of the values of a job that the statements of one job and of a job in each of many scopes read from their parameters. */
+const jobParams: JobSql = {
+  mode: "$7::text",
+  runAt: "$8::text::timestamptz",
+  delay: "$9::text::float8",
+  maxWait: "$10::text::float8",
+  resetAttempts: "$12::text::boolean",
+}
+
+/**
+ * SQL of the insert of a job of the parameters of `toJobParams`, or of its merge into the pending job of its key, in the scope of the SQL expression `scope`: a parameter, or a column of the row source `scopes`, which follows the time of the statement in `FROM`.
+ * The statement runs on connections of the application too, whose client may serialize a parameter by its type, so every parameter is cast from text.
+ */
+function insertJobSql(table: JobTable, scope: string, scopes = ""): string {
+  return `insert into ${table.name} as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
+     select $2::text, ${scope}, $4::text, $5::text, $7::text, $6::text::jsonb, ${insertedRunAt(jobParams, "n.t")}, n.t, n.t, $11::text::int
+     from (select ${NOW} as t) n${scopes}
+     ${mergeIntoPendingJob(table, jobParams)}`
+}
+
+/** Returns the parameters of the statement of `insertJobSql`: the time, the task, the scope or the scopes, and the values of the job. */
+function toJobParams(
+  now: Date | null,
+  task: string,
+  scope: string | readonly string[],
+  row: EnqueueRow,
+): Param[] {
+  return [
+    now,
+    task,
+    scope,
+    row.queue,
+    row.key,
+    row.payload,
+    row.mode,
+    row.run_at,
+    row.delay,
+    row.max_wait,
+    row.max_attempts,
+    row.reset_attempts,
+  ]
+}
+
 /** Inserts one job, or merges it into the pending job of its key, by a statement of its own parameters. */
 async function insertOne(
   db: ValuesTarget,
@@ -234,42 +295,47 @@ async function insertOne(
   row: EnqueueRow,
   now: Date | null,
 ): Promise<EnqueueResult> {
-  const job: JobSql = {
-    mode: "$7::text",
-    runAt: "$8::text::timestamptz",
-    delay: "$9::text::float8",
-    maxWait: "$10::text::float8",
-    resetAttempts: "$12::text::boolean",
-  }
   const values = await queryValues(
     db,
     // `xmax = 0` tells an inserted row from an updated one.
-    // The statement runs on connections of the application too, whose client may serialize a parameter by its type and rename the columns of the result, so every parameter is cast from text, and the result is one text column.
+    // The client of the application may rename the columns of the result, so it is one text column.
     labelSql(
       "enqueue:one",
-      `insert into ${table.name} as j (task, scope, queue, key, key_mode, payload, run_at, window_started_at, created_at, max_attempts)
-     select $2::text, $3::text, $4::text, $5::text, $7::text, $6::text::jsonb, ${insertedRunAt(job, "n.t")}, n.t, n.t, $11::text::int
-     from (select ${NOW} as t) n
-     ${mergeIntoPendingJob(table, job)}
+      `${insertJobSql(table, "$3::text")}
      returning json_build_array(j.id::text, j.xmax = 0)::text`,
     ),
-    [
-      now,
-      task,
-      scope,
-      row.queue,
-      row.key,
-      row.payload,
-      row.mode,
-      row.run_at,
-      row.delay,
-      row.max_wait,
-      row.max_attempts,
-      row.reset_attempts,
-    ],
+    toJobParams(now, task, scope, row),
   )
   const [id, created] = JSON.parse(values[0]![0]!) as [string, boolean]
   return { id, created }
+}
+
+/**
+ * Inserts a job of the same values in each of the scopes, or merges it into the pending job of its key of that scope, by the statement of one job over the rows of the scopes.
+ * Every row takes the values of the job from the same parameters, so the update of a conflict reads them as that of one job does.
+ */
+async function insertInScopes(
+  db: ValuesTarget,
+  table: JobTable,
+  task: string,
+  scopes: readonly string[],
+  row: EnqueueRow,
+  now: Date | null,
+): Promise<void> {
+  await queryValues(
+    db,
+    // The scopes are one text parameter, an array; the rows are inserted, and their keys locked, in its order, as those of `insertMany` in the order of its jobs.
+    labelSql(
+      "enqueue:scopes",
+      insertJobSql(
+        table,
+        "s.scope",
+        `, unnest($3::text::text[]) with ordinality s(scope, ord)
+     order by s.ord`,
+      ),
+    ),
+    toJobParams(now, task, scopes, row),
+  )
 }
 
 /** Row that the statement of many jobs returns: the id and the key of the row, and whether the statement inserted it. */

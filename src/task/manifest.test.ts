@@ -8,6 +8,41 @@ import { defineTask } from "./task"
 const indexProduct = defineTask("search.indexProduct").withPayload<{ productId: string }>()
 const purgeExpiredSessions = defineTask("sessions.purgeExpired")
 
+/** Schedules built by hand whose scopes, or the scoped batch task, `defineSchedule` would reject, with the error of each. */
+const invalidScopeSchedules = (() => {
+  const recalculate = defineTask("metrics.recalculate", { scoped: true })
+  const scoped = defineSchedule(recalculate, { cron: { minute: 0 }, scopes: ["a"] })
+  const unscoped = defineSchedule(purgeExpiredSessions, { cron: { minute: 0 } })
+  const digest = defineTask("digest", { scoped: true, key: true }).withBatchPayload<string>({
+    maxItems: 10,
+  })
+  return [
+    [
+      { ...scoped, scopes: undefined },
+      new TypeError(
+        `Schedule ${scoped.id} of scoped task ${recalculate.name} must give its scopes`,
+      ),
+    ],
+    [
+      { ...unscoped, scopes: () => ["a"] },
+      new TypeError(
+        `Schedule ${unscoped.id} of task ${purgeExpiredSessions.name}, which is not scoped, takes no scopes`,
+      ),
+    ],
+    [
+      { ...scoped, scopes: "a" },
+      new TypeError(
+        `scopes of schedule ${scoped.id} must be an array of scopes or a function that returns one`,
+      ),
+    ],
+    [{ ...scoped, scopes: ["a", ""] }, RangeError],
+    [
+      { ...scoped, task: digest, payload: ["tick"] },
+      new TypeError("Cannot schedule scoped batch task digest"),
+    ],
+  ] as const
+})()
+
 describe("defineManifest", () => {
   test("defines a manifest of implementations with distinct task names", () => {
     const index = indexProduct.implement(() => {})
@@ -145,6 +180,7 @@ describe("defineManifest", () => {
         { ...schedule, task: { ...purgeExpiredSessions, name: "t\ud800" } },
         "The name of a task must be",
       ],
+      ...invalidScopeSchedules,
     ] as const) {
       expect(() => defineManifest({ tasks: [], schedules: [invalid as never] })).toThrow(error)
     }
@@ -216,6 +252,12 @@ describe("mergeManifests", () => {
       { tasks: [index], schedules: sparse },
     ]) {
       expect(() => mergeManifests(manifest as never)).toThrow(TypeError)
+    }
+  })
+
+  test("rejects invalid scopes of a schedule and a schedule of a scoped batch task, as defineManifest does", () => {
+    for (const [invalid, error] of invalidScopeSchedules) {
+      expect(() => mergeManifests({ tasks: [], schedules: [invalid as never] })).toThrow(error)
     }
   })
 })

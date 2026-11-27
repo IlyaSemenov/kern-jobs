@@ -18,6 +18,7 @@ import {
   createTestSchema,
   databaseUrl,
   getStatementLabel,
+  isPending,
   jobs,
   only,
   pauseAt,
@@ -1807,6 +1808,57 @@ describe("stop", () => {
       ).toEqual([])
     },
   )
+
+  describe("a check whose function of the scopes is pending", () => {
+    /** Starts a worker with a schedule of a scoped task whose function of the scopes waits for `tenants`, counting the connections that the worker reserves from its pool. */
+    async function startWithPendingScopes() {
+      const called = Promise.withResolvers<void>()
+      const tenants = Promise.withResolvers<string[]>()
+      openAll.push(() => tenants.resolve([]))
+      const counter = { acquired: 0 }
+      const task = defineTask("metrics.recalculate", { scoped: true })
+      const schedule = defineSchedule(task, {
+        cron: { minute: "*" },
+        scopes: () => {
+          called.resolve()
+          return tenants.promise
+        },
+      })
+      const worker = startTestWorker(testSchema, {
+        driver: {
+          ...testSchema.driver,
+          acquire() {
+            counter.acquired++
+            return testSchema.driver.acquire()
+          },
+        },
+        heartbeatSource: testSchema.createDriver({ max: 1 }),
+        tasks: {},
+        schedules: [toWorkerSchedule(schedule)],
+      })
+      await called.promise
+      return { worker, tenants, counter }
+    }
+
+    test("stop waits for it, and the check enqueues in its scopes before stop resolves", async () => {
+      const { worker, tenants } = await startWithPendingScopes()
+      const stopped = worker.stop()
+      expect(await isPending(stopped)).toBe(true)
+      tenants.resolve(["a", "b"])
+      await stopped
+      expect((await jobs(testSchema.conn.query)).map(job => job.scope)).toEqual(["a", "b"])
+    })
+
+    test("after the timeout of stop, the check takes no connection once the function returns, and writes nothing", async () => {
+      const { worker, tenants, counter } = await startWithPendingScopes()
+      await expect(worker.stop({ timeout: 0.1 })).rejects.toThrow("did not stop within 0.1 s")
+      const acquired = counter.acquired
+      tenants.resolve(["a"])
+      await sleep(200)
+      expect(counter.acquired - acquired).toBe(0)
+      expect(await jobs(testSchema.conn.query)).toEqual([])
+    })
+  })
 
   test("at its timeout, stop does not wait for a stuck heartbeat, whose connection returns to its pool once the heartbeat ends", async () => {
     await enqueue(testSchema.conn, testSchema.table, { task: "t" })

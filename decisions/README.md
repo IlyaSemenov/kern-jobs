@@ -28,6 +28,8 @@ Measurements come from one machine without network, so they compare designs rath
 - [A durable cursor for each schedule](schedules/occurrence-cursor.md).
 - [One job per recovery window](schedules/one-job-per-recovery-window.md).
 - [One definition per schedule ID](schedules/one-definition-per-id.md): a changed definition takes a new ID.
+- [A schedule gives the scopes of a scoped task](schedules/scopes-of-a-schedule.md), and enqueues in each of them under one cursor, rather than a dispatcher task of the application or a cursor per scope.
+- [The function of the scopes runs outside the transactions of the check](schedules/scopes-outside-the-transaction.md): one decides under the lock that an enqueue is due, and one enqueues as of the time of the first.
 
 ## Claiming
 

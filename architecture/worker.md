@@ -159,7 +159,7 @@ It runs these phases:
 
 1. At once, the worker starts no claim cycle and no check of a schedule, and the cycle in flight sends no further claim statement; the heartbeat keeps the leases of the running jobs, and handlers that end are settled as usual.
 2. At `abortAfter`, or at `timeout` if it comes first, the worker aborts the signals of the handlers that still run with `stop`.
-3. Once the claim cycle, the check of the schema, and the check of a schedule in flight have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, closes the session of the heartbeat, and resolves.
+3. Once the claim cycle, the check of the schema, and the check of a schedule in flight, also the function of its scopes, have returned and every handler and its settlement have ended, it stops the reaper and the heartbeat, closes the session of the heartbeat, and resolves.
 
 The claim cycle in flight is awaited apart from the abort, since it may wait for a connection of the pool that a handler holds until its abort.
 
@@ -167,7 +167,7 @@ At `timeout`, or at once at a call with `force`, if `stop` has not resolved, the
 `force` gives up within its call, before the abort runs the listeners of the application, and `stop` keeps its promise before that, so that a call of `stop` from such a listener returns it.
 After it gives up:
 
-- It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, no first write of a check of a schedule, and no round of the reaper.
+- It starts no operation any more: no heartbeat, no settlement or retry of one, no settlement of a handler that ends later, no requeue of a claim that returns later, no first write of a transaction of a check of a schedule, no call of the function of its scopes, and no round of the reaper.
 - It cancels no operation that has started: a statement in flight, a settlement transaction with its retries after `23505`, a check of a schedule that has begun to write, which may still enqueue its job, and a round of the reaper end in the background, and the heartbeat closes its session after its statement in flight.
 - A session that the heartbeat opens after the stop is closed without a statement.
 - A heartbeat sent before it gave up may still extend the leases of its claims once; nothing extends them after it.

@@ -1,6 +1,7 @@
 // Run of a handler in a test, with the payload and the metadata that a worker would give a job of its task.
 
-import { checkJobId, checkScope } from "../producer/jobs"
+import { checkScope } from "../limits"
+import { checkJobId } from "../producer/jobs"
 import { DEFAULT_MAX_ATTEMPTS } from "../sql/enqueue"
 import { decodePayload, encodePayload } from "../sql/job"
 import { getTaskEnqueueParams } from "../task/options"

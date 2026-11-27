@@ -38,6 +38,16 @@ Keys are unique per scope and task ([decision](../decisions/enqueue/key-per-task
 - The update of a conflict reads `delay`, `maxWait`, and `resetAttempts` of its job, which are not columns of `excluded`, from a second parameter, a JSON object of the jobs with a key by their keys, which an uncorrelated subquery parses once per statement, also under a generic plan.
 - The statement returns a row of each job in no promised order, and the core maps the rows back to the jobs: a job with a key by its key, and the jobs without a key to the new rows without a key in the ascending order of their ids.
 
+## A job in each of many scopes
+
+`enqueueInScopes` of the core enqueues a job of the same parameters in each of many scopes, which a [schedule of a scoped task](schedules.md#scopes) does, with the statement of one job over the rows of an array of scopes, so the jobs commit or roll back together, and each merges into the pending job of its key of its own scope as an enqueue of one job does; one scope takes the statement of one job, and no scopes take none.
+
+- The scopes travel as one text parameter, an array, and the values of the job as the parameters of one job, which every row and the update of every conflict read, so the statement needs no object of the values by key, as that of many jobs does.
+- The scopes must be distinct, since one statement cannot update a row twice.
+- The statement inserts the rows and locks the keys in the order of the scopes, and returns no rows.
+  Its callers pass sorted scopes, so that two of them never lock overlapping scopes in different orders; a transaction of the application that enqueues the key in several scopes in another order can still deadlock with it.
+- The items of a batch task have no such statement, since [`enqueue_items`](#batches) takes the advisory lock of its key in each scope until the transaction ends ([Schedules](schedules.md#scopes)).
+
 ## Batches
 
 A batch is a job of a batch task, whose payload is an array of items that the enqueues of its key append, which `max_items` of the row bounds ([decision](../decisions/enqueue/batch-function.md)).

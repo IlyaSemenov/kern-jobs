@@ -1,6 +1,6 @@
 // Jobs API of an application: enqueues of its tasks, and retries and deletes of its jobs, through the database client of the application.
 
-import { checkStorableText, utf8Length } from "../limits"
+import { checkScope, checkStorableText } from "../limits"
 import {
   type EnqueueItemsParams,
   type EnqueueJob,
@@ -432,17 +432,4 @@ function getJobsScope(scope: JobsOptions["scope"]): string | null {
   const value = scope()
   checkScope(value)
   return value
-}
-
-/** Longest scope in bytes of UTF-8, the limit of the column `scope`. */
-const maxScopeBytes = 128
-
-/**
- * Throws `TypeError` for a scope that is not storable text, and `RangeError` for an empty one, which the table stores for jobs without a scope, or one longer than 128 bytes in UTF-8.
- */
-export function checkScope(scope: unknown): asserts scope is string {
-  checkStorableText("scope", scope)
-  if (scope === "" || utf8Length(scope) > maxScopeBytes) {
-    throw new RangeError(`scope must be 1 to ${maxScopeBytes} bytes in UTF-8, got "${scope}"`)
-  }
 }

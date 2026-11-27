@@ -27,8 +27,7 @@ export const manifest = defineManifest({
 Give each schedule of the same task its own `id`: it defaults to the task name and identifies the schedule across your workers.
 The task can run on any worker of the same schema, so a worker that schedules it need not implement it; [check in a test](../testing/#check-the-manifest) that some manifest does.
 
-A schedule enqueues an unscoped task.
-To dispatch work per tenant, have that task enumerate tenants and enqueue a [scoped task](./scopes) for each one.
+To enqueue a [scoped task](./scopes) for each of your tenants, [give the schedule its scopes](#run-a-schedule-for-each-tenant).
 
 ## Define a UTC calendar
 
@@ -55,12 +54,50 @@ Give it a [key](./keys) to merge it into a pending job, or a [queue](./queues) t
 
 Keep the functions of `withKey` and `withOptions` of the task fast and free of side effects; the worker reports an error they throw as a [`schedule` error](../operations/monitoring#report-errors).
 
+## Run a schedule for each tenant
+
+To run a recurring job for each tenant, such as a nightly recalculation of its metrics, schedule a [scoped task](./scopes) with `scopes`, a function that returns the scopes of your tenants or an array of them: every occurrence enqueues the task in each scope.
+
+```ts [src/worker/manifest.ts]
+import { defineManifest, defineSchedule } from "kern-jobs/worker"
+
+import { recalculateMetricsTask } from "../tasks"
+import { listTenantIds } from "../tenants"
+import recalculateMetrics from "./tasks/recalculate-metrics"
+
+export const manifest = defineManifest({
+  tasks: [recalculateMetrics],
+  schedules: [
+    defineSchedule(recalculateMetricsTask, {
+      cron: { minute: 0, hour: 3 },
+      scopes: () => listTenantIds(),
+      catchUp: { within: 3600 },
+    }),
+  ],
+})
+```
+
+The job of each tenant is an ordinary job of its scope: a [key](./keys) merges it only with the pending job of that tenant, and it is retried and fails on its own.
+The schedule enqueues the same payload, key, and options in every scope.
+
+The jobs of all tenants of an occurrence are enqueued together or not at all.
+
+The worker calls the function at each occurrence, so it picks up new tenants without a restart.
+Write the function so that it:
+
+- is safe to call from several workers at once: each may call it for the same occurrence, and only one of the lists is used;
+- bounds a wait for your database or registry by a timeout: the worker waits for the function, also when it stops, and checks no other schedule meanwhile.
+
+If the function or the enqueue fails, the worker reports a [`schedule` error](../operations/monitoring#report-errors), and a later check tries the occurrence again while it is due: pass [`catchUp`](#recover-missed-occurrences) with a window that covers how long such a failure may last.
+
+A scoped [batch task](./keys#batches) cannot be scheduled.
+
 ## Recover missed occurrences
 
 Workers check their schedules about every 15 seconds, also while their handlers are busy.
 A schedule enqueues at most once per minute, also when several workers list it or its previous job completes within the minute.
 
-If no check of the schedule commits during the minute of an occurrence, such as during downtime or after a database error, the occurrence is skipped.
+If no check of the schedule that starts during the minute of an occurrence succeeds, such as during downtime or after a database error, the occurrence is skipped.
 Pass `catchUp: { within: 3600 }` to enqueue it if a worker checks the schedule within the next hour.
 A check enqueues at most once however many occurrences it recovers, so write the task to process everything that is due rather than a single occurrence.
 A new schedule starts at the minute of its first successful check.
@@ -72,8 +109,8 @@ A schedule removed from every manifest is not paused: once it returns, `catchUp`
 
 ## Change a schedule
 
-Give a schedule the same definition on all workers that list its `id`, including `enabled`, the payload, and the options.
-During a rolling deployment, whichever worker checks a minute first decides whether to enqueue a job for it, so an occurrence of only the new definition can be skipped, and one of only the old definition can still run.
+Give a schedule the same definition on all workers that list its `id`, including `enabled`, the payload, the options, and the scopes.
+During a rolling deployment, whichever worker first records its check of a minute decides whether to enqueue a job for it, so an occurrence of only the new definition can be skipped, and one of only the old definition can still run.
 Under the same `id` with `catchUp`, a changed definition also applies to the occurrences missed before the change.
 
 To change a schedule without this race, do one of the following:

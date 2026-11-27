@@ -53,6 +53,7 @@ A statement that also runs on the executor of an application, such as an enqueue
 - The check of the schema at the start of the worker runs its statements on the pool ([Migrations](migrations.md#check-of-a-worker)).
 - Fail and requeue run in a transaction of a `Database` of kern-db that the worker creates over its driver, which reserves a connection from `BEGIN` to the end of the transaction, so a statement of another handler never runs inside it ([decision](../decisions/drivers/transaction-connection.md)).
   Scheduled enqueues start independent transactions in the same database; no application code runs transactions in it, so such a transaction never nests in another one, and the worker never closes it, since that would close the driver.
+  The function of the scopes of a schedule, which is code of the application, runs between the two transactions of its check, while the check holds no connection ([Schedules](schedules.md#check)).
 - Fail and requeue start their transaction at `READ COMMITTED`, whatever the default isolation of the connection.
 - Heartbeats run in a session that the worker opens with `openSession` of its `Database`, which reserves a connection for the life of the worker from the pool of its driver, which therefore needs at least two connections, and one more for each other worker on it ([Worker](worker.md#accepted-limitations)); the runtime can take the connection from another pool, which tests use to break it alone.
   [Leases](leases.md#heartbeat) describes why they need a connection of their own.

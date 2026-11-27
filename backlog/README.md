@@ -36,7 +36,7 @@ Ideas that wait for an application that needs them, or that are not planned.
 - [Group concurrency and batches](group-concurrency-and-batches.md): several active jobs per scope or queue, and batch handlers.
 - [Job dependencies and workflows](job-dependencies-and-workflows.md): jobs that wait for other jobs.
 - [Dashboard](dashboard.md): a user interface over administration.
-- [Schedule extensions](schedule-extensions.md): time zones, recurrence rules, bounded multi-occurrence recovery, cheaper checks, and lag monitoring.
+- [Schedule extensions](schedule-extensions.md): time zones, recurrence rules, bounded multi-occurrence recovery, cheaper checks, lag monitoring, and scoped batch tasks.
 
 ## Keeping the backlog
 

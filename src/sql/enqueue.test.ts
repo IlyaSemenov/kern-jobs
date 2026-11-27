@@ -1,8 +1,8 @@
-// Enqueue: key modes, the uniqueness of pending keys under concurrent producers, events during `active`, the pending row held by an uncommitted enqueue, and trailing-edge debounce with maxWait on virtual time.
+// Enqueue: key modes, a job in each of many scopes, the uniqueness of pending keys under concurrent producers, events during `active`, the pending row held by an uncommitted enqueue, and trailing-edge debounce with maxWait on virtual time.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
-import { param, sql } from "kern-orm/db"
+import { isQueryError, param, sql } from "kern-orm/db"
 import { waitForLock } from "kern-orm/testing"
 
 import {
@@ -12,6 +12,7 @@ import {
   isPending,
   jobs,
   only,
+  recordLabels,
   secondsOf,
   T,
   type TestSchema,
@@ -24,13 +25,14 @@ import * as t from "../worker/db/types"
 
 import {
   enqueue,
+  enqueueInScopes,
   enqueueItems,
   type EnqueueItemsParams,
   enqueueMany,
   type EnqueueParams,
 } from "./enqueue"
 import type { KeyMode } from "./job"
-import type { ValuesTarget } from "./statement"
+import { toStatementLabel, type ValuesTarget } from "./statement"
 
 let testSchema: TestSchema
 beforeEach(async () => {
@@ -347,6 +349,96 @@ describe("enqueueMany", () => {
       expect(rows).toHaveLength(2)
     })
   }
+})
+
+describe("enqueueInScopes", () => {
+  test("inserts a job of the same values in each scope, with ids in the order of the scopes", async () => {
+    await enqueueInScopes(
+      testSchema.conn,
+      testSchema.table,
+      { task: "t", queue: "q", payload: { n: 1 }, delay: 5, maxAttempts: 3, now: T(0) },
+      ["c", "a", "b"],
+    )
+    // `jobs` reads the rows in the order of their ids.
+    expect(
+      (await jobs(testSchema.conn.query)).map(row => [
+        row.scope,
+        row.queue,
+        row.payload,
+        secondsOf(row.runAt),
+        row.maxAttempts,
+      ]),
+    ).toEqual([
+      ["c", "q", { n: 1 }, 5, 3],
+      ["a", "q", { n: 1 }, 5, 3],
+      ["b", "q", { n: 1 }, 5, 3],
+    ])
+  })
+
+  test("merges the job into the pending job of its key of each scope by its key mode, and inserts it in a scope without one", async () => {
+    const modes = {
+      replace: { mode: "replace", delay: 2 },
+      keep: { mode: "keep", delay: 2 },
+      debounce: { mode: "debounce", delay: 3, maxWait: 4 },
+    } as const
+    for (const [task, o] of Object.entries(modes)) {
+      await enqueue(testSchema.conn, testSchema.table, {
+        task,
+        scope: "a",
+        key: "k",
+        payload: 1,
+        maxAttempts: 3,
+        now: T(0),
+        ...(task === "debounce" ? { mode: "debounce", delay: 2, maxWait: 10 } : { runAt: T(5) }),
+      })
+      await testSchema.conn.query`update ${schema.job} set attempts = 2 where task = ${task}`
+      await enqueueInScopes(
+        testSchema.conn,
+        testSchema.table,
+        { task, key: "k", payload: 2, maxAttempts: 9, resetAttempts: true, now: T(1), ...o },
+        ["a", "b"],
+      )
+    }
+    expect(
+      (await jobs(testSchema.conn.query)).map(row => [
+        row.task,
+        row.scope,
+        row.payload,
+        secondsOf(row.runAt),
+        secondsOf(row.windowStartedAt),
+        row.attempts,
+        row.maxAttempts,
+      ]),
+    ).toEqual([
+      ["replace", "a", 2, 3, 0, 0, 9],
+      ["replace", "b", 2, 3, 1, 0, 9],
+      ["keep", "a", 1, 5, 0, 2, 3],
+      ["keep", "b", 2, 3, 1, 0, 9],
+      // Due at least(1 + 3, 0 + 4) in the window that opened at 0.
+      ["debounce", "a", 2, 4, 0, 0, 9],
+      ["debounce", "b", 2, 4, 1, 0, 9],
+    ])
+  })
+
+  test("rejects a scope given twice, which would update the pending job of a key twice, with 21000, and enqueues in no scope", async () => {
+    const error = await enqueueInScopes(
+      testSchema.conn,
+      testSchema.table,
+      { task: "t", key: "k" },
+      ["a", "b", "a"],
+    ).catch((error: unknown) => error)
+    expect(isQueryError(error, "cardinality_violation")).toBe(true)
+    expect(await jobs(testSchema.conn.query)).toEqual([])
+  })
+
+  test("takes one statement for several scopes, the statement of one job for one scope, and none for no scopes", async () => {
+    const { target, labels } = recordLabels(testSchema.conn)
+    for (const scopes of [["a", "b"], ["c"], []]) {
+      await enqueueInScopes(target, testSchema.table, { task: "t" }, scopes)
+    }
+    expect(labels).toEqual((["enqueue:scopes", "enqueue:one"] as const).map(toStatementLabel))
+    expect((await jobs(testSchema.conn.query)).map(row => row.scope)).toEqual(["a", "b", "c"])
+  })
 })
 
 describe("concurrent producers", () => {

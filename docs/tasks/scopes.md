@@ -30,13 +30,15 @@ await jobs.enqueue(indexProductTask, { productId })
 ```
 
 Keys and queues work within a scope: the jobs of different scopes with the same key never merge, and a queue of the same name does not make them run one at a time.
-An enqueue through `jobs` of a task that is not scoped, such as of a cron job across all tenants, adds an unscoped job, also when `jobs` has a scope; an [enqueue from SQL](./enqueue#enqueueing-from-sql) takes the scope that it is given.
+An enqueue through `jobs` of a task that is not scoped, such as of a cleanup across all tenants, adds an unscoped job, also when `jobs` has a scope; an [enqueue from SQL](./enqueue#enqueueing-from-sql) takes the scope that it is given.
 
 Outside of a request, such as in a script that enqueues a job for every tenant, pass the scope to `createJobs` as a string:
 
 ```ts
 await createJobs(sql, { scope: tenant.id }).enqueue(indexProductTask, { productId })
 ```
+
+To run a recurring job for every tenant, such as a nightly report, [give its schedule the scopes](./schedules#run-a-schedule-for-each-tenant) instead.
 
 To retry or delete the jobs of every scope, such as in a script of an operator, pass [`ALL_SCOPES`](../operations/managing-jobs#jobs-of-a-scope) instead.
 

@@ -43,7 +43,7 @@ process.exit(code)
 ```
 
 It resolves once the worker has stopped and rejects as [`stop`](#stop-from-your-code) does, such as at `timeout`.
-Pass `timeout` so that the stop and then your shutdown end before your process manager kills the process; without it, the stop waits as long as the handlers run.
+Pass `timeout` so that the stop and then your shutdown end before your process manager kills the process.
 Exit the process yourself after your shutdown, since a handler that ignores its abort or a query in flight can keep it running.
 
 A later signal forces the stop as with `stopOnSignals`, and `waitForSignalAndStop` rejects at once, so that your shutdown still runs.
@@ -61,7 +61,8 @@ try {
 }
 ```
 
-`stop` stops the worker as above and resolves once the handlers have ended and the worker has finished its attempts to record their outcomes, so the database client can close then; without `timeout`, it waits as long as the handlers run.
+`stop` stops the worker as above and resolves once the handlers have ended and the worker has finished its attempts to record their outcomes, so the database client can close then.
+It also waits for the check of a schedule in flight, including the call of the function of its [scopes](../tasks/schedules#run-a-schedule-for-each-tenant); without `timeout`, it waits as long as they run.
 At `timeout`, it stops waiting and rejects: the worker starts no more database work and records the outcome of no handler that ends later, and the job of such a handler returns later with its attempt spent, or fails if that was its last attempt.
 A database operation that has already begun is not cancelled and may end after the rejection, such as a check of a schedule that still enqueues its job, so exit the process rather than wait for it.
 

@@ -313,6 +313,82 @@ describe("a running worker", () => {
     expect(await handled.promise).toBe("separate")
   })
 
+  test("runs a scheduled scoped task in each scope that the function of its schedule returns, each job with its own attempts and failure", async () => {
+    const recalculate = defineTask("metrics.recalculate", {
+      scoped: true,
+      maxAttempts: 2,
+      backoff: fixedBackoff(0),
+    })
+    const schedule = defineSchedule(recalculate, {
+      cron: { minute: "*" },
+      scopes: async () => ["globex", "initech", "acme"],
+    })
+    const failure = new Error("the metrics of initech are unavailable")
+    const settled = Promise.withResolvers<void>()
+    const attempts: [scope: string, attempt: number][] = []
+    let failed = false
+    // The jobs of the two other scopes complete, and the job of the third fails for good, in any order.
+    const check = () => {
+      if (failed && attempts.length === 4) settled.resolve()
+    }
+    const worker = start({
+      manifest: defineManifest({
+        tasks: [
+          recalculate.implement((_, { job }) => {
+            attempts.push([job.scope, job.attempt])
+            if (job.scope === "initech") throw failure
+            check()
+          }),
+        ],
+        schedules: [schedule],
+      }),
+      onError: (error, info) => {
+        if (error !== failure) settled.reject(error)
+        else if (info.source === "handler" && info.decision === "terminal") {
+          failed = true
+          check()
+        }
+      },
+    })
+    await settled.promise
+    await worker.stop()
+    expect(attempts.toSorted()).toEqual([
+      ["acme", 1],
+      ["globex", 1],
+      ["initech", 1],
+      ["initech", 2],
+    ])
+    expect(
+      (await jobs(testSchema.conn.query)).map(job => [job.scope, job.state, job.attempts]),
+    ).toEqual([["initech", "failed", 2]])
+  })
+
+  test("reports an error of the function of the scopes of a schedule with its ID and continues to the next schedule", async () => {
+    const failure = new Error("the registry of tenants is unavailable")
+    const failing = defineSchedule(defineTask("metrics.recalculate", { scoped: true }), {
+      id: "metrics.hourly",
+      cron: { minute: "*" },
+      scopes: async () => {
+        throw failure
+      },
+    })
+    const independent = defineSchedule(purgeExpiredSessions, { cron: { minute: "*" } })
+    const reported = Promise.withResolvers<WorkerErrorInfo>()
+    const handled = Promise.withResolvers<void>()
+    start({
+      manifest: defineManifest({
+        tasks: [purgeExpiredSessions.implement(() => handled.resolve())],
+        schedules: [failing, independent],
+      }),
+      onError(error, info) {
+        if (error === failure) reported.resolve(info)
+        else reported.reject(error)
+      },
+    })
+    const [info] = await Promise.all([reported.promise, handled.promise])
+    expect(info).toEqual({ source: "schedule", id: "metrics.hourly" })
+  })
+
   test("reports a schedule blocked by a producer's pending key and continues to the next schedule", async () => {
     const blocked = defineSchedule(indexProduct, {
       cron: { minute: "*" },
@@ -524,6 +600,13 @@ describe("options", () => {
         "driver must be a driver of kern-db, such as postgresJsDriver(sql) of kern-jobs/drivers/postgres-js",
       ),
     )
+    // Schedules of a manifest built without defineManifest and defineSchedule.
+    const recalculate = defineTask("metrics.recalculate", { scoped: true })
+    const scoped = defineSchedule(recalculate, { cron: { minute: 0 }, scopes: ["a"] })
+    const digest = defineTask("digest", { scoped: true, key: true }).withBatchPayload<string>({
+      maxItems: 10,
+    })
+    const withSchedule = (schedule: object) => ({ manifest: { tasks: [], schedules: [schedule] } })
     const cases: [Record<string, unknown>, ErrorConstructor, string][] = [
       [
         { manifest: undefined },
@@ -537,6 +620,13 @@ describe("options", () => {
         { manifest: { tasks: [{ task: { ...purgeExpiredSessions, lease: 1e20 }, handler() {} }] } },
         RangeError,
         "lease of task sessions.purgeExpired",
+      ],
+      [withSchedule({ ...scoped, scopes: undefined }), TypeError, "must give its scopes"],
+      [withSchedule({ ...scoped, scopes: ["a", ""] }), RangeError, "scope must be"],
+      [
+        withSchedule({ ...scoped, task: digest, payload: ["tick"] }),
+        TypeError,
+        "Cannot schedule scoped batch task digest",
       ],
       [{ schemaName: 5 }, TypeError, "schemaName must be"],
       [{ schemaName: "" }, TypeError, "schemaName"],

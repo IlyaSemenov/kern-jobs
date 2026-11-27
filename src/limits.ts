@@ -1,4 +1,4 @@
-// Limits of the values that the API takes and PostgreSQL stores: storable text, the length of text in the bytes that PostgreSQL limits, and counts that statements take as `int`.
+// Limits of the values that the API takes and PostgreSQL stores: storable text, the length of text in the bytes that PostgreSQL limits, scopes, and counts that statements take as `int`.
 
 /** Returns the length of a string in bytes of UTF-8, the unit of the limits of names and columns of PostgreSQL. */
 export function utf8Length(text: string): number {
@@ -21,6 +21,19 @@ export function checkStorableText(name: string, value: unknown): asserts value i
   if (typeof value !== "string" || !isStorableText(value)) {
     const got = typeof value === "string" ? JSON.stringify(value) : String(value)
     throw new TypeError(`${name} must be a string that has ${storableTextRule}, got ${got}`)
+  }
+}
+
+/** Longest scope in bytes of UTF-8, the limit of the column `scope`. */
+const maxScopeBytes = 128
+
+/**
+ * Throws `TypeError` for a scope that is not storable text, and `RangeError` for an empty one, which the table stores for jobs without a scope, or one longer than 128 bytes in UTF-8.
+ */
+export function checkScope(scope: unknown): asserts scope is string {
+  checkStorableText("scope", scope)
+  if (scope === "" || utf8Length(scope) > maxScopeBytes) {
+    throw new RangeError(`scope must be 1 to ${maxScopeBytes} bytes in UTF-8, got "${scope}"`)
   }
 }
 
