@@ -95,13 +95,14 @@ test("catch-up resolves task options at enqueue time and applies schedule overri
   queue = "recovery"
   await run(schedule, instant("03:15:00"))
   expect(resolved).toEqual(["recovery"])
-  expect(only(await jobs(testSchema.conn.query))).toMatchObject({
+  const job = only(await jobs(testSchema.conn.query))
+  expect(job).toMatchObject({
     key: null,
     queue: "eu-recovery",
     maxAttempts: 1,
     payload: { region: "eu" },
-    runAt: instant("03:15:10"),
   })
+  expect(job.runAt).toBe(instant("03:15:10").getTime())
 })
 
 /** Returns a database of the test schema that records the labels of the statements of its transactions, without the statements of transaction control and its settings, which carry none. */
@@ -142,15 +143,15 @@ test("a check reads the cursor and the clock exactly on a pool whose DateStyle a
     cron: { minute: 59, hour: 19 },
     catchUp: { within: 3600 },
   })
-  // Adding one minute to this cursor puts the lower bound one microsecond past the 19:59 occurrence.
+  // Adding one minute to this cursor puts the lower bound one millisecond past the 19:59 occurrence.
   await testSchema.conn.query`
-    insert into ${scheduleTableSql()} (id, evaluated_through) values (${covered.id}, '2030-01-02 19:58:00.000001+00')`
+    insert into ${scheduleTableSql()} (id, evaluated_through) values (${covered.id}, '2030-01-02 19:58:00.001+00')`
   const current = defineSchedule(defineTask("current"), { cron: { minute: 0, hour: 20 } })
   for (const schedule of [covered, current]) {
     await evaluateSchedule(db, testSchema.table, toWorkerSchedule(schedule), { now })
   }
   expect((await jobs(testSchema.conn.query)).map(job => [job.task, job.runAt])).toEqual([
-    ["current", now],
+    ["current", now.getTime()],
   ])
   const cursors = await testSchema.conn.query`
     select id, (extract(epoch from evaluated_through) * 1000)::float8 as cursor from ${scheduleTableSql()} order by id`.select(
@@ -264,12 +265,12 @@ test("a check whose registration waits for a concurrent one locks the committed 
   await registrar.query`commit`
   await check
   const job = only(await jobs(testSchema.conn.query))
-  expect(job.runAt.getTime()).toBe(started)
+  expect(job.runAt).toBe(started)
   const cursor = await testSchema.conn.query`
     select (extract(epoch from evaluated_through) * 1000)::float8 from ${scheduleTableSql()}`.get(
     t.doublePrecision,
   )
-  expect(cursor).toBe(Math.floor(job.runAt.getTime() / 60000) * 60000)
+  expect(cursor).toBe(Math.floor(job.runAt / 60000) * 60000)
 })
 
 test("a replica skips a locked schedule and a later evaluation can still enqueue it", async () => {
@@ -326,7 +327,7 @@ test("a changed definition applies to the minutes after the last check, includin
   await run(defineSchedule(task, { cron: { minute: 0, hour: 4 } }), instant("02:50:00"))
   const changed = defineSchedule(task, { cron: { minute: 0, hour: 3 }, catchUp: { within: 600 } })
   await run(changed, instant("03:05:00"))
-  expect(only(await jobs(testSchema.conn.query)).runAt).toEqual(instant("03:05:00"))
+  expect(only(await jobs(testSchema.conn.query)).runAt).toBe(instant("03:05:00").getTime())
 })
 
 test("a paused schedule skips the minutes it checks and recovers downtime after resuming", async () => {
@@ -363,9 +364,9 @@ describe("scopes", () => {
     )
     await run(schedule, instant("03:00:55"))
     expect((await jobs(testSchema.conn.query)).map(job => [job.scope, job.runAt])).toEqual([
-      ["a", due],
-      ["b", due],
-      ["c", due],
+      ["a", due.getTime()],
+      ["b", due.getTime()],
+      ["c", due.getTime()],
     ])
   })
 
@@ -383,8 +384,8 @@ describe("scopes", () => {
     expect(
       (await jobs(testSchema.conn.query)).map(job => [job.scope, job.payload, job.runAt]),
     ).toEqual([
-      ["b", "scheduled", due],
-      ["a", "scheduled", due],
+      ["b", "scheduled", due.getTime()],
+      ["a", "scheduled", due.getTime()],
     ])
   })
 
@@ -629,8 +630,8 @@ describe("scopes", () => {
       instant("03:00:03"),
     )
     expect((await jobs(testSchema.conn.query)).map(job => job.runAt)).toEqual([
-      instant("02:58:30"),
-      instant("03:00:03"),
+      instant("02:58:30").getTime(),
+      instant("03:00:03").getTime(),
     ])
     expect(await cursorOf(metrics.name)).toBe(instant("03:00:00").getTime())
   })
@@ -662,7 +663,7 @@ describe("scopes", () => {
     await check
     // A check at 03:00:18 would find 02:59 past the catch-up window.
     expect((await jobs(testSchema.conn.query)).map(job => [job.scope, job.runAt])).toEqual([
-      ["a", instant("03:00:03")],
+      ["a", instant("03:00:03").getTime()],
     ])
     expect(await cursorOf(schedule.id)).toBe(instant("03:00:00").getTime())
   })
@@ -702,8 +703,8 @@ describe("scopes", () => {
     const db = testSchema.createDb({ max: 1 })
     await evaluateSchedule(db, testSchema.table, toWorkerSchedule(every))
     const job = only(await jobs(testSchema.conn.query))
-    expect(job.runAt.getTime()).toBeLessThanOrEqual(called)
-    expect(await cursorOf(every.id)).toBe(Math.floor(job.runAt.getTime() / 60000) * 60000)
+    expect(job.runAt).toBeLessThanOrEqual(called)
+    expect(await cursorOf(every.id)).toBe(Math.floor(job.runAt / 60000) * 60000)
   })
 
   test("a check bounds its wait for a lock of the schedule table, and calls the function of the scopes only after it", async () => {

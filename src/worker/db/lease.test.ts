@@ -79,9 +79,14 @@ describe("reaper with an existing pending job", () => {
       { id: a.id, state: "failed", detached: false },
     ])
     expect(
-      (await jobs(testSchema.conn.query)).map(r => [r.id, r.state, r.key, r.failedAt]),
+      (await jobs(testSchema.conn.query)).map(r => [
+        r.id,
+        r.state,
+        r.key,
+        r.failedAt && secondsOf(r.failedAt),
+      ]),
     ).toEqual([
-      [a.id, "failed", "k", T(11)],
+      [a.id, "failed", "k", 11],
       [b!.id, "pending", "k", null],
     ])
   })

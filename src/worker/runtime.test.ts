@@ -465,9 +465,9 @@ describe("slots", () => {
     expect(log.all("heartbeat").length).toBeGreaterThan(beats + 10)
     expect(log.all("abort")).toEqual([])
     expect(new Set(log.all("start").map(e => e.claim.id))).toEqual(new Set([a.id, c.id]))
-    expect(
-      only(await jobs(testSchema.conn.query, sql`id = ${c.id}`)).leaseUntil!.getTime(),
-    ).toBeGreaterThan(Date.now())
+    expect(only(await jobs(testSchema.conn.query, sql`id = ${c.id}`)).leaseUntil!).toBeGreaterThan(
+      Date.now(),
+    )
     await producer.query`commit`
     expect((await log.waitFor("settled", e => e.claim.id === a.id)).outcome).toBe("superseded")
     const startD = await log.waitFor("start", e => e.claim.id === d.id)
@@ -730,7 +730,7 @@ describe("heartbeat", () => {
       const deadline = await testSchema.db.job
         .where({ id: claim.id, claimId: claim.claimId })
         .get("leaseUntil")
-      return deadline!.getTime()
+      return deadline!
     }
     // Kill the original backend during its heartbeat so only its replacement can extend the observed lease.
     const resume = await pauseAt(testSchema.conn, "heartbeat")
@@ -1012,9 +1012,9 @@ describe("failures", () => {
       ["failed", "rate limited"],
       ["failed", "bad payload"],
     ])
-    expect(r!.notBefore!.getTime() - Date.now()).toBeGreaterThan(90_000)
-    expect(d!.notBefore!.getTime() - Date.now()).toBeGreaterThan(190_000)
-    expect(d!.notBefore!.getTime() - Date.now()).toBeLessThanOrEqual(200_000)
+    expect(r!.notBefore! - Date.now()).toBeGreaterThan(90_000)
+    expect(d!.notBefore! - Date.now()).toBeGreaterThan(190_000)
+    expect(d!.notBefore! - Date.now()).toBeLessThanOrEqual(200_000)
     expect(log.all("backoff-error")).toEqual([])
   })
 
@@ -1044,7 +1044,7 @@ describe("failures", () => {
     expect(outcomes.map(e => e.outcome)).toEqual(["failed", "retry"])
     const [t, d] = await jobs(testSchema.conn.query)
     expect([t!.lastError, d!.lastError]).toEqual(["bad\\u0000payload", "rate\\u0000limited"])
-    expect(d!.notBefore!.getTime() - Date.now()).toBeGreaterThan(190_000)
+    expect(d!.notBefore! - Date.now()).toBeGreaterThan(190_000)
   })
 
   test("a backoff that throws or gives a delay outside its range is reported, and the job retries with the default backoff", async () => {
@@ -1078,7 +1078,7 @@ describe("failures", () => {
       expect(log.all("backoff-error", e => e.claim.id === id)).toHaveLength(1)
       const row = only(await jobs(testSchema.conn.query, sql`id = ${id}`))
       // The default backoff of the first attempt is 2 seconds.
-      expect(row.notBefore!.getTime() - Date.now()).toBeGreaterThan(1000)
+      expect(row.notBefore! - Date.now()).toBeGreaterThan(1000)
     }
   })
 
@@ -1192,7 +1192,7 @@ describe("partial failures of batches", () => {
       '2 of 5 batch items failed in attempt 1\n#1: "b\\nfailed"\n#3: "d timed out"',
     ])
     // The backoff counts from the time of the fail, which also starts the window of the returned job.
-    expect(row.notBefore!.getTime() - row.windowStartedAt.getTime()).toBe(100_000)
+    expect(row.notBefore! - row.windowStartedAt).toBe(100_000)
   })
 
   test("the report and the recorded error are read before onError, whose changes of the error do not reach the settlement", async () => {
@@ -1243,7 +1243,7 @@ describe("partial failures of batches", () => {
     const row = only(await jobs(testSchema.conn.query, sql`id = ${job.id}`))
     expect(row.payload).toEqual(["a"])
     // The default backoff of the first attempt is 2 seconds.
-    expect(row.notBefore!.getTime() - row.windowStartedAt.getTime()).toBe(2000)
+    expect(row.notBefore! - row.windowStartedAt).toBe(2000)
   })
 
   test("a report of a job that is not a batch job, or of an index that is not an item of the batch, fails the whole job as an ordinary error with a TypeError", async () => {

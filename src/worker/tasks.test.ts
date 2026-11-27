@@ -356,7 +356,7 @@ describe("a worker of a manifest", () => {
       await log.waitFor("start", e => e.claim.id === indexed.id)
       const row = only(await jobs(testSchema.conn.query, sql`id = ${indexed.id}`))
       // The task lease of 5 seconds, not the test lease of the worker, of 1 second.
-      expect(row.leaseUntil!.getTime() - row.lockedAt!.getTime()).toBeGreaterThanOrEqual(4900)
+      expect(row.leaseUntil! - row.lockedAt!).toBeGreaterThanOrEqual(4900)
     } finally {
       gate.resolve()
     }

@@ -14,6 +14,7 @@ import {
   jobs,
   only,
   pauseAt,
+  secondsOf,
   T,
   type TestSchema,
   unsafeInteger,
@@ -155,10 +156,7 @@ describe("terminal fail", () => {
       key: null,
       queue: null,
       keyMode: "replace",
-      runAt: T(2),
       notBefore: null,
-      windowStartedAt: T(2),
-      createdAt: T(2),
       attempts: 0,
       maxAttempts: 7,
       state: "pending",
@@ -167,6 +165,7 @@ describe("terminal fail", () => {
       failedAt: null,
       failureMaxAttempts: null,
     })
+    expect([job.runAt, job.windowStartedAt, job.createdAt].map(secondsOf)).toEqual([2, 2, 2])
     expect(job.payload).toEqual({
       id: claim.claimId,
       reason: "handler-error",
@@ -376,7 +375,7 @@ describe("reaper", () => {
       { id: claim.id, state: "failed", detached: false },
     ])
     const job = only(await failureJobs())
-    expect([job.scope, job.maxAttempts, job.runAt]).toEqual(["s1", 7, T(11)])
+    expect([job.scope, job.maxAttempts, secondsOf(job.runAt)]).toEqual(["s1", 7, 11])
     expect(job.payload).toEqual({
       id: claim.claimId,
       reason: "lease-expired",

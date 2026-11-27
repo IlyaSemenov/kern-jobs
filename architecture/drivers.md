@@ -30,7 +30,7 @@ The schema has layers, each of which imports only the layers before it:
 - `worker/db/db.ts` assembles the tables and the claim sequence into the schema;
 - the other modules use the schema and the tables.
 
-The job table declares every column, and its types read `bigint` columns as their text, so that IDs keep their precision; timestamps as seconds since the epoch, decoded to a `Date` of those seconds as a JavaScript number times 1000, rounded to an integer, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`; and SQL NULL of the payload as `undefined`, apart from JSON `null`, which a handler gets as `null`.
+The job table declares every column, and its types read `bigint` columns as their text, so that IDs keep their precision; timestamps by `epochMilliseconds` of `worker/db/types.ts`, derived from `timestamptzPortable` of kern-orm, as milliseconds since the epoch, truncated, so that reading them depends neither on the client nor on `DateStyle` and `TimeZone`, which the pool of the application may set; and SQL NULL of the payload as `undefined`, apart from JSON `null`, which a handler gets as `null`.
 Simple worker statements use typed table queries on the database of the worker, such as complete, the row locks and deletes of fail and requeue, and the registration, lock, and advance of the cursor of a schedule ([decision](../decisions/drivers/worker-orm.md)).
 Operations that depend on the shape of a statement, including the locks and index scans of a claim, the terminal failure that inserts its failure job, the return to pending, and an enqueue, use hand-written SQL, which in fail, requeue, and the check of a schedule runs in the same transaction as their typed queries.
 Producer statements use SQL that the application client can execute directly.
@@ -45,7 +45,7 @@ A statement that also runs on the executor of an application, such as an enqueue
 - Each statement that kern-jobs writes starts with its label in a comment, `/* kern-jobs:<area>:<statement> */`: SQL text through `labelSql`, and a worker template and a typed query through `comment` with `toStatementLabel`, both of `sql/statement.ts`, whose `StatementOperation` lists the names, none of which is a prefix of another.
   Statements of kern-db and kern-migrations, such as `BEGIN`, the settings of a transaction, advisory locks, and migrations, carry none.
   A test finds a statement of kern-jobs by its label, followed by its hand-written SQL where it must tell the statement of its schema from those of others, and never by SQL that kern-orm generates.
-- The check of a schedule selects its cursor and the time of the check as seconds since the epoch, `extract(epoch from …)`, which keeps their microseconds, since kern-orm decodes `timestamptz` only under the `DateStyle` `ISO`, which the pool of the application may not have.
+- The check of a schedule reads its cursor and the time of the check by `epochMilliseconds`, whose truncation of microseconds loses nothing of the cursor, which the worker writes in whole minutes.
 
 ## Connections of the worker
 

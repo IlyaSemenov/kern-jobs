@@ -274,8 +274,8 @@ const BASE = Date.UTC(2030, 0, 1)
 /** Virtual time: seconds from a fixed point. */
 export const T = (seconds: number) => new Date(BASE + Math.round(seconds * 1000))
 
-/** Converts virtual time back to seconds. */
-export const secondsOf = (d: Date) => (d.getTime() - BASE) / 1000
+/** Converts a time that the job table reads, in milliseconds since the epoch, back to virtual time in seconds. */
+export const secondsOf = (milliseconds: number) => (milliseconds - BASE) / 1000
 
 /** The least integer that a JavaScript number cannot hold, 2^53 + 1, which a number rounds to 2^53; a bigint id from it checks that the id is not read as a number. */
 export const unsafeInteger = 2n ** 53n + 1n

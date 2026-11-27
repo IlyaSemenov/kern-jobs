@@ -78,8 +78,10 @@ describe("last attempt and terminal error", () => {
     const { a, b } = await activeWithPending({ maxAttempts: 1 })
     expect(await failA(a)).toBe("failed")
     const rows = await jobs(testSchema.conn.query)
-    expect(rows.map(r => [r.id, r.state, r.key, r.attempts, r.failedAt])).toEqual([
-      [a.id, "failed", "k", 1, T(2)],
+    expect(
+      rows.map(r => [r.id, r.state, r.key, r.attempts, r.failedAt && secondsOf(r.failedAt)]),
+    ).toEqual([
+      [a.id, "failed", "k", 1, 2],
       [b.id, "pending", "k", 0, null],
     ])
     expect(secondsOf(rows[1]!.runAt)).toBe(20)
@@ -119,8 +121,14 @@ describe("last attempt and terminal error", () => {
   test("a terminal error with B pending: A failed at the time of the fail, B unchanged", async () => {
     const { a, b } = await activeWithPending()
     expect(await failA(a, { reason: "terminal-error" })).toBe("failed")
-    expect((await jobs(testSchema.conn.query)).map(r => [r.id, r.state, r.failedAt])).toEqual([
-      [a.id, "failed", T(2)],
+    expect(
+      (await jobs(testSchema.conn.query)).map(r => [
+        r.id,
+        r.state,
+        r.failedAt && secondsOf(r.failedAt),
+      ]),
+    ).toEqual([
+      [a.id, "failed", 2],
       [b.id, "pending", null],
     ])
   })

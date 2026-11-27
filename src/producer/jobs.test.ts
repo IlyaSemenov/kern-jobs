@@ -871,7 +871,7 @@ describe("options", () => {
     await jobs.enqueue(task, { id: "2" }, { key: null, delay: 0 })
     const [first, second] = await jobRows(testSchema.conn.query)
     expect(first).toMatchObject({ key: "k:1", queue: "q", maxAttempts: 3 })
-    expect(first!.runAt.getTime() - first!.createdAt.getTime()).toBe(5000)
+    expect(first!.runAt - first!.createdAt).toBe(5000)
     expect(second).toMatchObject({ key: null, queue: "q", maxAttempts: 4 })
     expect(second!.runAt).toEqual(second!.createdAt)
   })
@@ -906,7 +906,7 @@ describe("options", () => {
     await jobs.enqueue(task)
     const row = only(await jobRows(testSchema.conn.query))
     expect(row.keyMode).toBe("debounce")
-    expect(row.runAt.getTime() - row.createdAt.getTime()).toBe(2000)
+    expect(row.runAt - row.createdAt).toBe(2000)
   })
 
   test("rejects invalid options before it calls the executor", async () => {

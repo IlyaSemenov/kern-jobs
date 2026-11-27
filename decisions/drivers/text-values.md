@@ -6,4 +6,4 @@ The SQL alone decides the types, so the core behaves the same on postgres.js and
 Letting the client serialize parameters and parse results needs no decoding in the core, and gives dates and numbers directly.
 But the clients differ: postgres.js serializes a parameter by the type that PostgreSQL describes, so the string `"true"` of a `boolean` parameter becomes false and a JSON string of a `jsonb` parameter is encoded again, while node-postgres sends strings as they are; a client of the application can also parse `bigint` into numbers that lose precision.
 
-Reading job rows needs timestamps: the statements select them as seconds since the epoch, since the text of a `timestamptz` follows `DateStyle` and `TimeZone` of the connection.
+Reading job rows needs timestamps: the statements select them by an expression whose text depends on no session setting, `timestamptzPortable` of kern-orm, since the text of a `timestamptz` follows `DateStyle` and `TimeZone` of the connection.

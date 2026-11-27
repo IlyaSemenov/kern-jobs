@@ -18,9 +18,9 @@ test("reads the fractional seconds of the times of a job on a pool whose DateSty
     insert into ${schema.job} (task, run_at, window_started_at, created_at, locked_at, max_attempts)
      values ('t', '2030-01-02 19:58:00.1236+00', '2030-01-02 19:57:00.1234+00', '2030-01-02 19:56:00+00', null, 1)`
   expect(await db.job.select("runAt", "windowStartedAt", "createdAt", "lockedAt").take()).toEqual({
-    runAt: new Date("2030-01-02T19:58:00.124Z"),
-    windowStartedAt: new Date("2030-01-02T19:57:00.123Z"),
-    createdAt: new Date("2030-01-02T19:56:00Z"),
+    runAt: Date.parse("2030-01-02T19:58:00.123Z"),
+    windowStartedAt: Date.parse("2030-01-02T19:57:00.123Z"),
+    createdAt: Date.parse("2030-01-02T19:56:00Z"),
     lockedAt: null,
   })
 })

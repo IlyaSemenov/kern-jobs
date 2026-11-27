@@ -89,7 +89,7 @@ describe("run time", () => {
     // Over the pending row, the debounce adds delay to the time of its enqueue and maxWait to the start of the window.
     await enqueueAt("debounce", { mode: "debounce", delay: 1e12, maxWait: 1e12, now: T(1) })
     const rows = await jobs(testSchema.conn.query)
-    expect(rows.map(row => [row.key, row.runAt.getTime()])).toEqual([
+    expect(rows.map(row => [row.key, row.runAt])).toEqual([
       ["first", first.getTime()],
       ["last", last.getTime()],
       ["delay", T(1e12).getTime()],

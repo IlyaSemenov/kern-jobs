@@ -88,8 +88,8 @@ async function checkUnderLock(
   // Both statements use the same database instant even when registration waits for another replica.
   const clock =
     time === undefined
-      ? sql(t.timestamptz)`transaction_timestamp()`
-      : param(t.timestamptz, new Date(time))
+      ? sql(t.epochMilliseconds)`transaction_timestamp()`
+      : param(t.epochMilliseconds, new Date(time))
   return await db.$transaction(
     async () => {
       // The connection of a busy pool and the answer to the settings of the transaction can arrive after the timeout of stop, which no lock timeout bounds; the check then writes nothing.
@@ -105,13 +105,9 @@ async function checkUnderLock(
         .doNothing()
         .comment(toStatementLabel("schedule:register"))
       // READ COMMITTED sees a concurrently registered row after the insert waited for its transaction, so the lock is a statement of its own.
-      // Epoch seconds keep the reading independent of the DateStyle of the pool, which the decoding of timestamptz by kern-orm requires to be ISO.
       const row = await db.schedule
         .find(schedule.id)
-        .select(s => ({
-          cursor: sql(t.numeric)`extract(epoch from ${s.evaluatedThrough})`,
-          evaluated: sql(t.numeric)`extract(epoch from ${clock})`,
-        }))
+        .select(s => ({ cursor: s.evaluatedThrough, evaluated: clock }))
         .forUpdate({ skipLocked: !wait })
         .optional()
         .comment(toStatementLabel("schedule:lock"))
@@ -120,9 +116,9 @@ async function checkUnderLock(
         return undefined
       }
       // A given time is used as it is, so that the check decides by the number that the first transaction decided by, which the time of the database would only approximate.
-      const at = time ?? Number(row.evaluated) * 1000
+      const at = time ?? row.evaluated
       const minute = Math.floor(at / 60000) * 60000
-      const cursor = Number(row.cursor) * 1000
+      const cursor = row.cursor
       if (minute <= cursor) {
         return undefined
       }

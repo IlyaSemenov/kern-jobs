@@ -15,6 +15,7 @@ import {
   only,
   pauseAt,
   recordLabels,
+  secondsOf,
   T,
   type TestSchema,
 } from "../test-harness/database"
@@ -154,22 +155,22 @@ describe("retry", () => {
       queue: "q",
       payload: { n: 1 },
       maxAttempts: 2,
-      createdAt: T(0),
-      lockedAt: T(5),
       lastError: "boom",
-      failedAt: T(6),
     })
+    expect([failed.createdAt, failed.lockedAt!, failed.failedAt!].map(secondsOf)).toEqual([0, 5, 6])
 
     expect(await retry(failed.id, { now: T(10) })).toEqual({ retried: true })
-    expect(only(await jobs(testSchema.conn.query))).toEqual({
+    const retried = only(await jobs(testSchema.conn.query))
+    expect(retried).toEqual({
       ...failed,
       state: "pending",
       attempts: 0,
-      runAt: T(10),
+      runAt: retried.runAt,
       notBefore: null,
-      windowStartedAt: T(10),
+      windowStartedAt: retried.windowStartedAt,
       failedAt: null,
     })
+    expect([retried.runAt, retried.windowStartedAt].map(secondsOf)).toEqual([10, 10])
   })
 
   test("a later enqueue with the key merges into the retried job", async () => {
@@ -212,9 +213,17 @@ describe("retry", () => {
         now: T(31),
       })
       const before = await jobs(testSchema.conn.query)
-      expect(before.map(r => [r.id, r.state, r.keyMode, r.attempts, r.notBefore])).toEqual([
+      expect(
+        before.map(r => [
+          r.id,
+          r.state,
+          r.keyMode,
+          r.attempts,
+          r.notBefore && secondsOf(r.notBefore),
+        ]),
+      ).toEqual([
         [failed, "failed", mode === "keep" ? "replace" : "keep", 1, null],
-        [claim.id, "pending", mode, 1, T(71)],
+        [claim.id, "pending", mode, 1, 71],
       ])
       expect(await retry(failed, { now: T(40) })).toEqual({ retried: false, pendingId: claim.id })
       expect(await jobs(testSchema.conn.query)).toEqual(before)
